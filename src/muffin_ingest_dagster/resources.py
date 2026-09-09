@@ -20,7 +20,10 @@ if TYPE_CHECKING:
     from psycopg import Connection
 
 
-class Postgres(dg.ConfigurableResource):  # type: ignore[misc]
+# `ConfigurableResource` is generic in this Dagster version and its own stubs are partial, so
+# strict mode wants arguments it does not document. Ignored narrowly by code rather than
+# blanket-ignored, so a DIFFERENT error here still fails the build.
+class Postgres(dg.ConfigurableResource):  # type: ignore[type-arg]
     """Direct SQL. Not PostgREST — see `muffin_ingest.settings.database_url` for why."""
 
     @contextmanager

@@ -16,9 +16,19 @@ TWO CONVENTIONS THAT ARE LOAD-BEARING AND EASY TO LOSE:
   express a rate.
 """
 
-from __future__ import annotations
-
+# NO `from __future__ import annotations` IN THIS MODULE, DELIBERATELY.
+#
+# It stringifies every annotation, and Dagster resolves the `context` parameter by comparing the
+# actual CLASS — so with it present, validation fails with "Cannot annotate `context` parameter
+# with type AssetExecutionContext" while the annotation plainly IS `AssetExecutionContext`. The
+# message names the parameter and not the cause, and qualifying or unqualifying the name changes
+# nothing because both are strings by then.
+#
+# Caught by the `definitions` CI job on its first run, which is what that job exists for: this
+# module is loaded by the gRPC server at startup, so the failure would otherwise have been a
+# restart loop with the reason only in `docker service logs`.
 import dagster as dg
+from dagster import AssetExecutionContext
 
 from muffin_ingest_dagster.resources import Postgres
 
@@ -30,7 +40,9 @@ from muffin_ingest_dagster.resources import Postgres
     pool="sql",
     kinds={"postgres"},
 )
-def ledger_health(context: dg.AssetExecutionContext, postgres: Postgres) -> dg.MaterializeResult:
+def ledger_health(
+    context: AssetExecutionContext, postgres: Postgres
+) -> "dg.MaterializeResult[None]":
     with postgres.connect() as conn, conn.cursor() as cur:
         cur.execute("select count(*) from ingest.facet")
         facets = (cur.fetchone() or (0,))[0]
