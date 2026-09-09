@@ -1,0 +1,77 @@
+[project]
+name = "muffin-ingest"
+version = "0.1.0"
+description = "Market-data ingestion for Muffin: a provider library, a task ledger, and Dagster assets."
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.13,<4.0"
+
+# WHY AGPL AND NOT GPLv3 LIKE EVERY OTHER MUFFIN REPO: `openbb-core` is AGPL-3.0 and is IMPORTED
+# here rather than called over HTTP. That is a deliberate trade recorded in the design — the REST
+# hop is where a yfinance throttle becomes an empty 204 that is byte-identical to "this symbol has
+# no data", which is the confusion that once negative-cached ~8,300 securities in an afternoon.
+dependencies = [
+  # Orchestration. Pinned, because an asset/check API change is a silent behaviour change.
+  "dagster>=1.11,<1.13",
+  "dagster-postgres>=0.27,<0.29",
+  # The database, DIRECTLY. Not PostgREST: this writer needs transactions spanning claim -> write ->
+  # complete, `for update skip locked`, COPY, and a role with its own statement timeout. PostgREST
+  # is the READ path for muffin-ui and stays that way.
+  "psycopg[binary,pool]>=3.2,<4",
+  # The hub, in-process. Only the extensions actually used — never `openbb[all]`, which is the 1 GB
+  # image. Each is one provider we already depend on today.
+  "openbb-core>=1.4,<2",
+  "openbb-yfinance>=1.4,<2",
+  "openbb-finviz>=1.3,<2",
+  "openbb-nasdaq>=1.4,<2",
+  "openbb-fred>=1.4,<2",
+  "openbb-oecd>=1.4,<2",
+  "openbb-federal-reserve>=1.4,<2",
+  # The direct providers, for the four things openbb measurably cannot do: N-PORT holdings (no
+  # `sec` provider on `etf/holdings`), ISIN resolution (`equity/search` returns zero hits for an
+  # ISIN), quarterly SEC statements (`period=quarter` is 422), and DART (TLS 1.2 static-RSA).
+  "httpx>=0.28,<0.29",
+  "edgartools>=4.14,<5",
+  "pdfplumber>=0.11,<0.12",
+  "lxml>=5.3,<6",
+  # Rate limiting that survives more than one process. Dagster pools serialise RUNS per provider;
+  # this enforces requests per second AND per day, which pools cannot express.
+  "pyrate-limiter[psycopg]>=3.7,<5",
+  "pydantic>=2.10,<3",
+  "prometheus-client>=0.21,<1",
+  "structlog>=24.4,<26",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "respx>=0.22",
+  "testcontainers[postgres]>=4.9",
+]
+
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: drives a real provider; excluded from CI"]
+addopts = "-m 'not live'"
