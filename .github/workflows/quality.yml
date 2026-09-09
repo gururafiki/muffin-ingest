@@ -26,6 +26,9 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
+          # NO psycopg AND NO DAGSTER, and both absences are the point. The ledger takes a
+          # PROTOCOL (`DbConn`) rather than a driver, and the library imports no orchestrator, so
+          # this job passing is what proves both rather than a comment asserting them.
           pip install ruff mypy pytest pytest-cov pydantic
 
       - name: Lint
