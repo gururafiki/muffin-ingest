@@ -34,10 +34,37 @@ jobs:
       - name: Types
         # Strict. The classifier decides whether thousands of securities get negative-cached, and a
         # `str | None` slipping through is exactly how that goes wrong quietly.
-        run: mypy --strict src tests
+        #
+        # THE LIBRARY ONLY. `muffin_ingest` imports no Dagster by design, and checking it without
+        # one installed is what proves that rather than asserting it — `src/muffin_ingest_dagster`
+        # is typed in the `definitions` job, where Dagster is present.
+        run: mypy --strict src/muffin_ingest tests
 
       - name: Tests
         run: PYTHONPATH=src pytest -q
+
+  # SEPARATE, because `muffin_ingest` deliberately imports no Dagster and its suite must not need
+  # one. This job is the other half of that rule: it proves the code location actually LOADS, which
+  # is the failure the image would otherwise ship — the container's start command names
+  # `muffin_ingest_dagster.definitions`, and a module that does not import is a service that
+  # restart-loops with the reason only in `docker service logs`.
+  definitions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install (dagster only; no provider extras needed to load definitions)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "dagster>=1.11,<1.13" "psycopg[binary]" mypy
+      - name: The code location loads
+        # `dagster definitions validate` is the same load the gRPC server performs at startup, so a
+        # green here means the service can start.
+        run: PYTHONPATH=src dagster definitions validate -m muffin_ingest_dagster.definitions
+      - name: Types
+        run: PYTHONPATH=src mypy --strict src/muffin_ingest_dagster
 
   image:
     # arm64, because the Oracle node is aarch64 and an amd64-only image cannot schedule there.
