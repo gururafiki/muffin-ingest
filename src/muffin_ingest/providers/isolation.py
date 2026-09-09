@@ -69,7 +69,9 @@ def fetch_with_isolation(
         if rows or len(subjects) <= 1:
             return BatchVerdict(rows=rows)
         reason = "batch answered with no rows"
-    except Exception as e:  # noqa: BLE001 - any transport failure is evidence, not a crash
+    # DELIBERATELY BROAD. Any transport failure is evidence about the attempt, not a crash:
+    # a connection refused, a TLS alert and a timeout are all 'we never got an answer'.
+    except Exception as e:
         reason = str(e)[:200]
 
     return _isolate(fetcher, subjects, timeout_s, deadline, control, reason, now)
@@ -97,7 +99,7 @@ def _isolate(
             break
         try:
             got = fetcher([subject], min(timeout_s, remaining))
-        except Exception:  # noqa: BLE001
+        except Exception:
             failed_alone.append(subject)
         else:
             if got:
@@ -123,7 +125,8 @@ def _isolate(
         if control is not None and deadline - now() > CONTROL_RESERVE_S:
             try:
                 probe = fetcher([control], min(timeout_s, deadline - now()))
-            except Exception:  # noqa: BLE001
+            # A control probe that throws is a control that did not answer.
+            except Exception:
                 probe = []
             if probe:
                 return BatchVerdict(
