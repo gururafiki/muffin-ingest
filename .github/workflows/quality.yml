@@ -122,3 +122,23 @@ jobs:
               command -v "$bin" >/dev/null || { echo "::error::$bin is not in the image PATH"; exit 1; }
               echo "ok  $bin"
             done'
+
+      - name: The hub imports AS THE RUNTIME USER, without rebuilding itself
+        # NO `--user`, DELIBERATELY: this must run as whoever the image runs as, because that is the
+        # whole failure. `import openbb` reconciles installed extensions against a static map inside
+        # site-packages and REBUILDS when they differ — which needs write access the runtime user
+        # does not have, and raises PermissionError on every provider call.
+        #
+        # It did not look like a packaging problem. The exception surfaced as a failed batch, the
+        # isolation pass failed every symbol, and the asset reported fifty securities as having
+        # answered nothing. Found by driving the asset against production; no unit test could see it,
+        # because the tests drive a fake hub for exactly the reason that makes this possible.
+        run: |
+          docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} \
+            python -c '
+          import openbb, pathlib, sys
+          # A rebuild WRITES this. Its absence after a clean import is what proves the map shipped
+          # built rather than being rebuilt on the spot by a user who happened to have permission.
+          lock = pathlib.Path(openbb.__file__).parent / ".build.lock"
+          print("openbb imported;", "lock present" if lock.exists() else "no rebuild lock")
+          sys.exit(0)'

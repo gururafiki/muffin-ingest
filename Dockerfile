@@ -19,6 +19,27 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir . && rm -rf /root/.cache
 
+# BUILD OPENBB'S EXTENSION MAP AT IMAGE-BUILD TIME, AS ROOT.
+#
+# `import openbb` reconciles the installed extensions against a static map it keeps INSIDE
+# site-packages, and rebuilds when they differ — writing `openbb/.build.lock` and the generated
+# package. The container runs as uid 10001 against a root-owned site-packages, so at runtime that
+# rebuild raises
+#
+#     PermissionError: [Errno 13] Permission denied: '.../openbb/.build.lock'
+#
+# on EVERY call. Which is not how it presented: the exception surfaced as a failed batch, the
+# isolation pass then failed every symbol individually, and the asset reported `empty: 50` — fifty
+# securities that had answered nothing, when the truth was that we had never asked. Nothing was
+# marked, because `mark_absent` refuses without an isolated attempt and a healthy control, so the
+# damage was bounded to a wasted run. It was found by driving the asset against production, and by
+# no test.
+#
+# Building here means the map is complete before the image is ever run, so the runtime user only
+# ever READS it. The alternative — making site-packages writable — hands a network-facing worker
+# write access to its own code.
+RUN python -c "import openbb" && rm -rf /root/.cache
+
 USER muffin
 EXPOSE 4000 9102
 # Overridden per service in the stack; this is the code location, which is the one that must exist.

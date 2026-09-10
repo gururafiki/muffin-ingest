@@ -107,7 +107,24 @@ def _collect(
     """Ask for every subject in batches and return raw rows plus what the asking established."""
     deadline = time.monotonic() + budget_seconds
     rows: list[dict[str, Any]] = []
-    stats = {"calls": 0, "answered": 0, "empty": 0, "dead": 0, "throttled": 0, "unasked": 0}
+    stats = {
+        "calls": 0,
+        "answered": 0,
+        "empty": 0,
+        # NEVER FOLDED INTO `empty`, and the first version of this loop folded it. A batch that
+        # RAISED tells us nothing about its subjects — "we never got an answer" and "the provider
+        # answered and had nothing" are the distinction this whole pipeline is being rewritten
+        # around, and counting the first as the second is how an outage becomes a population of
+        # permanently dead securities. Found by driving it against production: openbb could not
+        # import in the image, every call raised, and this reported fifty securities as having
+        # answered nothing.
+        "transport": 0,
+        "dead": 0,
+        "throttled": 0,
+        "unasked": 0,
+    }
+    last_error: str | None = None
+    consecutive_transport = 0
 
     for i in range(0, len(subjects), batch_size):
         batch = subjects[i : i + batch_size]
@@ -137,9 +154,11 @@ def _collect(
 
         parsed = prices.bars_by_symbol(verdict.rows, next(iter(by_symbol)))
         dead = {d.upper() for d in verdict.dead}
+        answered_here = 0
         for symbol, subject in by_symbol.items():
             bars = parsed.get(symbol.upper(), [])
             if bars:
+                answered_here += 1
                 stats["answered"] += 1
                 rows += prices.raw_rows(
                     subject,
@@ -150,9 +169,30 @@ def _collect(
                 )
             elif symbol.upper() in dead:
                 stats["dead"] += 1
+            elif verdict.error is not None:
+                stats["transport"] += 1
             else:
                 stats["empty"] += 1
 
+        if verdict.error is not None:
+            last_error = verdict.error
+            consecutive_transport = 0 if answered_here else consecutive_transport + 1
+        else:
+            consecutive_transport = 0
+
+        # THREE, NOT ONE. A single failed batch is a blip, and the isolation pass has already
+        # re-asked each of its subjects alone. Three in a row with nothing answered anywhere means
+        # the fault is at our end or the provider's, and asking the remaining five hundred batches
+        # would only produce a longer record of the same thing.
+        if consecutive_transport >= 3 and stats["answered"] == 0:
+            stats["unasked"] += len(subjects) - (i + len(batch))
+            context.log.error(
+                "three consecutive batches failed and nothing has answered: %s", last_error
+            )
+            break
+
+    if last_error:
+        context.log.warning("last error: %s", last_error)
     return rows, stats
 
 
