@@ -79,7 +79,9 @@ def test_the_two_providers_want_different_names_for_the_same_company() -> None:
 def test_an_unaddressable_security_returns_none_rather_than_a_wrong_name() -> None:
     """ASML's US lookup is the thin OTC foreign-ordinary line `ASMLF`, which alpha_vantage answers
     with an empty object. 621 of 1,015 rows in that backlog were exactly this, at three calls a run
-    against a 25-a-DAY quota — twenty-six days of budget to learn that an OTC line is an OTC line."""
+    against a 25-a-DAY quota — twenty-six days of budget to learn that an OTC line is an OTC
+    line.
+    """
     assert SecProvider().spell(ASML_OTC) is None
     assert PriceProvider().spell(ASML_OTC) == "ASML.AS", "prices still work off the local line"
 
