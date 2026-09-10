@@ -121,3 +121,42 @@ def test_backlog_size_counts_the_queue_not_the_page() -> None:
     sql, _ = conn.calls[0]
     assert "count(*)" in sql and "ingest.task" in sql
     assert "limit" not in sql.lower(), "a count, never a page"
+
+
+def test_the_population_is_synced_through_the_database_not_composed_here() -> None:
+    """The anti-join, the stored round and the shape check are invariants of the QUEUE.
+
+    Composing them in Python would put them in one caller, and the rule this pipeline has broken
+    most often is that a rule written at one call site is not a rule. `sync_population` is one
+    function call precisely so a second consumer cannot enqueue differently.
+    """
+    conn = FakeConn()
+    added = ledger.sync_population(conn, "prices")
+
+    sql, params = conn.calls[0]
+    assert sql == "select ingest.sync_population(%s)"
+    assert params == ("prices",)
+    assert added == 1
+    assert "insert" not in sql.lower(), "the client never writes ingest.task itself"
+
+
+def test_a_cooldown_without_a_duration_uses_the_provider_s_own() -> None:
+    """A provider states its own pause; the caller should not have to know it.
+
+    Passing a default from here would put the number in two places, and the copy that drifts is
+    always the one nobody is looking at.
+    """
+    conn = FakeConn()
+    ledger.cool_down(conn, "yfinance")
+    sql, params = conn.calls[0]
+    assert sql == "select ingest.cool_down(%s)"
+    assert params == ("yfinance",)
+
+
+def test_a_cooldown_with_a_duration_passes_it_as_an_interval() -> None:
+    """Seconds, not a string: an interval built by the database cannot be mis-parsed."""
+    conn = FakeConn()
+    ledger.cool_down(conn, "yfinance", 900)
+    sql, params = conn.calls[0]
+    assert "make_interval(secs => %s)" in sql
+    assert params == ("yfinance", 900)

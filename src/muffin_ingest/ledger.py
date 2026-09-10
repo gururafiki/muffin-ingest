@@ -131,6 +131,39 @@ def attempt(
         raise
 
 
+def sync_population(conn: DbConn, facet: str) -> int:
+    """Enqueue what this facet owes and does not already hold. Returns how many were added.
+
+    Called before every claim, so `backlog_size` is always the real depth of the queue rather than
+    a number that only becomes true after some other job has run.
+
+    The anti-join, the stored `round` and the shape check all live in the database function — not
+    here — because they are invariants of the queue rather than of this client. `round` in
+    particular has to be assigned once and never recomputed: a window function over the
+    OUTSTANDING rows renumbers as the queue drains and hands the same company the head for ever,
+    which is a defect no counter in the old system could see.
+    """
+    with conn.cursor() as cur:
+        cur.execute("select ingest.sync_population(%s)", (facet,))
+        return int((cur.fetchone() or (0,))[0])
+
+
+def cool_down(conn: DbConn, provider_code: str, seconds: int | None = None) -> None:
+    """Put a provider to sleep because it said it is refusing us.
+
+    Separate from the daily quota on purpose: the budget can be untouched and the provider still
+    unwilling, and a run that cannot tell those apart marks securities absent during an outage —
+    which is how 1,369 ordinary tickers were once negative-cached for a month in one afternoon.
+    """
+    with conn.cursor() as cur:
+        if seconds is None:
+            cur.execute("select ingest.cool_down(%s)", (provider_code,))
+        else:
+            cur.execute(
+                "select ingest.cool_down(%s, make_interval(secs => %s))", (provider_code, seconds)
+            )
+
+
 def claim(conn: DbConn, facet: str, limit: int, lease_seconds: int, run_id: str) -> list[Task]:
     """Take a page. Ordering, leasing and reaping are all the database's, not ours."""
     with conn.cursor() as cur:
