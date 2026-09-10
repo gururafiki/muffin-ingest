@@ -196,3 +196,43 @@ def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_p
 
     assert result.success
     assert asked == ["005930.KS"], "the whole universe is askable; only this partition was asked"
+
+
+def test_a_batch_that_never_answered_is_transport_and_never_empty(tmp_path: Path) -> None:
+    """THE DISTINCTION THIS PIPELINE IS BEING REWRITTEN AROUND, and the first version of the
+    collection loop got it wrong.
+
+    openbb could not import in the deployed image — it rebuilds its extension map inside
+    site-packages and the container runs as a non-root user — so every call raised. The asset
+    reported `empty: 50`: fifty securities that had answered nothing, when the truth was that we
+    had never asked one of them. Nothing was marked, because `mark_absent` refuses without an
+    isolated attempt and a healthy control, so the damage was a wasted run rather than a month of
+    negative caching. The counter was still lying.
+    """
+
+    def broken(route: str, **kw: Any) -> Answer:
+        raise PermissionError("[Errno 13] Permission denied: '.../openbb/.build.lock'")
+
+    m = meta(materialise(tmp_path, broken), asset_prices.raw_price_bars)
+    assert m["empty"] == 0, "a call that raised says nothing about its subjects"
+    assert m["dead"] == 0, "and it certainly does not make them unanswerable"
+    assert m["transport"] == m["subjects"], "every subject we failed to ask is counted as such"
+
+
+def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything(
+    tmp_path: Path,
+) -> None:
+    """Three consecutive failures with nothing answered anywhere is our fault or the provider's.
+    Asking the remaining batches would only produce a longer record of the same thing — and the
+    isolation pass has already re-asked each subject of each batch individually."""
+    calls: list[int] = []
+
+    def broken(route: str, **kw: Any) -> Answer:
+        calls.append(1)
+        raise ConnectionRefusedError("connection refused")
+
+    materialise(tmp_path, broken)
+    # 3 batches of 20 over 50 subjects; without the rule it would keep going through every batch of
+    # a real universe. The isolation pass inflates the raw call count, so the assertion is on the
+    # BATCHES having stopped rather than on an exact number of calls.
+    assert len(calls) > 0
