@@ -80,6 +80,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
+# BOTH HALVES, because a bare `mypy` locally should check everything. CI splits it deliberately:
+# `checks` runs `mypy --strict src/muffin_ingest tests/unit` with NO dagster installed, which is
+# what proves the library imports no orchestrator, and `definitions` covers the other half where
+# dagster is present. Running the two together here needs everything installed, which is the normal
+# development case.
 files = ["src", "tests"]
 
 # THE HUB IS DELIBERATELY NOT A CHECK-TIME DEPENDENCY. `providers/openbb.py` imports it inside a

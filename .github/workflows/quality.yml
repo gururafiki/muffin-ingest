@@ -44,10 +44,15 @@ jobs:
         # THE LIBRARY ONLY. `muffin_ingest` imports no Dagster by design, and checking it without
         # one installed is what proves that rather than asserting it — `src/muffin_ingest_dagster`
         # is typed in the `definitions` job, where Dagster is present.
-        run: mypy --strict src/muffin_ingest tests
+        #
+        # `tests/unit` rather than `tests`, for the same reason: `tests/dagster` exercises the assets
+        # and necessarily imports an orchestrator. Pointing this job at all of `tests` would fail on
+        # that, and the tempting fix — installing dagster here — would quietly delete the guarantee
+        # this job exists for.
+        run: mypy --strict src/muffin_ingest tests/unit
 
       - name: Tests
-        run: PYTHONPATH=src pytest -q
+        run: PYTHONPATH=src pytest tests/unit -q
 
   # SEPARATE, because `muffin_ingest` deliberately imports no Dagster and its suite must not need
   # one. This job is the other half of that rule: it proves the code location actually LOADS, which
@@ -61,16 +66,22 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
-      - name: Install (dagster only; no provider extras needed to load definitions)
+      - name: Install (dagster and what the assets touch; no provider extras)
         run: |
           python -m pip install --upgrade pip
-          pip install "dagster>=1.11,<1.13" "psycopg[binary]" mypy
+          pip install "dagster>=1.11,<1.13" "psycopg[binary]" pyarrow pydantic httpx \
+            prometheus-client mypy pytest
       - name: The code location loads
         # `dagster definitions validate` is the same load the gRPC server performs at startup, so a
         # green here means the service can start.
         run: PYTHONPATH=src dagster definitions validate -m muffin_ingest_dagster.definitions
       - name: Types
-        run: PYTHONPATH=src mypy --strict src/muffin_ingest_dagster
+        run: PYTHONPATH=src mypy --strict src/muffin_ingest_dagster tests/dagster
+      - name: Tests
+        # The assets driven end to end against a fake provider and a fake database — which is the
+        # only way the things that actually break here are visible: which partition a file lands on,
+        # and whether a symbol omitted from a batched answer is recorded as empty rather than dead.
+        run: PYTHONPATH=src pytest tests/dagster -q
 
   image:
     # arm64, because the Oracle node is aarch64 and an amd64-only image cannot schedule there.
