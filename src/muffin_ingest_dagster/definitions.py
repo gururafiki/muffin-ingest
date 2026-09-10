@@ -30,6 +30,9 @@ TWO CONVENTIONS THAT ARE LOAD-BEARING AND EASY TO LOSE:
 import dagster as dg
 from dagster import AssetExecutionContext
 
+from muffin_ingest import settings
+from muffin_ingest_dagster.assets import prices
+from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager
 from muffin_ingest_dagster.resources import Postgres
 from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
 
@@ -101,10 +104,36 @@ ledger_heartbeat = dg.ScheduleDefinition(
 )
 
 
+# THE DAILY CROSS-SECTION, AND IT SHIPS STOPPED.
+#
+# The assets are complete and can be driven by hand from the UI; what has NOT happened yet is the
+# dual-run parity comparison against what `security-prices` currently serves. Starting a schedule
+# that asks yfinance for the whole universe every night before that comparison would be spending the
+# provider budget on numbers nobody has checked, and would make the first real disagreement look
+# like a production incident rather than a finding.
+#
+# Turning it on is a deliberate act after parity, which is why it is a line in this file rather than
+# a default.
+daily_prices = dg.build_schedule_from_partitioned_job(
+    dg.define_asset_job(
+        "daily_prices",
+        selection=dg.AssetSelection.assets(prices.raw_price_bars, prices.price_bar),
+    ),
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+)
+
+
 defs = dg.Definitions(
-    assets=[ledger_health],
+    assets=[ledger_health, prices.raw_price_bars, prices.price_bar, prices.raw_price_history],
     asset_checks=[every_symbol_keyed_facet_retracts],
     jobs=[prune_dagster_storage],
-    schedules=[ledger_heartbeat, nightly_pruning],
-    resources={"postgres": Postgres()},
+    schedules=[ledger_heartbeat, nightly_pruning, daily_prices],
+    sensors=[prices.new_securities_need_history],
+    resources={
+        "postgres": Postgres(),
+        # ONE MANAGER PER STORAGE CLASS, never one per asset — which is what makes the writers'
+        # rules apply to every facet without any of them remembering.
+        "parquet_io": ParquetIOManager(settings.raw_root()),
+        "postgres_io": PostgresIOManager(),
+    },
 )

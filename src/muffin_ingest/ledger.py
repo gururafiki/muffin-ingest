@@ -18,6 +18,7 @@ import time
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
+from types import TracebackType
 from typing import Any, Protocol
 
 from muffin_ingest.providers.isolation import BatchVerdict
@@ -33,8 +34,27 @@ from muffin_ingest.providers.outcome import Outcome
 # caller.
 class DbCursor(Protocol):
     def __enter__(self) -> DbCursor: ...
-    def __exit__(self, *exc: object) -> None: ...
-    def execute(self, sql: str, params: Sequence[Any] = ()) -> None: ...
+
+    # THE STANDARD THREE-ARGUMENT FORM, not `*exc: object`. A protocol method declared with `*args`
+    # promises to accept ANY call, so a concrete `__exit__` taking exactly three positionals is
+    # NARROWER and does not satisfy it — psycopg's real cursor was rejected by the very protocol
+    # written to describe it, the first time one was passed in. The fakes in the tests use `*exc`
+    # and satisfy this form too, because an implementation may always be more permissive than the
+    # protocol it fulfils.
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> None: ...
+    # POSITIONAL-ONLY, AND RETURNING `object`. Both were written from imagination rather than
+    # from a driver, and neither survived the first real cursor: psycopg names the first parameter
+    # `query` (so a protocol naming it `sql` cannot be satisfied by keyword) and RETURNS the cursor
+    # (so a protocol demanding `-> None` cannot be satisfied at all). The fakes in the tests use
+    # ordinary named parameters and satisfy this form too, because an implementation may always be
+    # more permissive than the protocol it fulfils.
+    def execute(self, sql: str, params: Sequence[Any] = (), /) -> object: ...
     def fetchone(self) -> tuple[Any, ...] | None: ...
     def fetchall(self) -> list[tuple[Any, ...]]: ...
 

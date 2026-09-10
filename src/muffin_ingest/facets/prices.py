@@ -114,3 +114,142 @@ def bars_by_symbol(rows: Sequence[Mapping[str, Any]], sole_symbol: str) -> dict[
     for series in out.values():
         series.sort(key=lambda b: b.trade_date)
     return out
+
+
+# ---------------------------------------------------------------------------------------------
+# Who to ask, and how to turn an answer into a core row
+# ---------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Subject:
+    """One security this provider can be asked about, and the name to ask with."""
+
+    security_id: str
+    symbol: str
+    #: Fund weight, so the head of any bounded run is the part of the universe anyone looks at.
+    weight: float
+
+
+#: Securities that are equities, that this provider has a name for, and that the ledger has not
+#: recorded as unanswerable.
+#:
+#: THE LEFT JOIN IS THE WHOLE POINT AND IT IS CORRECT BEFORE THE FACET EXISTS. `ingest.task` holds
+#: no `price_daily` rows until a cutover migration seeds them, and a LEFT JOIN excludes nothing when
+#: there is nothing to exclude — so this query is right on day one and stays right afterwards,
+#: rather than needing to be revisited at exactly the moment it starts to matter.
+#:
+#: `coalesce(provider_symbol, ticker)`, never the ticker first: OpenFIGI's US lookup is a thin OTC
+#: foreign-ordinary line for most foreign companies, and pricing off it prices a different
+#: instrument.
+ASKABLE_SUBJECTS = """
+select s.security_id::text,
+       coalesce(ps.symbol, sym.symbol) as symbol,
+       coalesce(max(h.weight), 0)::float as weight
+  from market.security s
+  join market.security_symbol sym on sym.security_id = s.security_id
+  left join market.security_provider_symbol ps
+         on ps.security_id = s.security_id and ps.provider_code = %s
+  left join market.fund_holding_current h on h.security_id = s.security_id
+  left join ingest.task t
+         on t.facet = %s and t.security_id = s.security_id and t.status = 'absent'
+ where s.security_type_code = 'equity'
+   and coalesce(ps.symbol, sym.symbol) is not null
+   and t.subject is null
+ group by s.security_id, coalesce(ps.symbol, sym.symbol)
+ order by weight desc, s.security_id
+"""
+
+
+def askable_subjects(
+    conn: Any, *, provider: str = "yfinance", facet: str = "price_daily", limit: int | None = None
+) -> list[Subject]:
+    """The universe this run will ask about, heaviest holdings first."""
+    sql = ASKABLE_SUBJECTS + (" limit %s" if limit is not None else "")
+    params: list[Any] = [provider, facet]
+    if limit is not None:
+        params.append(limit)
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return [Subject(security_id=r[0], symbol=r[1], weight=r[2]) for r in cur.fetchall()]
+
+
+def currency_by_security(conn: Any) -> dict[str, str]:
+    """What each security's prices are denominated in, from its listing or its own column.
+
+    Measured 2026-09-10: 10,469 of 10,894 askable equities have one and 425 have neither, which is
+    why `market.price_bar.currency_code` is nullable — refusing those securities a bar would be
+    worse than the unlabelled number the app already renders correctly.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select s.security_id::text,
+                   coalesce(
+                     (select l.currency_code from market.listing l
+                       where l.security_id = s.security_id and l.currency_code is not null
+                       order by l.is_primary desc limit 1),
+                     s.currency_code)
+              from market.security s
+             where s.security_type_code = 'equity'
+            """
+        )
+        return {row[0]: row[1] for row in cur.fetchall() if row[1]}
+
+
+def raw_rows(
+    subject: Subject, bars: Sequence[Bar], *, provider: str, run_id: str, observed: str
+) -> list[dict[str, Any]]:
+    """One provider answer as raw rows — what was asked, who it was asked for, and what came back.
+
+    `security_id` is recorded even though it is OURS rather than the provider's, and that is
+    deliberate: it is a fact about the REQUEST, exactly as `ingest.attempt.asked_with` is. Without
+    it, stage 2 would have to re-resolve a symbol to a security using today's mapping, so a symbol
+    repaired between the fetch and the transform would silently re-attribute a whole series.
+    """
+    return [
+        {
+            "security_id": subject.security_id,
+            "asked_symbol": subject.symbol,
+            "observed_symbol": observed,
+            "provider": provider,
+            "run_id": run_id,
+            "trade_date": bar.trade_date.isoformat(),
+            "close": bar.close,
+            "volume": bar.volume,
+            "dividend": bar.dividend,
+            "split_ratio": bar.split_ratio,
+        }
+        for bar in bars
+    ]
+
+
+def normalise(
+    rows: Sequence[Mapping[str, Any]], currencies: Mapping[str, str], *, source_code: str
+) -> list[dict[str, Any]]:
+    """Raw rows to `market.price_bar` rows. No provider call, so a fix here is free to re-run.
+
+    DEDUPED ON THE CONFLICT KEY BY THE WRITER, not here — but a security appearing twice in one
+    partition (asked under two symbols after a repair) would otherwise fail the whole statement with
+    SQLSTATE 21000, which has happened four times in this pipeline and reads as a size problem.
+    """
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        close = row.get("close")
+        security_id = row.get("security_id")
+        trade_date = row.get("trade_date")
+        if security_id is None or trade_date is None or not isinstance(close, int | float):
+            continue
+        if isinstance(close, bool) or close <= 0:
+            continue
+        out.append(
+            {
+                "security_id": security_id,
+                "trade_date": trade_date,
+                "close": float(close),
+                "volume": row.get("volume"),
+                "currency_code": currencies.get(str(security_id)),
+                "source_code": source_code,
+            }
+        )
+    return out
