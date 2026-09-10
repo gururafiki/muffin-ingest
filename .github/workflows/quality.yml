@@ -123,7 +123,7 @@ jobs:
               echo "ok  $bin"
             done'
 
-      - name: The hub imports AS THE RUNTIME USER, without rebuilding itself
+      - name: Every route the library declares resolves on the real hub
         # NO `--user`, DELIBERATELY: this must run as whoever the image runs as, because that is the
         # whole failure. `import openbb` reconciles installed extensions against a static map inside
         # site-packages and REBUILDS when they differ — which needs write access the runtime user
@@ -133,12 +133,29 @@ jobs:
         # isolation pass failed every symbol, and the asset reported fifty securities as having
         # answered nothing. Found by driving the asset against production; no unit test could see it,
         # because the tests drive a fake hub for exactly the reason that makes this possible.
+        # AND THE IMPORT SUCCEEDING IS ITSELF HALF THE TEST. As the runtime user a rebuild raises
+        # PermissionError, so reaching the loop at all proves the map shipped built.
+        #
+        # The other half is that a hub can import perfectly and serve nothing. An extension
+        # supplying the DATA is not the one supplying the NAMESPACE: with providers alone,
+        # `obb.equity` does not exist and every call dies on a bare AttributeError. The built
+        # package held eleven modules, all `economy*` and `fixedincome*`, and no test could see it
+        # because the unit tests drive a FAKE hub — deliberately, so they need no 250 MB of AGPL
+        # code, which is exactly what makes this check the only place the real one is exercised.
         run: |
           docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} \
             python -c '
-          import openbb, pathlib, sys
-          # A rebuild WRITES this. Its absence after a clean import is what proves the map shipped
-          # built rather than being rebuilt on the spot by a user who happened to have permission.
-          lock = pathlib.Path(openbb.__file__).parent / ".build.lock"
-          print("openbb imported;", "lock present" if lock.exists() else "no rebuild lock")
-          sys.exit(0)'
+          import sys
+          # The INSTALLED package, not /app/src — what the service actually imports.
+          from muffin_ingest.providers.openbb import ROUTES, _load_hub, _resolve
+          hub = _load_hub()
+          missing = []
+          for route in sorted(ROUTES):
+              try:
+                  _resolve(hub, route)
+              except Exception as e:
+                  missing.append(f"{route}: {type(e).__name__}: {e}")
+          for m in missing:
+              print(f"::error::{m}")
+          print(f"{len(ROUTES) - len(missing)}/{len(ROUTES)} routes resolve")
+          sys.exit(1 if missing else 0)'
