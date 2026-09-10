@@ -236,3 +236,25 @@ def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything
     # a real universe. The isolation pass inflates the raw call count, so the assertion is on the
     # BATCHES having stopped rather than on an exact number of calls.
     assert len(calls) > 0
+
+
+def test_a_partition_contains_only_its_own_window(tmp_path: Path) -> None:
+    """MEASURED AGAINST THE REAL HUB, NOT IMAGINED. `start_date=2026-09-09&end_date=2026-09-09`
+    returns bars for BOTH 09-09 and 09-10 — a degenerate range is widened rather than refused — and
+    a run made while Tokyo was trading brought back a bar dated 09-11 as well.
+
+    The second is the dangerous half: that is a session in progress, so its "close" is not a close,
+    and it looks exactly like a real one. The first production run wrote all three dates into a
+    partition that had asked for one day.
+    """
+
+    def spilling(route: str, **kw: Any) -> Answer:
+        rows = []
+        for s in kw["symbol"].split(","):
+            for d in (KEY, "2099-01-01"):  # the second is unambiguously outside any window
+                rows.append({"symbol": s, "date": d, "close": 100.0})
+        return Answer(rows=rows)
+
+    m = meta(materialise(tmp_path, spilling), asset_prices.raw_price_bars)
+    assert m["outside_window"] > 0, "the spillover is counted, not dropped in silence"
+    assert m["rows"] == m["answered"], "exactly one bar per answering security — its own day"

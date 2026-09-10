@@ -111,6 +111,10 @@ def _collect(
         "calls": 0,
         "answered": 0,
         "empty": 0,
+        # Bars the provider returned that do not belong to the window we asked for. Counted rather
+        # than dropped in silence: a non-zero value is a statement about the PROVIDER's idea of a
+        # date range, and the day it becomes zero is the day this filter stopped being needed.
+        "outside_window": 0,
         # NEVER FOLDED INTO `empty`, and the first version of this loop folded it. A batch that
         # RAISED tells us nothing about its subjects — "we never got an answer" and "the provider
         # answered and had nothing" are the distinction this whole pipeline is being rewritten
@@ -153,6 +157,19 @@ def _collect(
             break
 
         parsed = prices.bars_by_symbol(verdict.rows, next(iter(by_symbol)))
+        # A PARTITION MUST CONTAIN ONLY ITS OWN WINDOW, and the provider does not guarantee that.
+        # Measured 2026-09-11 against the real hub: `start_date=2026-09-09&end_date=2026-09-09`
+        # returns bars for BOTH 09-09 and 09-10 — a degenerate range is widened rather than refused
+        # — and a run made while Tokyo was trading also brought back a bar dated 09-11, which is a
+        # session still in progress. That second one is the dangerous half: a partial bar's "close"
+        # is not a close, and it looks exactly like a real one.
+        #
+        # Filtering here rather than trusting the request is the only version that holds, because
+        # both causes are the provider's and neither is visible in what we asked for.
+        for symbol, series in parsed.items():
+            kept = [b for b in series if start <= b.trade_date <= end]
+            stats["outside_window"] += len(series) - len(kept)
+            parsed[symbol] = kept
         dead = {d.upper() for d in verdict.dead}
         answered_here = 0
         for symbol, subject in by_symbol.items():
@@ -291,7 +308,11 @@ def raw_price_history(
         context,
         subjects,
         start=HISTORY_START,
-        end=date.today(),
+        # YESTERDAY, NOT TODAY. Somewhere a market is open, and its bar for today is a session in
+        # progress whose "close" is not a close. The daily lane collects each day once it has
+        # closed; history must not race ahead of it and write a partial bar that then looks
+        # settled.
+        end=date.today() - timedelta(days=1),
         # SMALLER THAN THE CROSS-SECTION'S, because this is a MEMORY budget wearing a time budget's
         # clothes: twelve symbols at full history measured 11.6 MB of JSON in 8.1 s.
         batch_size=PROVIDER.history_batch_size,
