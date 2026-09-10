@@ -83,8 +83,26 @@ def every_symbol_keyed_facet_retracts(postgres: Postgres) -> dg.AssetCheckResult
     )
 
 
+# HOURLY, AND THE SCHEDULE IS PART OF WHAT IS BEING SMOKE-TESTED. A smoke asset nobody runs proves
+# the code location parses; running it on a schedule proves the DAEMON is alive, the run queue
+# accepts work, a subprocess launches and the database is reachable from inside one — which is the
+# set of things that can be individually healthy and still not add up to a working orchestrator.
+#
+# It is also the liveness signal the old system never had. `refresh_log` holds one row per resource
+# and overwrites it, so a resource dying on every firing kept a fresh `started_at` and read as
+# just-started; `security-cn-segments` was dead for two days behind exactly that.
+ledger_heartbeat = dg.ScheduleDefinition(
+    name="ledger_heartbeat",
+    target=[ledger_health],
+    cron_schedule="7 * * * *",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+
+
 defs = dg.Definitions(
     assets=[ledger_health],
     asset_checks=[every_symbol_keyed_facet_retracts],
+    schedules=[ledger_heartbeat],
     resources={"postgres": Postgres()},
 )
