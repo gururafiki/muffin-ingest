@@ -109,8 +109,22 @@ def _resolve(hub: Any, route: str) -> Callable[..., Any]:
     if route not in ROUTES:
         raise KeyError(f"unknown route {route!r}; add it to ROUTES with the source it came from")
     node = hub
+    walked: list[str] = []
     for part in ROUTES[route].split("."):
+        # A MISSING ROUTER LOOKS LIKE A BROKEN HUB, AND THE BARE AttributeError SAYS SO:
+        # `'App' object has no attribute 'equity'`, which names neither the cause nor the fix. An
+        # extension supplying the DATA (openbb-yfinance) is not the one supplying the NAMESPACE you
+        # reach it through (openbb-equity), and installing only the first leaves a hub that imports
+        # perfectly and cannot serve a single route.
+        if not hasattr(node, part):
+            namespace = ".".join([*walked, part]) or part
+            raise AttributeError(
+                f"route {route!r} needs `{namespace}`, which this hub does not have — the router "
+                f"extension for it is probably not installed (openbb-{part} for a top-level "
+                f"namespace). Installed providers supply data, not namespaces."
+            )
         node = getattr(node, part)
+        walked.append(part)
     if not callable(node):
         raise TypeError(f"route {route!r} resolved to {type(node).__name__}, not a callable")
     return node  # type: ignore[no-any-return]

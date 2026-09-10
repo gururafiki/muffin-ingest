@@ -25,14 +25,35 @@ dependencies = [
   # is the READ path for muffin-ui and stays that way.
   "psycopg[binary,pool]>=3.2,<4",
   # The hub, in-process. Only the extensions actually used — never `openbb[all]`, which is the 1 GB
-  # image. Each is one provider we already depend on today.
+  # image.
+  #
+  # TWO KINDS OF EXTENSION, AND THE FIRST LIST HAD ONLY ONE OF THEM. A PROVIDER supplies data
+  # (yfinance, finviz); a ROUTER supplies the namespace you call it through (`obb.equity.*`). With
+  # providers alone the hub imports perfectly and every call dies on
+  #
+  #     AttributeError: 'App' object has no attribute 'equity'
+  #
+  # — a message that names neither the cause nor the fix. The built package held eleven modules,
+  # all `economy*` and `fixedincome*`, which arrived transitively via the FRED and OECD providers;
+  # nothing had pulled in the routers this pipeline actually calls. Found by driving a run against
+  # production, and guarded now by resolving every route in `ROUTES` inside the built image.
   "openbb-core>=1.4,<2",
+  # Providers.
   "openbb-yfinance>=1.4,<2",
   "openbb-finviz>=1.3,<2",
   "openbb-nasdaq>=1.4,<2",
   "openbb-fred>=1.4,<2",
   "openbb-oecd>=1.4,<2",
   "openbb-federal-reserve>=1.4,<2",
+  # Routers, one per namespace named in `providers/openbb.py::ROUTES`. A route whose router is not
+  # installed is a control table advertising work nothing can do.
+  "openbb-equity>=1.4,<2",
+  "openbb-etf>=1.4,<2",
+  "openbb-economy>=1.4,<2",
+  "openbb-fixedincome>=1.4,<2",
+  "openbb-index>=1.4,<2",
+  "openbb-crypto>=1.4,<2",
+  "openbb-derivatives>=1.4,<2",
   # The direct providers, for the four things openbb measurably cannot do: N-PORT holdings (no
   # `sec` provider on `etf/holdings`), ISIN resolution (`equity/search` returns zero hits for an
   # ISIN), quarterly SEC statements (`period=quarter` is 422), and DART (TLS 1.2 static-RSA).
