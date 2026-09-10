@@ -29,7 +29,10 @@ jobs:
           # NO psycopg AND NO DAGSTER, and both absences are the point. The ledger takes a
           # PROTOCOL (`DbConn`) rather than a driver, and the library imports no orchestrator, so
           # this job passing is what proves both rather than a comment asserting them.
-          pip install ruff mypy pytest pytest-cov pydantic
+          #
+          # httpx and prometheus-client ARE imported — one provider call is one place that is
+          # counted, paced and bounded — so they are installed rather than stubbed.
+          pip install ruff mypy pytest pytest-cov pydantic httpx prometheus-client
 
       - name: Lint
         run: ruff check src tests && ruff format --check src tests
