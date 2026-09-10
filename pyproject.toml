@@ -77,6 +77,16 @@ python_version = "3.13"
 strict = true
 files = ["src", "tests"]
 
+# THE HUB IS DELIBERATELY NOT A CHECK-TIME DEPENDENCY. `providers/openbb.py` imports it inside a
+# function so that `dagster definitions validate`, the unit tests and the CI `checks` job all run
+# without ~250 MB of AGPL provider code installed — and the tests drive a fake hub for the same
+# reason. mypy still tries to resolve the import, so without this it fails in CI while passing on
+# any machine that happens to have openbb installed. Which is precisely what it did: green here,
+# `Cannot find implementation or library stub for module named "openbb"` there.
+[[tool.mypy.overrides]]
+module = ["openbb", "openbb.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["live: drives a real provider; excluded from CI"]
