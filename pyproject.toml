@@ -14,6 +14,12 @@ dependencies = [
   # Orchestration. Pinned, because an asset/check API change is a silent behaviour change.
   "dagster>=1.11,<1.13",
   "dagster-postgres>=0.27,<0.29",
+  # THE WEBSERVER IS A SEPARATE DISTRIBUTION AND `dagster` DOES NOT PULL IT IN. Without it the
+  # image builds, the code location loads and `dagster definitions validate` passes — and the
+  # webserver service then crash-loops with `exec: "dagster-webserver": executable file not found
+  # in $PATH`, which reads as a broken image rather than a missing dependency. One image runs all
+  # three services, so it carries all three entrypoints.
+  "dagster-webserver>=1.11,<1.13",
   # The database, DIRECTLY. Not PostgREST: this writer needs transactions spanning claim -> write ->
   # complete, `for update skip locked`, COPY, and a role with its own statement timeout. PostgREST
   # is the READ path for muffin-ui and stays that way.

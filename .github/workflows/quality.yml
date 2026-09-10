@@ -94,3 +94,20 @@ jobs:
           tags: |
             ghcr.io/gururafiki/muffin-ingest:latest
             ghcr.io/gururafiki/muffin-ingest:${{ github.sha }}
+      - name: Every entrypoint the stack runs exists in the image
+        # THE IMAGE BUILT, THE CODE LOCATION LOADED AND `definitions validate` PASSED while
+        # `dagster-webserver` was not installed at all — it is a separate distribution and
+        # `dagster` does not depend on it. The webserver service then crash-looped with
+        # `exec: "dagster-webserver": executable file not found in $PATH`, which reads as a broken
+        # image rather than a missing dependency, and cost a deploy to find.
+        #
+        # One image runs all three Swarm services, so it must carry all three entrypoints. Run
+        # against the PUSHED tag, not a local build: what the node pulls is the thing worth
+        # checking.
+        run: |
+          docker run --rm --entrypoint sh ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} -c '
+            set -e
+            for bin in dagster dagster-webserver dagster-daemon; do
+              command -v "$bin" >/dev/null || { echo "::error::$bin is not in the image PATH"; exit 1; }
+              echo "ok  $bin"
+            done'
