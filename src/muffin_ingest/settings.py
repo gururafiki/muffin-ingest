@@ -37,6 +37,16 @@ def database_url() -> str:
     return url
 
 
+def raw_root() -> str:
+    """Where stage 1 lands what a provider actually said, before anything interprets it.
+
+    A SEPARATE MOUNT FROM `DAGSTER_HOME`, which is read-only on purpose — Dagster's telemetry tried
+    to write into it and crash-looped the daemon. And on `/mnt/data` rather than `/`, which is a
+    45 GB boot volume that every image pull needs.
+    """
+    return _env("MUFFIN_RAW_ROOT", "/var/lib/muffin-ingest/raw")
+
+
 def cache_base() -> str:
     """The read-through cache in front of every provider."""
     return _env("HTTP_CACHE_URL", "http://http-cache:8080")

@@ -43,6 +43,11 @@ dependencies = [
   # Rate limiting that survives more than one process. Dagster pools serialise RUNS per provider;
   # this enforces requests per second AND per day, which pools cannot express.
   "pyrate-limiter[psycopg]>=3.7,<5",
+  # Parquet for the raw layer. pyarrow ALONE, not polars: both acquisition lanes are chunked by
+  # construction (a day of the cross-section, or a batch of ten securities' history), so the largest
+  # frame either holds is ~73k rows — four orders of magnitude below the 88 M that justified a lazy
+  # scan. `UPathIOManager` and `upath` come with dagster, so the whole raw path costs one wheel.
+  "pyarrow>=18,<26",
   "pydantic>=2.10,<3",
   "prometheus-client>=0.21,<1",
   "structlog>=24.4,<26",
@@ -75,6 +80,11 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 [tool.mypy]
 python_version = "3.13"
 strict = true
+# BOTH HALVES, because a bare `mypy` locally should check everything. CI splits it deliberately:
+# `checks` runs `mypy --strict src/muffin_ingest tests/unit` with NO dagster installed, which is
+# what proves the library imports no orchestrator, and `definitions` covers the other half where
+# dagster is present. Running the two together here needs everything installed, which is the normal
+# development case.
 files = ["src", "tests"]
 
 # THE HUB IS DELIBERATELY NOT A CHECK-TIME DEPENDENCY. `providers/openbb.py` imports it inside a
@@ -85,6 +95,12 @@ files = ["src", "tests"]
 # `Cannot find implementation or library stub for module named "openbb"` there.
 [[tool.mypy.overrides]]
 module = ["openbb", "openbb.*"]
+ignore_missing_imports = true
+
+# pyarrow ships no py.typed marker. Narrow rather than blanket, for the same reason as above: a
+# DIFFERENT import error in this file still fails the build.
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
