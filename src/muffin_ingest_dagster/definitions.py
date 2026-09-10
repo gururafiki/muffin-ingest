@@ -31,6 +31,7 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest_dagster.resources import Postgres
+from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
 
 
 @dg.asset(
@@ -103,6 +104,7 @@ ledger_heartbeat = dg.ScheduleDefinition(
 defs = dg.Definitions(
     assets=[ledger_health],
     asset_checks=[every_symbol_keyed_facet_retracts],
-    schedules=[ledger_heartbeat],
+    jobs=[prune_dagster_storage],
+    schedules=[ledger_heartbeat, nightly_pruning],
     resources={"postgres": Postgres()},
 )
