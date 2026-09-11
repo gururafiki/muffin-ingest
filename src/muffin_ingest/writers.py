@@ -121,6 +121,20 @@ def numeric_or_none(value: Any) -> float | None:
     return None
 
 
+#: Postgres' extended-query protocol sends the parameter count as an int16, so a single statement
+#: may carry at most 65,535 bind parameters — a PROTOCOL limit, not a tunable. A multi-VALUES insert
+#: spends one per column per row, so the ceiling is a ROW count that depends on how wide the table
+#: is, which is why nothing in this pipeline had met it: Lane A writes one day at a time and its
+#: largest statement was a few thousand parameters. A history backfill of 25 securities is ~178,000
+#: rows x 8 columns = 1.4 M, and psycopg refuses the whole statement with
+#:
+#:     number of parameters must be between 0 and 65535
+#:
+#: naming neither the table nor the row count. Chunking belongs HERE and not at any call site: every
+#: facet writes through this function, and a rule written at one call site is not a rule.
+MAX_BIND_PARAMS = 65535
+
+
 def _values_sql(columns: Sequence[str], count: int) -> str:
     one = "(" + ", ".join(["%s"] * len(columns)) + ")"
     return ", ".join([one] * count)
@@ -175,12 +189,20 @@ def upsert(
         assignments = ", ".join(f"{_ident(c)} = excluded.{_ident(c)}" for c in setters)
         action = f"do update set {assignments}"
 
-    sql = (
-        f"insert into {target} ({', '.join(columns)}) "
-        f"values {_values_sql(columns, len(deduped))} "
-        f"on conflict ({', '.join(keys)}) {action}"
-    )
-    cur.execute(sql, _flatten(deduped, columns))
+    # CHUNKED, AND THE DEDUPE STAYS WHOLE-SET. Splitting first and deduping per chunk would let one
+    # conflict key survive in two chunks — the second statement would then silently overwrite the
+    # first with whichever copy happened to land last, which is a different answer from the one
+    # `dedupe_by` gives (last wins, once, and it is COUNTED). Deduping first also means the chunks
+    # hold distinct keys, so they cannot collide with each other.
+    per_chunk = max(1, MAX_BIND_PARAMS // max(1, len(columns)))
+    for start in range(0, len(deduped), per_chunk):
+        chunk = deduped[start : start + per_chunk]
+        sql = (
+            f"insert into {target} ({', '.join(columns)}) "
+            f"values {_values_sql(columns, len(chunk))} "
+            f"on conflict ({', '.join(keys)}) {action}"
+        )
+        cur.execute(sql, _flatten(chunk, columns))
     return WriteResult(written=len(deduped), collapsed=collapsed)
 
 

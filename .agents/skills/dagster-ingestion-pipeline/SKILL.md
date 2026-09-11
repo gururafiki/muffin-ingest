@@ -263,6 +263,25 @@ overhead buys the only property that lets it complete at all.
 Pin the asymmetry in a test. Four assets sit in one file with three words different between them,
 and the tidying instinct runs toward making them consistent — which reintroduces the OOM.
 
+### Do not build one statement per write — 65,535 bind parameters is a PROTOCOL ceiling
+
+Postgres sends the parameter count as an int16, so a single statement carries at most 65,535 bind
+parameters. A multi-VALUES insert spends one per column per row, so the ceiling is a ROW count that
+moves with how wide the table is — which is why a daily lane never meets it and a history backfill
+does immediately. psycopg refuses the whole statement with
+
+    number of parameters must be between 0 and 65535
+
+naming neither the table nor the row count, after everything upstream has already been paid for.
+
+**Chunk inside the shared writer, never at a call site** — every facet writes through it, and a rule
+written at one call site is not a rule. **Dedupe the whole set FIRST, then chunk**: split first and
+one conflict key survives in two chunks, the second statement silently overwrites the first via
+`do update`, and the final stored value is the SAME — so a test asserting on the value certifies
+both rules. The difference is in how many rows were SENT and in the collapse count going to zero,
+so assert `rows sent == rows written`. And the fixture has to put the repeat past a chunk boundary,
+or every candidate rule agrees and the mutation passes clean.
+
 ### Do not write an artifact only your own loader can read
 
 An empty partition written as `pa.table({})` is a Parquet file with **zero columns**. DuckDB:
