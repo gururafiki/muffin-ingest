@@ -154,3 +154,44 @@ def test_no_bar_escapes_the_partition_window(tmp_path: Path, group: str) -> None
     # A STRING, because raw records the provider's own rendering of the date rather than a parsed
     # one — interpretation belongs to stage 2.
     assert sql(parquet, "select distinct trade_date from {f}") == [(PARTITION,)]
+
+
+def test_the_window_asked_for_is_half_open_and_never_degenerate(tmp_path: Path) -> None:
+    """A DEGENERATE RANGE IS IGNORED BY THE PROVIDER, measured against the real hub:
+
+        start=2026-09-01 end=2026-09-01  ->  7 rows, 2026-09-01..2026-09-10
+        start=2026-09-01 end=2026-09-02  ->  2 rows, exactly those two
+
+    `start == end` returns everything from `start` to TODAY, so asking for one old day dragged back
+    every session since — 653 bars discarded for 96 securities on the first parity run. Correctness
+    never depended on it, because the filter keeps only the partition's own day; the cost did.
+
+    So the asset must hand the provider the half-open window Dagster already gives it, and the two
+    dates must differ.
+    """
+    asked: dict[str, Any] = {}
+
+    def recording(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        asked.update(kwargs)
+        return Answer(rows=list(CAPTURED["batch_mixed_venues"]["rows"]))
+
+    saved_fetch, saved_universe = openbb.price_history, list(fakes.UNIVERSE)
+    openbb.price_history = recording
+    fakes.UNIVERSE[:] = BATCH_SUBJECTS
+    try:
+        dg.materialize(
+            [asset_prices.raw_price_bars],
+            partition_key=PARTITION,
+            resources={
+                "postgres": fakes.FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        openbb.price_history = saved_fetch
+        fakes.UNIVERSE[:] = saved_universe
+
+    assert str(asked["start"]) == PARTITION
+    assert asked["end"] > asked["start"], (
+        "start == end makes the provider ignore the range entirely and answer from start to today"
+    )
