@@ -71,9 +71,26 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
     if config.limit is not None:
         scopes = scopes[: config.limit]
 
-    by_symbol = {symbol: code for code, symbol in scopes}
+    # A SYMBOL BACKS MORE THAN ONE SCOPE, AND A DICT COMPREHENSION SILENTLY KEEPS THE LAST.
+    #
+    # Measured in production: 62 scopes over **53 distinct symbols**. `EEM` backs
+    # ftse:em-emea, msci:emerging AND msci:em-emea; `IVV` backs country:US, ftse:na and msci:na.
+    # Written as `{symbol: code}` the map kept one code per symbol and nine scopes got no returns
+    # at all — the run reported `answered=52` beside `empty=0`, two numbers that cannot both be
+    # right, and nothing else could see it.
+    #
+    # It is not a modelling error: those scopes genuinely ARE the same index, which is exactly why
+    # the relation is many-to-one and must be stored as one.
+    by_symbol: dict[str, list[str]] = {}
+    for code, symbol in scopes:
+        by_symbol.setdefault(symbol, []).append(code)
     symbols = sorted(by_symbol)
-    context.log.info("%s proxied scopes over %s symbols", len(scopes), len(symbols))
+    context.log.info(
+        "%s proxied scopes over %s symbols (%s shared)",
+        len(scopes),
+        len(symbols),
+        sum(1 for codes in by_symbol.values() if len(codes) > 1),
+    )
 
     rows: list[dict[str, Any]] = []
     stats = {"calls": 0, "answered": 0, "empty": 0, "transport": 0, "bars": 0, "unattributed": 0}
@@ -89,15 +106,15 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
 
         parsed = prices.bars_by_symbol(answer.rows, batch[0] if len(batch) == 1 else "")
         for symbol, series in parsed.items():
-            code = by_symbol.get(symbol) or by_symbol.get(symbol.upper())
-            if code is None:
+            codes = by_symbol.get(symbol) or by_symbol.get(symbol.upper())
+            if not codes:
                 # A SYMBOL WE DID NOT ASK FOR IS NOT A BAR WE CAN FILE. Counted rather than
                 # dropped: a non-zero value means the provider renamed something, which is a fact
                 # about the response and not about our scopes.
                 stats["unattributed"] += len(series)
                 continue
-            stats["answered"] += 1
-            stats["bars"] += len(series)
+            stats["answered"] += len(codes)
+            stats["bars"] += len(series) * len(codes)
             rows.extend(
                 {
                     "index_code": code,
@@ -108,6 +125,7 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
                     "provider": "yfinance",
                     "run_id": context.run_id,
                 }
+                for code in codes
                 for bar in series
             )
         stats["empty"] += sum(1 for s in batch if s.upper() not in {k.upper() for k in parsed})
