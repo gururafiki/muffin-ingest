@@ -105,18 +105,41 @@ def _eligible(series: Sequence[Bar], now: date) -> bool:
     return math.isfinite(latest) and latest > 0
 
 
-def _anchors(series: Sequence[Bar], now: date) -> dict[str, int | None]:
-    """Which bar each period is measured FROM."""
+def _anchors(series: Sequence[Bar]) -> dict[str, int | None]:
+    """Which bar each period is measured FROM — COUNTED BACK FROM THE LAST BAR, NOT FROM THE CLOCK.
+
+    A return is `series[-1].close` over an anchor, so measuring the window from wall-clock `now`
+    while measuring the value from the last bar mixes two different reference points. The visible
+    consequence is that the SAME bars produce DIFFERENT numbers depending on what day the job
+    happens to run — a 3-month window over a series ending Friday starts three months before
+    Friday if it runs on Friday and three months before Monday if it runs on Monday, quietly
+    dropping or including a bar at the far end.
+
+    That is not a hypothetical. The returns parity gate reported 57% disagreement against the old
+    resource, and **21% of the sampled disagreements were reproduced exactly** by recomputing over
+    our own unchanged bars with the last bar as the basis — the old resource had always anchored
+    this way, and CLAUDE.md already carries the rule from the chart: *"Chart windows anchor on the
+    LAST BAR, not `Date.now()`... anchoring on the data also means a stale series draws a full
+    month instead of shrinking toward empty."* It is the same rule, one layer down.
+
+    It also makes the asset DETERMINISTIC: re-running it over bars that have not changed cannot
+    change a number, which is the property an asset is supposed to have.
+
+    Wall-clock is still needed, but for a different question — `_eligible` asks whether the series
+    is still being updated, and only a clock can answer that. The two uses were one parameter and
+    are now two.
+    """
+    basis = series[-1].trade_date
     anchors: dict[str, int | None] = {
         # THE PREVIOUS BAR, not a one-day lookback. A weekend or holiday resolves "yesterday" to the
         # same bar and reports a flat 0.00% for every security at once.
         "1d": len(series) - 2,
     }
     for period, days in PERIOD_DAYS.items():
-        anchors[period] = index_at_or_before(series, now - timedelta(days=days))
+        anchors[period] = index_at_or_before(series, basis - timedelta(days=days))
     # THE LAST CLOSE OF LAST YEAR, so early January is measured from the true year-end rather than
     # from the first bar of the new year (which would report ~0% for the first days of trading).
-    anchors["ytd"] = index_at_or_before(series, date(now.year - 1, 12, 31))
+    anchors["ytd"] = index_at_or_before(series, date(basis.year - 1, 12, 31))
     return anchors
 
 
@@ -148,9 +171,7 @@ def price_returns(series: Sequence[Bar], now: date) -> dict[str, float]:
         return _round_like_js(latest / anchor - 1)
 
     return {
-        period: value
-        for period, idx in _anchors(series, now).items()
-        if (value := at(idx)) is not None
+        period: value for period, idx in _anchors(series).items() if (value := at(idx)) is not None
     }
 
 
@@ -193,7 +214,5 @@ def total_returns(series: Sequence[Bar], now: date) -> dict[str, float]:
         return _round_like_js(value) if math.isfinite(value) else None
 
     return {
-        period: value
-        for period, idx in _anchors(series, now).items()
-        if (value := at(idx)) is not None
+        period: value for period, idx in _anchors(series).items() if (value := at(idx)) is not None
     }
