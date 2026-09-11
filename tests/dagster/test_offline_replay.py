@@ -16,7 +16,9 @@ rather than "did the function return what I told it to".
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,7 @@ from muffin_ingest.providers import openbb
 from muffin_ingest.providers.openbb import Answer
 from muffin_ingest_dagster.assets import prices as asset_prices
 from muffin_ingest_dagster.io_managers import ParquetIOManager
+from muffin_ingest_dagster.resources import Postgres
 
 from . import test_price_assets as fakes
 
@@ -318,3 +321,79 @@ def test_a_single_run_covering_several_partitions_normalises_all_of_them(tmp_pat
     assert len(written) == len(BATCH_SUBJECTS) * len(keys), (
         "four securities on each of two days, flattened into one list"
     )
+
+
+def test_the_fx_spot_lane_keeps_only_its_own_partition_s_day(tmp_path: Path) -> None:
+    """A PARTITION CLAIMS ITS OWN WINDOW, AND THE FIRST VERSION WROTE SOMEONE ELSE'S DAY.
+
+    Driven against production, a run for the 2026-09-10 partition wrote **42 rates dated
+    2026-09-11** — because a five-day range is requested so the partition's day is certainly inside
+    what comes back, and the asset then took the NEWEST point instead of its own.
+
+    Both halves are wrong. The partition's claim becomes false, and 09-11 was a session still in
+    progress: a mid-session quote is not a close and looks exactly like one, which is the defect
+    this pipeline exists to stop publishing.
+    """
+    from muffin_ingest.providers import yahoo_chart
+    from muffin_ingest_dagster.assets import fx as asset_fx
+
+    key = "2026-09-10"
+    inside = date(2026, 9, 10)
+    outside = date(2026, 9, 11)
+
+    def two_days(symbol: str, **kwargs: Any) -> list[yahoo_chart.Point]:
+        return [
+            yahoo_chart.Point(as_of=inside, close=1.16),
+            yahoo_chart.Point(as_of=outside, close=1.17),
+        ]
+
+    saved = yahoo_chart.chart
+    yahoo_chart.chart = two_days
+    try:
+        result = dg.materialize(
+            [asset_fx.raw_fx_spot],
+            partition_key=key,
+            resources={
+                "postgres": FxPostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        yahoo_chart.chart = saved
+
+    assert result.success
+    rows = sql(
+        tmp_path / "raw_fx_spot" / f"{key}.parquet", "select distinct as_of from {f} order by 1"
+    )
+    assert rows == [(key,)], (
+        f"the partition stored {rows} — a day outside its own window is another partition's claim, "
+        f"and today's is a session that has not closed"
+    )
+
+
+class FxConn:
+    """Answers the one query `raw_fx_spot` makes."""
+
+    def cursor(self) -> FxConn:
+        return self
+
+    def __enter__(self) -> FxConn:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql_text: str, params: Any = ()) -> None:
+        return None
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return [("EUR",), ("JPY",)]
+
+    def commit(self) -> None:
+        return None
+
+
+class FxPostgres(Postgres):
+    @contextmanager
+    def connect(self) -> Iterator[Any]:
+        yield FxConn()
