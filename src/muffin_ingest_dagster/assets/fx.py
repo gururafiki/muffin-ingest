@@ -96,6 +96,11 @@ def _collect(
         # rather than dropped in silence: a non-zero value is a statement about the PROVIDER's idea
         # of a range, and the day it becomes zero is the day this filter stopped being needed.
         "outside_window": 0,
+        # A LIVE QUOTE IS NOT A BAR. Non-zero is the normal case while a session is open and zero
+        # once it closes; it is counted because publishing one is the exact defect being replaced.
+        "live_dropped": 0,
+        # A padded row for a session with no data yet — a statement about the provider.
+        "nulls_dropped": 0,
     }
     empty: list[str] = []
     last_error: str | None = None
@@ -111,7 +116,7 @@ def _collect(
 
         stats["calls"] += 1
         try:
-            points = yahoo_chart.chart(yahoo_chart.pair(currency), range_=range_, interval=interval)
+            series = yahoo_chart.chart(yahoo_chart.pair(currency), range_=range_, interval=interval)
         except yahoo_chart.YahooRefused as exc:
             stats["transport"] += 1
             last_error = str(exc)
@@ -125,6 +130,9 @@ def _collect(
             continue
 
         consecutive_transport = 0
+        points = series.points
+        stats["live_dropped"] += series.live_dropped
+        stats["nulls_dropped"] += series.nulls_dropped
         if window is not None:
             start, end = window
             kept = [p for p in points if start <= p.as_of < end]
