@@ -21,10 +21,21 @@ walked with `getattr`, justified by the REST convention being irregular —
 and we stopped using URLs: measured, all 26 entries mapped a string to ITSELF, so the table encoded
 nothing and cost a layer of indirection plus a runtime failure mode.
 
-Written out, `obb.equity.price.historical(...)` is checkable: openbb ships `py.typed`, so a wrong
-keyword is an error where mypy runs with the hub installed rather than a `TypeError` inside a
-Dagster run. The import stays function-local because it is ~250 MB and ~2 s — `dagster definitions
-validate`, the unit tests and the CI `checks` job all run without openbb present.
+Written out, the call reads as what it is. IT IS NOT MORE TYPE-CHECKABLE, THOUGH, AND THE FIRST
+VERSION OF THIS COMMENT CLAIMED IT WAS. openbb ships `py.typed`, which is why the claim was
+plausible — but measured against the real hub:
+
+    >>> inspect.signature(obb.equity.price.historical)
+    (symbol, start_date, end_date, provider, **kwargs)
+
+THE ROUTE TAKES `**kwargs`, so a misspelled keyword binds happily, is swallowed, and the call
+silently uses the default — returning a plausible wrong answer rather than an error. mypy cannot see
+that, `inspect.signature(...).bind(...)` cannot see it, and neither could the route table this
+replaced. What catches it is behavioural: ask for one day, get the provider's default range, and the
+window filter's `outside_window` count moves.
+
+The import stays function-local because it is ~250 MB and ~2 s — `dagster definitions validate`, the
+unit tests and the CI `checks` job all run without openbb present.
 """
 
 from __future__ import annotations

@@ -123,30 +123,58 @@ jobs:
               echo "ok  $bin"
             done'
 
-      - name: The hub's own signatures type-check, against the real hub
-        # REPLACES THE ROUTE-RESOLUTION GUARD, which existed to protect a `ROUTES` table that has
-        # been deleted — measured, all 26 of its entries mapped a string to itself, so it encoded
-        # nothing while costing a layer of indirection and a runtime failure mode.
+      - name: Every namespace we call exists on the real hub
+        # WHAT THIS CHECKS, AND WHAT IT CANNOT — both measured, after two attempts that claimed more.
         #
-        # The calls are written out now (`obb.equity.price.historical(...)`), and openbb ships
-        # `py.typed`, so mypy can check the keyword names and their types. That only works where the
-        # hub is INSTALLED, which is exactly here and nowhere else in CI: the `checks` job
-        # deliberately has no openbb (~250 MB, AGPL) and treats it as `Any`.
+        # ATTEMPT 1 was `mypy --strict` against the hub, on the grounds that openbb ships `py.typed`
+        # so a wrong keyword would become a check-time error. mypy 2.3.1 CRASHES on openbb's
+        # generated package (`INTERNAL ERROR`, no file, no line, no traceback).
         #
-        # Importing it first is not optional — openbb GENERATES its typed package on first import,
-        # so mypy has nothing to read until that has happened.
+        # ATTEMPT 2 was binding our keywords against `inspect.signature` of the real callable. It
+        # does not work either, and the reason kills the premise of both:
         #
-        # The failure this catches is a wrong keyword, which used to surface as a `TypeError` inside
-        # a Dagster run against a live provider. Half of it is also covered by simply importing:
-        # as the runtime user a rebuild raises PermissionError, so reaching mypy at all proves the
-        # extension map shipped built.
+        #     >>> inspect.signature(obb.equity.price.historical)
+        #     (symbol, start_date, end_date, provider, **kwargs)
+        #
+        # THE ROUTE TAKES `**kwargs`. `start=` binds perfectly and is swallowed, so a misspelled
+        # keyword is not a TypeError, is not a mypy error, and is not a bind failure — it silently
+        # uses the default and returns a plausible wrong answer. No static check can see it.
+        #
+        # So this checks the thing that IS statically knowable and that actually bit us: whether the
+        # NAMESPACE exists. Installing `openbb-yfinance` without `openbb-equity` leaves a hub that
+        # imports perfectly and cannot serve a single route, failing with `'App' object has no
+        # attribute 'equity'` on the first call in production.
+        #
+        # A wrong keyword is caught BEHAVIOURALLY instead, by the window filter: ask for one day,
+        # get the provider's default range back, and `outside_window` moves. That is a real signal
+        # and it is the one available.
+        #
+        # Reaching the check at all is the other half: as the runtime user a rebuild of the
+        # extension map raises PermissionError, so a clean import proves the map shipped built.
         run: |
-          docker run --rm -v "$PWD":/src ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} sh -c '
-            set -e
-            python -c "import openbb; print(\"hub imported\")"
-            pip install --quiet --disable-pip-version-check mypy
-            # `python -m mypy`, NOT `mypy`. The image runs as a non-root user, so pip installs the
-            # console script into ~/.local/bin — which is not on PATH, and the step died with
-            # `sh: 5: mypy: not found` while pip had plainly just succeeded. The module form does
-            # not care where the script landed.
-            cd /src && python -m mypy --strict src/muffin_ingest/providers/openbb.py'
+          docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} python -c '
+          import sys
+          from openbb import obb
+
+          # The namespaces `providers/openbb.py` reaches for, written out so adding a call here is
+          # the same edit as adding one there.
+          NAMESPACES = ["equity.price.historical"]
+
+          missing = []
+          for path in NAMESPACES:
+              node = obb
+              for part in path.split("."):
+                  node = getattr(node, part, None)
+                  if node is None:
+                      missing.append(f"{path}: the hub has no `{part}` — the ROUTER extension for "
+                                     f"it is probably not installed (providers supply data, not "
+                                     f"namespaces)")
+                      break
+              else:
+                  if not callable(node):
+                      missing.append(f"{path}: resolved to {type(node).__name__}, not a callable")
+
+          for m in missing:
+              print(f"::error::{m}")
+          print(f"{len(NAMESPACES) - len(missing)}/{len(NAMESPACES)} namespaces resolve")
+          sys.exit(1 if missing else 0)'
