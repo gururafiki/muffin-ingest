@@ -1,0 +1,228 @@
+"""Index returns — the last of the price family, and the one with two acquisition shapes.
+
+  `raw_index_bars`          DAILY partitions. Proxy-ETF bars for the 45 country and 17 group
+                            scopes, in one batched call.
+  `raw_sector_performance`  DAILY partitions. The 11 sectors from finviz, which publishes NUMBERS
+                            rather than a series — there is no ETF behind a muffin sector.
+  `index_return`            DAILY. Both, into one table.
+
+TWO RAW ASSETS FEEDING ONE CORE ASSET IS THE POINT, not a compromise. The scopes differ in where
+their numbers come from and in nothing else, so the difference belongs at the boundary where it is
+real. Folding finviz into the bar lane would mean inventing a series it does not publish; splitting
+the core table would mean a reader has to know which kind of scope it is holding before it can ask
+for a return.
+
+AND THE RETURN RULES ARE THE SAME RULES. A country's 3-month return is computed by `derive/returns`,
+exactly as a security's is, so a country page and a stock page cannot disagree about what the phrase
+means. What sectors get instead is finviz's own figure — stated, and never recomputed to look alike.
+"""
+
+# No `from __future__ import annotations` — Dagster resolves `context` by comparing the class.
+
+from datetime import date, datetime, timedelta
+from typing import Any
+
+import dagster as dg
+from dagster import AssetExecutionContext
+
+from muffin_ingest.derive import returns
+from muffin_ingest.facets import indices, prices
+from muffin_ingest.providers import openbb
+from muffin_ingest_dagster.resources import Postgres
+
+index_day = dg.DailyPartitionsDefinition(start_date="2026-09-01", timezone="UTC")
+
+#: How far back the bar fetch reaches. The longest period a proxied scope serves is 5y, and
+#: `index_at_or_before` needs a bar at or before the window start — so this is 5y plus a margin for
+#: a listing that was closed on the anchor date.
+LOOKBACK = timedelta(days=1900)
+
+#: Symbols per request. THIS IS OUR CALL COUNT, NOT THE VENDOR'S: `openbb_yfinance` issues one
+#: Yahoo request per symbol however many are joined. 62 scopes is 62 vendor requests either way.
+BATCH = 20
+
+
+class IndexRun(dg.Config):
+    limit: int | None = None
+    budget_seconds: int = 900
+
+
+@dg.asset(
+    partitions_def=index_day,
+    backfill_policy=dg.BackfillPolicy.single_run(),
+    pool="yfinance",
+    io_manager_key="parquet_io",
+    group_name="indices",
+    kinds={"yfinance", "parquet"},
+    description="Proxy-ETF bars for every country and group scope, as the provider gave them.",
+)
+def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: Postgres) -> Any:
+    """THE EQUITY ROUTE SERVES AN ETF, VERIFIED RATHER THAN ASSUMED.
+
+    The resource this replaces used `etf/historical`; driven against both on the same two symbols
+    and the same window, `equity/price/historical` returned the identical 16 rows with identical
+    closes. One call site is worth having, and it is only worth having if the answers match.
+    """
+    window: tuple[datetime, datetime] = context.partition_time_window
+    end = window[1].date()
+
+    with postgres.connect() as conn:
+        scopes = indices.proxied_scopes(conn)
+    if config.limit is not None:
+        scopes = scopes[: config.limit]
+
+    by_symbol = {symbol: code for code, symbol in scopes}
+    symbols = sorted(by_symbol)
+    context.log.info("%s proxied scopes over %s symbols", len(scopes), len(symbols))
+
+    rows: list[dict[str, Any]] = []
+    stats = {"calls": 0, "answered": 0, "empty": 0, "transport": 0, "bars": 0, "unattributed": 0}
+    for index in range(0, len(symbols), BATCH):
+        batch = symbols[index : index + BATCH]
+        stats["calls"] += 1
+        try:
+            answer = openbb.price_history(batch, start=end - LOOKBACK, end=end)
+        except Exception as exc:  # the reason is reported, never swallowed
+            stats["transport"] += 1
+            context.log.warning("batch failed: %s", exc)
+            continue
+
+        parsed = prices.bars_by_symbol(answer.rows, batch[0] if len(batch) == 1 else "")
+        for symbol, series in parsed.items():
+            code = by_symbol.get(symbol) or by_symbol.get(symbol.upper())
+            if code is None:
+                # A SYMBOL WE DID NOT ASK FOR IS NOT A BAR WE CAN FILE. Counted rather than
+                # dropped: a non-zero value means the provider renamed something, which is a fact
+                # about the response and not about our scopes.
+                stats["unattributed"] += len(series)
+                continue
+            stats["answered"] += 1
+            stats["bars"] += len(series)
+            rows.extend(
+                {
+                    "index_code": code,
+                    "asked_symbol": symbol,
+                    "trade_date": bar.trade_date.isoformat(),
+                    "close": bar.close,
+                    "dividend": bar.dividend,
+                    "provider": "yfinance",
+                    "run_id": context.run_id,
+                }
+                for bar in series
+            )
+        stats["empty"] += sum(1 for s in batch if s.upper() not in {k.upper() for k in parsed})
+
+    context.add_output_metadata({**stats, "rows": len(rows), "scopes": len(scopes)})
+    return rows
+
+
+@dg.asset(
+    partitions_def=index_day,
+    backfill_policy=dg.BackfillPolicy.single_run(),
+    pool="yfinance",
+    io_manager_key="parquet_io",
+    group_name="indices",
+    kinds={"finviz", "parquet"},
+    description="Sector performance as finviz publishes it — numbers, not a series. US listings.",
+)
+def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -> Any:
+    """THE PROVIDER'S OWN LABEL IS STORED, not the muffin id it maps to.
+
+    Mapping is interpretation and belongs in stage 2. Keeping the raw label means a provider rename
+    can be diagnosed from the bytes on disk rather than by asking again — and a rename is the
+    realistic failure here, since finviz does not use GICS names and never has.
+    """
+    answer = openbb.sector_performance()
+    rows = indices.sector_rows(answer.rows, run_id=context.run_id)
+    context.add_output_metadata(
+        {"groups": len(answer.rows), "rows": len(rows), "warnings": len(answer.warnings)}
+    )
+    return rows
+
+
+@dg.asset(
+    partitions_def=index_day,
+    backfill_policy=dg.BackfillPolicy.single_run(),
+    pool="sql",
+    io_manager_key="postgres_io",
+    group_name="indices",
+    kinds={"postgres"},
+    metadata={
+        "table": "market.index_return",
+        "conflict": ["index_code", "period_code"],
+        # A PERIOD THIS RUN STOPS PRODUCING MUST BE REMOVED. The rules withhold a return for a
+        # window that never moved or a series gone stale, and an upsert cannot express that — which
+        # is how instruments served `1d = 0.00%` for four days after the fix that stopped
+        # generating it. Scoped per index so a bounded run retracts only what it covered.
+        "replace_scope": ["index_code"],
+    },
+    description="Country and group returns computed from proxy bars, plus finviz's sector figures.",
+)
+def index_return(
+    context: AssetExecutionContext,
+    postgres: Postgres,
+    raw_index_bars: Any,
+    raw_sector_performance: Any,
+) -> list[dict[str, Any]]:
+    """Never calls a provider, so a rule change costs nothing to re-run."""
+    window: tuple[datetime, datetime] = context.partition_time_window
+    as_of = window[1].date() - timedelta(days=1)
+
+    series: dict[str, list[prices.Bar]] = {}
+    for row in _rows(raw_index_bars):
+        trade_date = date.fromisoformat(str(row["trade_date"])[:10])
+        series.setdefault(str(row["index_code"]), []).append(
+            prices.Bar(
+                trade_date=trade_date,
+                close=float(row["close"]),
+                dividend=row.get("dividend"),
+            )
+        )
+
+    out: list[dict[str, Any]] = []
+    stats = {"scopes": 0, "with_returns": 0, "periods": 0, "with_total_return": 0}
+    for code, bars in series.items():
+        bars.sort(key=lambda b: b.trade_date)
+        stats["scopes"] += 1
+        priced = returns.price_returns(bars, as_of)
+        total = returns.total_returns(bars, as_of)
+        if not priced and not total:
+            # A refusal is a result: a proxy too short, too stale or flat across every window
+            # yields nothing, and a zero would be a number the rules exist to withhold.
+            continue
+        stats["with_returns"] += 1
+        # The last bar actually used, never the run's date — the same rule the security returns
+        # learned from the parity gate, where stamping the clock hid a whole-session offset.
+        stamped = bars[-1].trade_date
+        for period in sorted(set(priced) | set(total)):
+            stats["periods"] += 1
+            stats["with_total_return"] += total.get(period) is not None
+            out.append(
+                {
+                    "index_code": code,
+                    "period_code": period,
+                    "as_of": stamped.isoformat(),
+                    "price_return_pct": priced.get(period),
+                    "total_return_pct": total.get(period),
+                    "source_code": "yfinance",
+                }
+            )
+
+    sectors, unmapped = indices.normalise_sectors(_rows(raw_sector_performance), as_of=as_of)
+    out.extend(sectors)
+    if unmapped:
+        # LOUD, NOT FATAL: a provider rename should degrade one sector, not blank the screen — and
+        # it must never be filed under a guessed id.
+        context.log.error("unmapped provider sector labels: %s", ", ".join(unmapped))
+
+    context.add_output_metadata(
+        {**stats, "rows": len(out), "sector_rows": len(sectors), "unmapped_labels": len(unmapped)}
+    )
+    return out
+
+
+def _rows(loaded: Any) -> list[dict[str, Any]]:
+    """The multi-partition load shape, flattened — the mirror every lane needs."""
+    if isinstance(loaded, dict):
+        return [row for _, rows in sorted(loaded.items()) for row in rows]
+    return list(loaded)
