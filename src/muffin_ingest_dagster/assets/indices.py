@@ -149,11 +149,43 @@ def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -
     Mapping is interpretation and belongs in stage 2. Keeping the raw label means a provider rename
     can be diagnosed from the bytes on disk rather than by asking again — and a rename is the
     realistic failure here, since finviz does not use GICS names and never has.
+
+    A SNAPSHOT CANNOT BE BACKFILLED, AND THE FIRST VERSION QUIETLY PRETENDED IT COULD.
+
+    finviz answers "as of now" and carries no date. Every other asset here can be asked for a past
+    day — bars have dates on them — but this one cannot: run on 09-11 for the 09-10 partition, it
+    returned TODAY's numbers and stage 2 stamped them 09-10. Caught by the parity comparison, where
+    the sector rows sat 1.3pp from the old table with `new_as_of=2026-09-10 old_as_of=2026-09-11`
+    while both sides had read the same provider — the gap was a day, not a disagreement.
+
+    So a partition whose window has already closed collects NOTHING, loudly. That is the honest
+    answer, and it is the same one the empty-partition marker already encodes: "we looked, there is
+    nothing here" rather than a hole. The cost is that the sector lane only ever fills forward,
+    which is a property of the source rather than a limitation of the design.
     """
+    window: tuple[datetime, datetime] = context.partition_time_window
+    today = date.today()
+    if not (window[0].date() <= today < window[1].date()):
+        context.log.warning(
+            "partition %s..%s has closed and finviz answers only for NOW — collecting nothing "
+            "rather than stamping today's snapshot with a past date",
+            window[0].date(),
+            window[1].date(),
+        )
+        context.add_output_metadata(
+            {"groups": 0, "rows": 0, "warnings": 0, "refused_past_partition": 1}
+        )
+        return []
+
     answer = openbb.sector_performance()
     rows = indices.sector_rows(answer.rows, run_id=context.run_id)
     context.add_output_metadata(
-        {"groups": len(answer.rows), "rows": len(rows), "warnings": len(answer.warnings)}
+        {
+            "groups": len(answer.rows),
+            "rows": len(rows),
+            "warnings": len(answer.warnings),
+            "refused_past_partition": 0,
+        }
     )
     return rows
 
@@ -226,6 +258,8 @@ def index_return(
                 }
             )
 
+    # `as_of` is the partition's own day, which `raw_sector_performance` now guarantees is the day
+    # the snapshot was actually read — it collects nothing for a window that has already closed.
     sectors, unmapped = indices.normalise_sectors(_rows(raw_sector_performance), as_of=as_of)
     out.extend(sectors)
     if unmapped:
