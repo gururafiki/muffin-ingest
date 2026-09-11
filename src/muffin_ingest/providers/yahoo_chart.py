@@ -16,8 +16,8 @@ than a header problem — so one is always sent.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
 import httpx
@@ -43,6 +43,25 @@ class Point:
     close: float
 
 
+@dataclass
+class Series:
+    """Completed bars, plus what was dropped getting to them.
+
+    THE COUNTS ARE NOT DECORATION. `live_dropped` non-zero is the normal case during a session and
+    zero after one closes; `nulls_dropped` says the provider is padding. Both were invisible until a
+    partition claimed a day it had not collected.
+    """
+
+    points: list[Point] = field(default_factory=list)
+    #: Points that were a LIVE quote rather than a completed bar.
+    live_dropped: int = 0
+    #: Points whose close was null — a padded row for a session with no data yet.
+    nulls_dropped: int = 0
+    #: The exchange's timezone name, as the provider states it. Recorded so a future date-shift
+    #: argument is settled by what was received rather than by what someone remembers.
+    timezone_name: str | None = None
+
+
 def pair(currency: str) -> str:
     """The Yahoo symbol for one currency against USD — BUILT IN EXACTLY ONE PLACE.
 
@@ -54,7 +73,7 @@ def pair(currency: str) -> str:
     return f"{currency}USD=X"
 
 
-def chart(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -> list[Point]:
+def chart(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -> Series:
     """The raw close series, with nulls dropped and nothing else interpreted.
 
     A NON-2xx AND AN EMPTY SERIES ARE DIFFERENT FACTS and this keeps them so: the first raises, the
@@ -93,7 +112,7 @@ def chart(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -
     # ever. That is the same shape as a SEC 400 naming a company with no Form 4, recorded here
     # twice already. Read the message, not the status.
     if response.status_code == 404 and error:
-        return []
+        return Series()
     if response.status_code != 200:
         raise YahooRefused(f"HTTP {response.status_code} for {symbol}")
     if body is None:
@@ -101,25 +120,56 @@ def chart(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -
 
     # Yahoo can also state an unknown symbol INSIDE a 200. Same fact, same treatment.
     if error:
-        return []
+        return Series()
 
     results = chart_body.get("result") or []
     if not results:
-        return []
+        return Series()
     first = results[0] or {}
     stamps = first.get("timestamp") or []
     quotes = (first.get("indicators") or {}).get("quote") or [{}]
     closes = (quotes[0] or {}).get("close") or []
+    meta = first.get("meta") or {}
 
-    out: list[Point] = []
+    # A BAR'S DATE IS ITS EXCHANGE'S DATE, NOT UTC's, AND FOR FX THAT IS A WHOLE DAY.
+    #
+    # Measured: an FX daily bar is stamped at the session's OPEN in `exchangeTimezoneName`, which
+    # is `Europe/London` — the 2026-09-10 session arrives as `1788994800`, **2026-09-09T23:00Z**.
+    # Reading `.date()` in UTC dates every FX bar a day early, and a partition filtering to its own
+    # window then discards the lot: a real run reported `outside_window=190` — 38 currencies x 5
+    # points, all of them — and wrote nothing while reporting success.
+    #
+    # `gmtoffset` is the provider's own statement of the offset, so this is reading the response
+    # rather than assuming a venue.
+    #
+    # THE PRICE LANE DOES NOT HAVE THIS DEFECT, AND I ASSERTED THAT IT DID BEFORE CHECKING.
+    # Measured against the old table on exactly the timezone-exposed venues: HK 540/540, TW
+    # 542/542, SG 554/554, TH 272/272, ID 532/532, KR 532/534, AU 558/560 — same-date closes agree,
+    # which a one-day shift makes impossible. (902 new bars also match the NEXT day's close, and
+    # 899 of those match the same day too: an unchanged close across two sessions, not a shift.)
+    # openbb's yfinance adapter hands back a normalised date; this raw endpoint does not.
+    offset = meta.get("gmtoffset")
+    tz = timezone(timedelta(seconds=int(offset))) if isinstance(offset, int | float) else UTC
+
+    # THE LAST POINT IS OFTEN A LIVE QUOTE, NOT A BAR, and it is exactly identifiable: its timestamp
+    # EQUALS `regularMarketTime`. Measured to the second on three separate series. Publishing it is
+    # the intraday-capture defect this pipeline is replacing a resource for — a mid-session price
+    # wearing a close's clothes. `GELUSD=X` is the extreme case: its ONLY point is the live quote,
+    # so Yahoo has no completed weekly bar for the lari at all, which is a far more precise
+    # statement than "it returned one row".
+    live_at = meta.get("regularMarketTime")
+
+    out = Series(timezone_name=meta.get("exchangeTimezoneName"))
     for stamp, close in zip(stamps, closes, strict=False):
         if not isinstance(stamp, int | float):
             continue
-        if not isinstance(close, int | float) or isinstance(close, bool):
+        if live_at is not None and stamp == live_at:
+            out.live_dropped += 1
             continue
-        if not (close > 0):
+        if not isinstance(close, int | float) or isinstance(close, bool) or not (close > 0):
+            out.nulls_dropped += 1
             continue
-        out.append(
-            Point(as_of=datetime.fromtimestamp(float(stamp), tz=UTC).date(), close=float(close))
+        out.points.append(
+            Point(as_of=datetime.fromtimestamp(float(stamp), tz=tz).date(), close=float(close))
         )
     return out

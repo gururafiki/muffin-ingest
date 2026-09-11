@@ -5,13 +5,21 @@
   "interval": "1d",
   "status": 200,
   "chart_error": null,
+  "meta": {
+   "gmtoffset": 3600,
+   "exchangeTimezoneName": "Europe/London",
+   "timezone": "BST",
+   "regularMarketTime": 1789144293,
+   "dataGranularity": "1d",
+   "instrumentType": "CURRENCY"
+  },
   "timestamp": [
    1788735600,
    1788822000,
    1788908400,
    1788994800,
    1789081200,
-   1789142732
+   1789144293
   ],
   "close": [
    1.1613997220993042,
@@ -31,6 +39,14 @@
   "interval": "1wk",
   "status": 200,
   "chart_error": null,
+  "meta": {
+   "gmtoffset": 3600,
+   "exchangeTimezoneName": "Europe/London",
+   "timezone": "BST",
+   "regularMarketTime": 1789144220,
+   "dataGranularity": "1wk",
+   "instrumentType": "CURRENCY"
+  },
   "timestamp": [
    1473030000,
    1473634800,
@@ -555,7 +571,7 @@
    1787526000,
    1788130800,
    1788735600,
-   1789140196
+   1789144220
   ],
   "close": [
    0.2660876512527466,
@@ -1081,7 +1097,7 @@
    0.3371714651584625,
    0.33234626054763794,
    0.3311653137207031,
-   0.3299567699432373
+   0.3296304941177368
   ],
   "first_date": "2016-09-04",
   "last_date": "2026-09-11",
@@ -1093,6 +1109,14 @@
   "interval": "1wk",
   "status": 200,
   "chart_error": null,
+  "meta": {
+   "gmtoffset": 3600,
+   "exchangeTimezoneName": "Europe/London",
+   "timezone": "BST",
+   "regularMarketTime": 1789099316,
+   "dataGranularity": "1wk",
+   "instrumentType": "CURRENCY"
+  },
   "timestamp": [
    1789099316
   ],
@@ -1112,6 +1136,14 @@
    "code": "Not Found",
    "description": "No data found, symbol may be delisted"
   },
+  "meta": {
+   "gmtoffset": null,
+   "exchangeTimezoneName": null,
+   "timezone": null,
+   "regularMarketTime": null,
+   "dataGranularity": null,
+   "instrumentType": null
+  },
   "timestamp": [],
   "close": [],
   "first_date": null,
@@ -1124,13 +1156,21 @@
   "interval": "1d",
   "status": 200,
   "chart_error": null,
+  "meta": {
+   "gmtoffset": 3600,
+   "exchangeTimezoneName": "Europe/London",
+   "timezone": "BST",
+   "regularMarketTime": 1789144355,
+   "dataGranularity": "1d",
+   "instrumentType": "CURRENCY"
+  },
   "timestamp": [
    1788735600,
    1788822000,
    1788908400,
    1788994800,
    1789081200,
-   1789142731
+   1789144355
   ],
   "close": [
    31.621000289916992,
@@ -1138,7 +1178,7 @@
    31.49920082092285,
    31.464000701904297,
    null,
-   31.604999542236328
+   31.599000930786133
   ],
   "first_date": "2026-09-06",
   "last_date": "2026-09-11",

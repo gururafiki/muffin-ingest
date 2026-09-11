@@ -10,7 +10,7 @@ transport failure must never mark a subject absent.
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,10 @@ def replay(case: str) -> httpx.Response:
                     {
                         "timestamp": payload["timestamp"],
                         "indicators": {"quote": [{"close": payload["close"]}]},
+                        # THE META IS PART OF THE WIRE SHAPE, not an extra. Without `gmtoffset`
+                        # every bar is dated a day early, and without `regularMarketTime` the live
+                        # quote is stored as a close.
+                        "meta": payload["meta"],
                     }
                 ],
             }
@@ -72,7 +76,7 @@ def test_an_unknown_pair_answers_404_and_that_is_an_ABSENCE_not_a_fault(replayin
     times a day. Same shape as a SEC 400 that names a company with no Form 4.
     """
     replaying("unknown_pair")
-    assert yahoo_chart.chart("ZZZUSD=X", range_="5d", interval="1d") == []
+    assert yahoo_chart.chart("ZZZUSD=X", range_="5d", interval="1d").points == []
 
 
 def test_a_transport_failure_is_still_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,9 +100,12 @@ def test_a_null_among_the_closes_is_dropped_not_carried(replaying: Any) -> None:
     parallel arrays, so dropping a close without dropping its timestamp shifts every later point
     onto the wrong date — a whole series off by one, with every value individually plausible."""
     replaying("eur_spot")
-    points = yahoo_chart.chart("EURUSD=X", range_="5d", interval="1d")
+    series = yahoo_chart.chart("EURUSD=X", range_="5d", interval="1d")
+    points = series.points
 
-    assert len(points) == 5, "six timestamps, one null close"
+    assert series.live_dropped == 1, "the final point is a live quote, not a bar"
+    assert series.nulls_dropped == 1, "a padded row for a session with no close yet"
+    assert len(points) == 4, "six points, one live quote, one null close"
     assert all(p.close > 0 for p in points)
 
     # THE PAIRING IS THE ASSERTION, AND THE FIRST VERSION OF THIS TEST MISSED IT. Checking only
@@ -107,21 +114,31 @@ def test_a_null_among_the_closes_is_dropped_not_carried(replaying: Any) -> None:
     # mutation went green. What separates them is which DATE the last close lands on — with the
     # null at index 4 of 6, a filter-then-zip puts the final close a day early.
     captured = CAPTURED["eur_spot"]
-    last_stamp = date.fromisoformat(captured["last_date"])
-    last_close = [c for c in captured["close"] if c is not None][-1]
+    offset = timedelta(seconds=captured["meta"]["gmtoffset"])
+    live_at = captured["meta"]["regularMarketTime"]
+    completed = [
+        (s, c)
+        for s, c in zip(captured["timestamp"], captured["close"], strict=True)
+        if s != live_at and c is not None
+    ]
+    expected = [(datetime.fromtimestamp(s, tz=timezone(offset)).date(), c) for s, c in completed]
 
-    assert points[-1].as_of == last_stamp, (
-        f"last close landed on {points[-1].as_of} rather than {last_stamp} — the arrays are "
-        f"parallel, so dropping a close without its timestamp shifts every later point"
+    assert [(p.as_of, p.close) for p in points] == [(d, pytest.approx(c)) for d, c in expected], (
+        "the arrays are parallel, so dropping a close without its timestamp shifts every later "
+        "point onto the wrong date — with every value individually plausible"
     )
-    assert points[-1].close == pytest.approx(last_close)
 
 
 def test_ten_years_of_weekly_rates_is_what_the_history_lane_gets(replaying: Any) -> None:
     replaying("ils_history")
-    points = yahoo_chart.chart("ILSUSD=X", range_="10y", interval="1wk")
-    assert len(points) == 524, "ten years of weekly closes"
-    assert points[0].as_of < date(2017, 1, 1) < points[-1].as_of
+    series = yahoo_chart.chart("ILSUSD=X", range_="10y", interval="1wk")
+    assert len(series.points) == 523, "ten years of weekly closes, less the live quote"
+    assert series.live_dropped == 1
+    assert series.points[0].as_of < date(2017, 1, 1) < series.points[-1].as_of
+    assert series.timezone_name == "Europe/London", (
+        "recorded from the response, so a future date-shift argument is settled by what was "
+        "received rather than by what someone remembers"
+    )
 
 
 def test_a_currency_the_provider_barely_carries_SUCCEEDS_and_loads_almost_nothing(
@@ -132,8 +149,13 @@ def test_a_currency_the_provider_barely_carries_SUCCEEDS_and_loads_almost_nothin
     a row is written, and "has a rate older than 90 days" stays false — so it was re-fetched eight
     times a day for ever with no count anywhere able to report it."""
     replaying("gel_history")
-    points = yahoo_chart.chart("GELUSD=X", range_="10y", interval="1wk")
-    assert len(points) == 1, "a successful fetch that loads no history is still a successful fetch"
+    series = yahoo_chart.chart("GELUSD=X", range_="10y", interval="1wk")
+    assert series.points == [], (
+        "the lari's ONLY point is the live quote, so Yahoo has no completed weekly bar for it at "
+        "all — a far more precise statement than 'it returned one row', and the one the negative "
+        "cache needs"
+    )
+    assert series.live_dropped == 1
 
 
 def test_the_band_refuses_the_inverted_pair_it_was_built_for() -> None:

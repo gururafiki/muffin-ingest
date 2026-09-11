@@ -341,11 +341,13 @@ def test_the_fx_spot_lane_keeps_only_its_own_partition_s_day(tmp_path: Path) -> 
     inside = date(2026, 9, 10)
     outside = date(2026, 9, 11)
 
-    def two_days(symbol: str, **kwargs: Any) -> list[yahoo_chart.Point]:
-        return [
-            yahoo_chart.Point(as_of=inside, close=1.16),
-            yahoo_chart.Point(as_of=outside, close=1.17),
-        ]
+    def two_days(symbol: str, **kwargs: Any) -> yahoo_chart.Series:
+        return yahoo_chart.Series(
+            points=[
+                yahoo_chart.Point(as_of=inside, close=1.16),
+                yahoo_chart.Point(as_of=outside, close=1.17),
+            ]
+        )
 
     saved = yahoo_chart.chart
     yahoo_chart.chart = two_days

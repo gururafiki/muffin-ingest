@@ -46,12 +46,27 @@ for name, symbol, range_, interval in [
     stamps = res.get("timestamp") or []
     q = (res.get("indicators") or {}).get("quote") or [{}]
     closes = (q[0] or {}).get("close") or []
+    meta = res.get("meta") or {}
     out[name] = {
         "symbol": symbol,
         "range": range_,
         "interval": interval,
         "status": status,
         "chart_error": ch.get("error"),
+        # WITHOUT THESE THE DATES ARE A DAY EARLY AND THE LAST POINT IS NOT A BAR. `gmtoffset`
+        # puts a stamp of 23:00Z on the session it belongs to (midnight in Europe/London), and a
+        # stamp equal to `regularMarketTime` is a LIVE quote rather than a completed bar.
+        "meta": {
+            k: meta.get(k)
+            for k in (
+                "gmtoffset",
+                "exchangeTimezoneName",
+                "timezone",
+                "regularMarketTime",
+                "dataGranularity",
+                "instrumentType",
+            )
+        },
         # The wire shape, kept as Yahoo sends it: PARALLEL ARRAYS that can carry nulls.
         "timestamp": stamps[:600],
         "close": closes[:600],

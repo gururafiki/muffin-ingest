@@ -57,6 +57,19 @@ carry a fact the code had guessed at:
 | `unknown_pair` | **HTTP 404** with `{"code": "Not Found", "description": "No data found…"}` |
 | `twd_inverted` | `USDTWD=X` returns **31.60**, which the plausibility band must refuse |
 
+**The `meta` block is part of the wire shape, not an extra**, and the first capture omitted it —
+which cost a production run. Two facts live only there:
+
+* `gmtoffset: 3600` / `exchangeTimezoneName: "Europe/London"`. An FX daily bar is stamped at the
+  session's **open** in the exchange's timezone, so the 2026-09-10 session arrives as
+  `1788994800` — **2026-09-09T23:00Z**. Reading `.date()` in UTC dates every bar a day early; a
+  partition filtering to its own window then reported `outside_window=190` (38 currencies × 5
+  points, all of them) and wrote nothing while reporting success.
+* `regularMarketTime`. The **last point is often a live quote rather than a completed bar**, and it
+  is exactly identifiable: its timestamp *equals* this field, measured to the second on three
+  separate series. `GELUSD=X` is the extreme — its only point is the live quote, so Yahoo has no
+  completed weekly bar for the lari at all.
+
 `unknown_pair` is why the capture was worth taking. The provider was written to raise on any
 non-200, which would have reported every unquoted currency as a *transport* failure — and since a
 transport failure must never mark a subject absent, the negative cache could never fill and those
