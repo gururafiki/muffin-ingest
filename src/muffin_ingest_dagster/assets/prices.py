@@ -61,6 +61,15 @@ security_partitions = dg.DynamicPartitionsDefinition(name=SECURITY_PARTITION)
 #: A FIXED LITERAL, NOT A COMPUTED OFFSET. Every provider call is keyed by URI in `http-cache`, so a
 #: start date derived from `now()` mints a new cache entry per run while an omitted one makes a
 #: single key whose answer keeps growing. 1970 predates every listing in this universe.
+#: How many securities one history run may cover — A MEMORY BUDGET, MEASURED, NOT A TASTE.
+#: A `single_run` backfill of 96 securities loaded 683,391 raw bars (~7,119 each) and the child
+#: process was OOM-killed at 2.4 GB against a 2.5 GB container: `UPathIOManager.load_input` is
+#: EAGER, so the clean stage holds every partition's raw rows AND their normalised copies at once.
+#: There is no arrangement of that step that makes the peak independent of the backfill's width, so
+#: the width is the bound. 25 securities is ~178k rows, ~600 MB, and leaves room for the universe's
+#: deeper histories. The full 10,894-security load is therefore ~436 runs, not one.
+HISTORY_PARTITIONS_PER_RUN = 25
+
 HISTORY_START = date(1970, 1, 1)
 
 #: How far back the return rules can reach. The longest lookback is `5y` at 1,826 days; the margin
@@ -357,10 +366,18 @@ def price_bar(
 
 @dg.asset(
     partitions_def=security_partitions,
-    # Verified in Dagster's source: `get_partition_keys_in_range` is implemented on the BASE
-    # `PartitionsDefinition` by index over the ordered key list, so a single-run backfill works for
-    # dynamic partitions and BATCHING SURVIVES — one run receives every key and asks in batches.
-    backfill_policy=dg.BackfillPolicy.single_run(),
+    # MULTI-RUN HERE AND SINGLE-RUN ON LANE A, AND THE PARTITION AXIS IS WHAT DECIDES.
+    #
+    # A DATE partition holds many securities, so one run is one batched sweep and `single_run` is
+    # what makes a week-long gap cost one run instead of seven. A SECURITY partition holds one
+    # subject — and `openbb_yfinance` calls `yf.download(..., threads=False)`, so the vendor is
+    # asked ONCE PER SYMBOL whatever we do. There is nothing to batch ACROSS these partitions.
+    #
+    # That matters because the first version of this comment argued the opposite: that multi-run
+    # "turns ten calls into ninety-six". It does not, for this provider — joining symbols collapses
+    # OUR call count, never theirs. So `single_run` bought no provider saving here and cost an
+    # unbounded memory footprint, which is exactly how it failed.
+    backfill_policy=dg.BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN),
     pool="yfinance",
     io_manager_key="parquet_io",
     group_name="prices",
@@ -398,7 +415,9 @@ def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres
 
 @dg.asset(
     partitions_def=security_partitions,
-    backfill_policy=dg.BackfillPolicy.single_run(),
+    # THE STAGE THAT WAS OOM-KILLED, and the reason the width above is a budget rather than a
+    # preference: this one holds the raw rows AND their normalised copies simultaneously.
+    backfill_policy=dg.BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN),
     pool="sql",
     io_manager_key="postgres_io",
     group_name="prices",
