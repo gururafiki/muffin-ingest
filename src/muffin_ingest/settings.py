@@ -47,15 +47,63 @@ def raw_root() -> str:
     return _env("MUFFIN_RAW_ROOT", "/var/lib/muffin-ingest/raw")
 
 
+#: The cache's own locations, which are what `provider` must name. Kept here rather than inferred,
+#: because the proxy's path is the contract and a typo silently becomes a direct call — the failure
+#: mode that "keeps working and silently bypasses the cache for ever".
+CACHE_LOCATIONS = frozenset(
+    {
+        "sec",
+        "sec-data",
+        "sec-fts",
+        "openfigi",
+        "dart",
+        "nse",
+        "nse-archives",
+        "cninfo",
+        "cninfo-static",
+        "wikidata",
+        "yahoo",
+        "alphavantage",
+        "tiingo",
+        "openbb",
+    }
+)
+
+
 def provider_base(provider: str, real_origin: str) -> str:
     """Where to reach a provider: the cache location if one is configured, else the real origin.
 
-    A provider with no location keeps working and silently bypasses the cache for ever, which
-    nothing in production can report — so CI compares this table against the proxy's own locations
-    in both directions.
+    THREE SOURCES, IN ORDER, and the middle one was missing until the FX lane needed it. A
+    per-provider `<NAME>_BASE_URL` wins, because that is how the edge functions are configured and
+    an operator pointing one provider somewhere else must be able to. Otherwise `HTTP_CACHE_URL`
+    plus the provider's own location — one variable for every provider, which is what the Swarm
+    stack actually sets. Failing both, the REAL origin, so removing the cache degrades nothing.
+
+    `HTTP_CACHE_URL` HAD BEEN SET SINCE THE SERVICE WAS CREATED AND READ BY NOTHING. The compose
+    file's comment beside it says providers are reached "through the cache, exactly as the edge
+    function reaches them", which was true of no Python provider: this function looked only for the
+    per-provider variable, and the stack sets none of those for the ingest services. So the first
+    direct-HTTP provider would have gone straight out while every piece of configuration said
+    otherwise — nothing in production can report that, which is why it is worth a rule rather than
+    a fix at one call site.
+
+    A provider name that is not one of the proxy's own locations raises rather than quietly
+    producing a URL the cache will 404 on.
     """
     override = os.environ.get(f"{provider.upper().replace('-', '_')}_BASE_URL")
-    return override or real_origin
+    if override:
+        return override
+
+    cache = os.environ.get("HTTP_CACHE_URL")
+    if cache:
+        if provider not in CACHE_LOCATIONS:
+            raise RuntimeError(
+                f"{provider!r} is not one of http-cache's locations ({sorted(CACHE_LOCATIONS)}); "
+                f"a name the proxy does not serve becomes a 404 wearing a cache miss's clothes"
+            )
+        return f"{cache.rstrip('/')}/{provider}"
+
+    return real_origin
 
 
 def user_agent() -> str:
