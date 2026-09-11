@@ -123,10 +123,14 @@ def test_a_null_among_the_closes_is_dropped_not_carried(replaying: Any) -> None:
     ]
     expected = [(datetime.fromtimestamp(s, tz=timezone(offset)).date(), c) for s, c in completed]
 
-    assert [(p.as_of, p.close) for p in points] == [(d, pytest.approx(c)) for d, c in expected], (
+    shifted = (
         "the arrays are parallel, so dropping a close without its timestamp shifts every later "
         "point onto the wrong date — with every value individually plausible"
     )
+    # Field by field rather than as tuples: `pytest.approx` inside a tuple makes mypy --strict
+    # reject the comparison as non-overlapping, and a date wants exact equality anyway.
+    assert [p.as_of for p in points] == [d for d, _ in expected], shifted
+    assert [p.close for p in points] == pytest.approx([c for _, c in expected]), shifted
 
 
 def test_ten_years_of_weekly_rates_is_what_the_history_lane_gets(replaying: Any) -> None:
