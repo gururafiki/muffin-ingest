@@ -8,7 +8,6 @@ I/O manager and assert on what reached the other side.
 
 from __future__ import annotations
 
-import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -427,54 +426,28 @@ class _Capture(dg.ConfigurableIOManager):
         raise NotImplementedError
 
 
-def test_a_snapshot_source_collects_NOTHING_for_a_window_that_has_closed() -> None:
-    """A SNAPSHOT CANNOT BE BACKFILLED, AND THE FIRST VERSION QUIETLY PRETENDED IT COULD.
+def test_a_snapshot_is_UNPARTITIONED_because_it_cannot_be_asked_about_a_past_day() -> None:
+    """finviz answers "as of now" and carries no date, so a date partition claims something the
+    source cannot support: run on 09-11 for the 09-10 partition it returns TODAY's numbers, and the
+    parity comparison duly showed the sector rows 1.3pp from the old table with
+    `new_as_of=2026-09-10 old_as_of=2026-09-11` while both sides had read the SAME provider.
 
-    finviz answers "as of now" and carries no date. Every other asset in this family can be asked
-    for a past day, because bars have dates on them; this one cannot. Run on 09-11 for the 09-10
-    partition it returned TODAY's numbers, and stage 2 stamped them 09-10.
+    THE FIRST FIX WAS A GUARD AND IT COULD NEVER HAVE COLLECTED ANYTHING. It refused a window that
+    had already closed — but `end_offset` is 0, so the newest materialisable partition is always
+    YESTERDAY and today is always outside it. A guard that can only ever refuse is worse than the
+    defect it replaces, and only working out what it would do in production caught it.
 
-    Caught by the parity comparison rather than by any test: the sector rows sat 1.3pp from the old
-    table with `new_as_of=2026-09-10 old_as_of=2026-09-11` while BOTH sides had read the same
-    provider — so the gap was a day, not a disagreement.
-
-    Collecting nothing is the honest answer, and it is what the empty-partition marker already
-    encodes: "we looked, there is nothing here" rather than a hole.
+    There is exactly one current snapshot, and the materialisation event is already the record of
+    when it was taken.
     """
-    from muffin_ingest.providers import openbb as hub
-    from muffin_ingest.providers.openbb import Answer
     from muffin_ingest_dagster.assets import indices as asset_indices
 
-    asked = 0
-
-    def never_called(provider: str = "finviz") -> Answer:
-        nonlocal asked
-        asked += 1
-        return Answer(rows=[{"name": "Technology", "Change %": 0.01}])
-
-    closed = (date.today() - timedelta(days=3)).isoformat()
-    saved = hub.sector_performance
-    hub.sector_performance = never_called
-    try:
-        result = dg.materialize(
-            [asset_indices.raw_sector_performance],
-            partition_key=closed,
-            resources={
-                "postgres": ReturnsPostgres(),
-                "parquet_io": ParquetIOManager(str(Path(tempfile.mkdtemp()))),
-            },
-        )
-    finally:
-        hub.sector_performance = saved
-
-    assert result.success, "a closed window is a normal outcome, not a failure"
-    assert asked == 0, (
-        "the provider must not even be asked for a day it cannot answer for — asking and then "
-        "discarding still spends the call, and storing the answer misdates it"
+    assert asset_indices.raw_sector_performance.partitions_def is None, (
+        "a source that cannot be asked about a past day must not carry a date partition"
     )
-    meta = meta_of(result, asset_indices.raw_sector_performance)
-    assert meta["refused_past_partition"] == 1
-    assert meta["rows"] == 0
+    # Its consumers stay partitioned — the bars genuinely do have dates on them.
+    assert asset_indices.raw_index_bars.partitions_def is not None
+    assert asset_indices.index_return.partitions_def is not None
 
 
 def meta_of(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:

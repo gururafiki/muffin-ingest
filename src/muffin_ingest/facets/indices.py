@@ -120,7 +120,9 @@ def proxied_scopes(conn: Any) -> list[tuple[str, str]]:
         return [(str(code), str(symbol)) for code, symbol in cur.fetchall()]
 
 
-def sector_rows(results: Sequence[dict[str, Any]], *, run_id: str) -> list[dict[str, Any]]:
+def sector_rows(
+    results: Sequence[dict[str, Any]], *, run_id: str, taken: date
+) -> list[dict[str, Any]]:
     """What finviz said, flattened to one row per (label, period) — the artifact, not the answer.
 
     THE PROVIDER'S OWN LABEL IS KEPT, not the muffin id it maps to. Mapping is interpretation and
@@ -141,6 +143,10 @@ def sector_rows(results: Sequence[dict[str, Any]], *, run_id: str) -> list[dict[
                     "provider_label": label,
                     "period_code": period,
                     "fraction": float(value),
+                    # THE DAY THE SNAPSHOT WAS TAKEN, recorded here because the provider does not
+                    # state one. Without it the only date available downstream is a partition key,
+                    # and a re-run of an old partition would stamp today's figures with a past day.
+                    "taken": taken.isoformat(),
                     "provider": "finviz",
                     "run_id": run_id,
                 }
@@ -149,7 +155,7 @@ def sector_rows(results: Sequence[dict[str, Any]], *, run_id: str) -> list[dict[
 
 
 def normalise_sectors(
-    rows: Sequence[dict[str, Any]], *, as_of: date, source_code: str = "finviz"
+    rows: Sequence[dict[str, Any]], *, source_code: str = "finviz"
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Raw finviz rows to `market.index_return` rows, plus the labels nothing could map.
 
@@ -172,7 +178,10 @@ def normalise_sectors(
             {
                 "index_code": f"sector:{sector}",
                 "period_code": str(row["period_code"]),
-                "as_of": as_of.isoformat(),
+                # FROM THE ROW, never from a caller's idea of "now" — the raw artifact records when
+                # the snapshot was taken and that is the only honest date for a figure the provider
+                # publishes without one.
+                "as_of": str(row["taken"])[:10],
                 "price_return_pct": pct,
                 # NEVER COALESCED TO THE PRICE RETURN. finviz publishes price performance only, so
                 # a total return here is NOT KNOWN — and a column filled with the price return
