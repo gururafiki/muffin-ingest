@@ -31,7 +31,7 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest import settings
-from muffin_ingest_dagster.assets import fx, prices
+from muffin_ingest_dagster.assets import fx, indices, prices
 from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager
 from muffin_ingest_dagster.resources import Postgres
 from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
@@ -125,6 +125,19 @@ daily_prices = dg.build_schedule_from_partitioned_job(
 #: The FX cross-section, stopped for the same reason and on the same terms: 43 requests a day is
 #: cheap, but a schedule started before anyone has compared its output against `market.fx_rate` is
 #: still spending a budget on numbers nobody has checked.
+#: Stopped, on the same terms as the other two: 62 ETF symbols plus one finviz call is cheap, and
+#: a schedule started before anyone has compared its output against `market.performance` is still
+#: spending a budget on numbers nobody has checked.
+daily_indices = dg.build_schedule_from_partitioned_job(
+    dg.define_asset_job(
+        "daily_indices",
+        selection=dg.AssetSelection.assets(
+            indices.raw_index_bars, indices.raw_sector_performance, indices.index_return
+        ),
+    ),
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+)
+
 daily_fx = dg.build_schedule_from_partitioned_job(
     dg.define_asset_job(
         "daily_fx",
@@ -152,10 +165,15 @@ defs = dg.Definitions(
         fx.fx_rate,
         fx.raw_fx_history,
         fx.fx_rate_history,
+        # Index returns — two acquisition shapes into one table, because the scopes differ in where
+        # their numbers come from and in nothing else.
+        indices.raw_index_bars,
+        indices.raw_sector_performance,
+        indices.index_return,
     ],
     asset_checks=[every_symbol_keyed_facet_retracts],
     jobs=[prune_dagster_storage],
-    schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx],
+    schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx, daily_indices],
     sensors=[prices.new_securities_need_history, fx.new_currencies_need_history],
     resources={
         "postgres": Postgres(),

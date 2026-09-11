@@ -157,3 +157,24 @@ def price_history(
             interval=interval,
         )
     )
+
+
+def sector_performance(provider: str = "finviz") -> Answer:
+    """Sector performance, published as NUMBERS rather than bars.
+
+    THE ONLY ACQUISITION HERE THAT DOES NOT RETURN A SERIES, which is why it exists as its own route
+    instead of being folded into `price_history`. There is no ETF behind a muffin sector, so nothing
+    can be computed — the provider's figure is the figure.
+
+    IT IS US-LISTED ONLY, worth stating rather than relabelling as global: finviz screens US
+    listings, so "Technology, +2.1% this month" is a statement about the US technology sector.
+
+    NOTE THE RETURNS ARE FRACTIONS (-0.0366 = -3.66%) and the day change hides under the literal key
+    `Change %` while `performance_1d` is present and ALWAYS NULL — measured 0 of 11 populated
+    against 11 of 11. `facets/indices.py` owns both conversions; this function only fetches.
+    """
+    from openbb import obb
+
+    return answer_from(
+        obb.equity.compare.groups(group="sector", metric="performance", provider=provider)
+    )
