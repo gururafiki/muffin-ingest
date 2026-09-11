@@ -124,7 +124,18 @@ daily_prices = dg.build_schedule_from_partitioned_job(
 
 
 defs = dg.Definitions(
-    assets=[ledger_health, prices.raw_price_bars, prices.price_bar, prices.raw_price_history],
+    assets=[
+        ledger_health,
+        # Lane A: the daily cross-section.
+        prices.raw_price_bars,
+        prices.price_bar,
+        # Lane B: history and repair, per security.
+        prices.raw_price_history,
+        prices.price_bar_history,
+        # Derived from the bars, eager on both lanes — no cron offset, which is what the old
+        # system's :24/:54/:14 choreography was for.
+        prices.security_return,
+    ],
     asset_checks=[every_symbol_keyed_facet_retracts],
     jobs=[prune_dagster_storage],
     schedules=[ledger_heartbeat, nightly_pruning, daily_prices],

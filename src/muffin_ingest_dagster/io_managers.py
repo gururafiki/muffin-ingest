@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import dagster as dg
 
 from muffin_ingest import settings
-from muffin_ingest.writers import upsert
+from muffin_ingest.writers import WriteResult, replace_scope, upsert
 
 if TYPE_CHECKING:
     from upath import UPath
@@ -121,15 +121,25 @@ class PostgresIOManager(dg.ConfigurableIOManager):
             )
 
         rows = list(obj)
+        # AN UPSERT CANNOT RETRACT, and for anything whose source restates a WHOLE scope that is a
+        # defect rather than a limitation: a period a run stops producing keeps whatever was written
+        # last time, for ever, looking freshly written. Securities served `1d = 0.00%` for four days
+        # that way, because the guard that stopped PRODUCING a number could never REMOVE the stale
+        # one. An asset declaring `replace_scope` gets delete-then-insert per scope value instead.
+        scope_columns = [str(c) for c in (meta.get("replace_scope") or [])]
+
         with psycopg.connect(settings.database_url()) as conn:
             with conn.cursor() as cur:
-                result = upsert(
-                    cur,
-                    str(table),
-                    rows,
-                    conflict=list(conflict),
-                    update=_updatable(rows, conflict),
-                )
+                if scope_columns:
+                    result = _replace_scopes(cur, str(table), rows, scope_columns, list(conflict))
+                else:
+                    result = upsert(
+                        cur,
+                        str(table),
+                        rows,
+                        conflict=list(conflict),
+                        update=_updatable(rows, conflict),
+                    )
             conn.commit()
 
         context.add_output_metadata(
@@ -139,6 +149,7 @@ class PostgresIOManager(dg.ConfigurableIOManager):
                 # pleased about — a backlog yielding one row per (security, sector) rather than per
                 # security is how this was first noticed.
                 "collapsed": result.collapsed,
+                "scopes_retracted": result.retracted,
                 "table": str(table),
             }
         )
@@ -148,6 +159,35 @@ class PostgresIOManager(dg.ConfigurableIOManager):
             "core tables are read by SQL, not loaded back into an asset — stage 3 reads them "
             "through views and functions, which is what keeps the heavy work in the database"
         )
+
+
+def _replace_scopes(
+    cur: Any, table: str, rows: Rows, scope_columns: Sequence[str], conflict: Sequence[str]
+) -> WriteResult:
+    """Delete each scope this run produced, then write what it now says that scope contains.
+
+    ONLY THE SCOPES THIS RUN TOUCHED. Deleting every scope and rewriting would make a bounded run —
+    one page of securities — retract everything it did not happen to cover, which turns a page size
+    into data loss. A security absent from `rows` is one this run said nothing about, and saying
+    nothing is not the same as saying "no periods".
+    """
+    written = collapsed = retracted = 0
+    by_scope: dict[tuple[Any, ...], list[Mapping[str, Any]]] = {}
+    for row in rows:
+        by_scope.setdefault(tuple(row.get(c) for c in scope_columns), []).append(row)
+
+    for values, scope_rows in by_scope.items():
+        result = replace_scope(
+            cur,
+            table,
+            scope_rows,
+            scope=dict(zip(scope_columns, values, strict=True)),
+            conflict=list(conflict),
+        )
+        written += result.written
+        collapsed += result.collapsed
+        retracted += result.retracted
+    return WriteResult(written=written, collapsed=collapsed, retracted=retracted)
 
 
 def _updatable(rows: Rows, conflict: Sequence[str]) -> list[str]:

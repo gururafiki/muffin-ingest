@@ -30,6 +30,7 @@ from typing import Any
 import dagster as dg
 from dagster import AssetExecutionContext
 
+from muffin_ingest.derive import returns
 from muffin_ingest.facets import prices
 from muffin_ingest.providers import openbb
 from muffin_ingest.providers.isolation import BatchVerdict, fetch_with_isolation
@@ -61,6 +62,11 @@ security_partitions = dg.DynamicPartitionsDefinition(name=SECURITY_PARTITION)
 #: start date derived from `now()` mints a new cache entry per run while an omitted one makes a
 #: single key whose answer keeps growing. 1970 predates every listing in this universe.
 HISTORY_START = date(1970, 1, 1)
+
+#: How far back the return rules can reach. The longest lookback is `5y` at 1,826 days; the margin
+#: covers a security whose anchor bar sits a few sessions before the nominal date because its market
+#: was shut. Loading less would silently drop the long periods rather than fail.
+LOOKBACK = timedelta(days=1900)
 
 
 class PriceRun(dg.Config):
@@ -331,6 +337,115 @@ def raw_price_history(
     )
     context.add_output_metadata({"requested": len(wanted), "rows": len(rows), **stats})
     return rows
+
+
+@dg.asset(
+    partitions_def=security_partitions,
+    backfill_policy=dg.BackfillPolicy.single_run(),
+    pool="sql",
+    io_manager_key="postgres_io",
+    group_name="prices",
+    kinds={"postgres"},
+    metadata={"table": "market.price_bar", "conflict": ["security_id", "trade_date"]},
+    description="Lane B's raw history as typed core rows, into the same table Lane A writes.",
+)
+def price_bar_history(
+    context: AssetExecutionContext, postgres: Postgres, raw_price_history: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """The other half of Lane B, which was missing: raw was landing and nothing normalised it.
+
+    SAME TABLE AS `price_bar`, DELIBERATELY, and keyed the same way — `(security_id, trade_date)`.
+    Two assets writing one table is the cost of two lanes with different partition schemes, and the
+    key is what makes the overlap harmless: whichever lane last collected a day writes the same
+    value for it.
+
+    NOT `replace_scope`. A security's history is APPENDED to by successive runs — a bounded page
+    that fetched 2010-2015 must not retract 2016 onwards written by the last one. Retraction is for
+    a source that restates a whole scope, which a paged history fetch does not.
+    """
+    with postgres.connect() as conn:
+        currencies = prices.currency_by_security(conn)
+
+    rows = prices.normalise(raw_price_history, currencies, source_code=PROVIDER.code)
+    context.add_output_metadata(
+        {
+            "rows": len(rows),
+            "dropped": len(raw_price_history) - len(rows),
+            "without_a_currency": sum(1 for r in rows if not r["currency_code"]),
+        }
+    )
+    return rows
+
+
+class ReturnsRun(dg.Config):
+    """How much of the universe one run covers."""
+
+    #: Securities per page. The bars for a page are loaded into memory at once, so this is a memory
+    #: budget: 500 securities x ~1,300 daily bars over the longest lookback is ~650k rows.
+    page: int = 500
+    #: Cap the run. None = every security with bars.
+    limit: int | None = None
+
+
+@dg.asset(
+    deps=[price_bar, price_bar_history],
+    automation_condition=dg.AutomationCondition.eager(),
+    pool="sql",
+    io_manager_key="postgres_io",
+    group_name="prices",
+    kinds={"postgres"},
+    metadata={
+        "table": "market.security_return",
+        "conflict": ["security_id", "period_code"],
+        # A PERIOD THIS RUN STOPS PRODUCING MUST BE REMOVED, NOT LEFT. The rules deliberately
+        # WITHHOLD a return — a window that never moved, an anchor before a discontinuity, a stale
+        # series — and an upsert cannot express that. Without retraction the guard that stops
+        # producing a number can never remove the one already there, which is how securities served
+        # `1d = 0.00%` for four days after the fix that stopped generating it.
+        "replace_scope": ["security_id"],
+    },
+    description="Price and total return per period, computed from the bars. No provider call.",
+)
+def security_return(
+    context: AssetExecutionContext, config: ReturnsRun, postgres: Postgres
+) -> list[dict[str, Any]]:
+    today = date.today()
+    out: list[dict[str, Any]] = []
+    stats = {"securities": 0, "with_returns": 0, "periods": 0, "with_total_return": 0}
+
+    with postgres.connect() as conn:
+        for batch in prices.securities_with_bars(conn, page=config.page, limit=config.limit):
+            series = prices.bars_for(conn, [s for s in batch], since=today - LOOKBACK)
+            for security_id, bars in series.items():
+                stats["securities"] += 1
+                priced = returns.price_returns(bars, today)
+                total = returns.total_returns(bars, today)
+                if not priced and not total:
+                    # NOT AN ERROR AND NOT A ZERO. A series too short, too stale or flat across
+                    # every window yields nothing, and writing zeros would be inventing numbers the
+                    # rules exist to withhold.
+                    continue
+                stats["with_returns"] += 1
+                for period in sorted(set(priced) | set(total)):
+                    stats["periods"] += 1
+                    stats["with_total_return"] += total.get(period) is not None
+                    out.append(
+                        {
+                            "security_id": security_id,
+                            "period_code": period,
+                            "as_of": today.isoformat(),
+                            "price_return_pct": priced.get(period),
+                            # NEVER COALESCED TO THE PRICE RETURN. NULL means "not computed" — no
+                            # dividend data, or a series ineligible for the window — and filling it
+                            # would erase the difference between "paid no income" and "we do not
+                            # know".
+                            "total_return_pct": total.get(period),
+                            "source_code": PROVIDER.code,
+                        }
+                    )
+
+    context.add_output_metadata({**stats, "rows": len(out)})
+    return out
 
 
 @dg.sensor(

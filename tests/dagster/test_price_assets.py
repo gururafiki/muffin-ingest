@@ -271,3 +271,38 @@ def test_a_partition_contains_only_its_own_window(tmp_path: Path) -> None:
     m = meta(materialise(tmp_path, spilling), asset_prices.raw_price_bars)
     assert m["outside_window"] > 0, "the spillover is counted, not dropped in silence"
     assert m["rows"] == m["answered"], "exactly one bar per answering security — its own day"
+
+
+# --- returns ------------------------------------------------------------------------------------
+
+
+def test_a_period_that_stops_being_produced_is_RETRACTED_not_left(tmp_path: Path) -> None:
+    """AN UPSERT CANNOT RETRACT, and the return rules deliberately WITHHOLD periods — a window that
+    never moved, an anchor before a discontinuity, a stale series. Without delete-then-insert the
+    guard that stops PRODUCING a number can never REMOVE the one already there, which is how
+    securities served `1d = 0.00%` for four days after the fix that stopped generating it.
+
+    Asserted on the asset's declaration rather than against a database, because the behaviour lives
+    in the I/O manager and the declaration is what selects it.
+    """
+    meta = asset_prices.security_return.metadata_by_key[asset_prices.security_return.key]
+    assert meta["replace_scope"] == ["security_id"]
+    assert meta["table"] == "market.security_return"
+
+
+def test_the_history_lane_does_NOT_retract(tmp_path: Path) -> None:
+    """The opposite call, for the opposite reason. A security's history is APPENDED to by successive
+    runs, so a bounded page that fetched 2010-2015 must not retract 2016 onwards written by the last
+    one. Retraction is for a source that restates a whole scope; a paged history fetch does not."""
+    meta = asset_prices.price_bar_history.metadata_by_key[asset_prices.price_bar_history.key]
+    assert "replace_scope" not in meta
+    assert meta["conflict"] == ["security_id", "trade_date"]
+
+
+def test_both_lanes_write_the_same_table_on_the_same_key(tmp_path: Path) -> None:
+    """Two assets over one table is the cost of two partition schemes, and the shared key is what
+    makes the overlap harmless: whichever lane last collected a day writes the same value for it."""
+    a = asset_prices.price_bar.metadata_by_key[asset_prices.price_bar.key]
+    b = asset_prices.price_bar_history.metadata_by_key[asset_prices.price_bar_history.key]
+    assert a["table"] == b["table"] == "market.price_bar"
+    assert a["conflict"] == b["conflict"] == ["security_id", "trade_date"]

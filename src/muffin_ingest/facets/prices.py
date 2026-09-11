@@ -19,7 +19,7 @@ THREE SHAPES THE PROVIDER RESPONSE HAS THAT LOOK LIKE ONE:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -252,4 +252,72 @@ def normalise(
                 "source_code": source_code,
             }
         )
+    return out
+
+
+def securities_with_bars(
+    conn: Any, *, page: int = 500, limit: int | None = None
+) -> Iterator[list[str]]:
+    """Securities that have bars, heaviest holdings first, in pages.
+
+    PAGED BECAUSE THE BARS ARE, NOT THE SECURITIES. One page's worth of daily history over the
+    longest lookback is the thing held in memory — 500 securities is ~650k rows — so the page is a
+    memory budget wearing a row count's clothes.
+    """
+    sql = """
+    select pb.security_id::text
+      from market.price_bar pb
+      left join market.fund_holding_current h on h.security_id = pb.security_id
+     group by pb.security_id
+     order by max(coalesce(h.weight, 0)) desc, pb.security_id
+    """
+    if limit is not None:
+        sql += " limit %s"
+    with conn.cursor() as cur:
+        cur.execute(sql, [limit] if limit is not None else [])
+        ids = [r[0] for r in cur.fetchall()]
+    for i in range(0, len(ids), page):
+        yield ids[i : i + page]
+
+
+def bars_for(conn: Any, security_ids: Sequence[str], *, since: date) -> dict[str, list[Bar]]:
+    """Each security's daily series since a date, oldest first.
+
+    SORTED IN SQL AND TRUSTED HERE. Every rule downstream reads the series positionally — the
+    previous bar for `1d`, the anchor for a lookback, the cut after a discontinuity — so an
+    unordered result would change the numbers rather than fail.
+
+    THE DIVIDEND IS JOINED, AND WITHOUT IT THE TOTAL RETURN WOULD BE A LIE. `market.price_bar` holds
+    no dividend — it is a price table — so a series built from it alone reinvests nothing and
+    `total_returns` returns exactly the price return, wearing a different column's name. That is the
+    conflation `security_return.total_return_pct` is documented to refuse: NULL means "not
+    computed", and a number that merely equals the price return erases the difference between "paid
+    no income" and "we do not know".
+    """
+    if not security_ids:
+        return {}
+    out: dict[str, list[Bar]] = {}
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            select pb.security_id::text, pb.trade_date, pb.close, pb.volume, ca.value
+              from market.price_bar pb
+              left join market.security_corporate_action ca
+                     on ca.security_id = pb.security_id
+                    and ca.ex_date = pb.trade_date
+                    and ca.kind = 'dividend'
+             where pb.security_id = any(%s::uuid[]) and pb.trade_date >= %s
+             order by pb.security_id, pb.trade_date
+            """,
+            (list(security_ids), since),
+        )
+        for security_id, trade_date, close, volume, dividend in cur.fetchall():
+            out.setdefault(security_id, []).append(
+                Bar(
+                    trade_date=trade_date,
+                    close=float(close),
+                    volume=volume,
+                    dividend=float(dividend) if dividend is not None else None,
+                )
+            )
     return out
