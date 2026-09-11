@@ -135,13 +135,27 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
 
 
 @dg.asset(
-    partitions_def=index_day,
-    backfill_policy=dg.BackfillPolicy.single_run(),
+    # DELIBERATELY UNPARTITIONED, WHICH IS THE SECOND ANSWER TO THIS AND THE RIGHT ONE.
+    #
+    # finviz answers "as of now" and carries no date, so a date partition claims something the
+    # source cannot support: run on 09-11 for the 09-10 partition it returns TODAY's numbers, and
+    # the parity comparison duly showed the sector rows 1.3pp from the old table with
+    # `new_as_of=2026-09-10 old_as_of=2026-09-11` while both sides had read the same provider.
+    #
+    # The first fix was a guard refusing a window that had already closed — and it could never have
+    # collected anything, because `end_offset` is 0, so the newest materialisable partition is
+    # always YESTERDAY and today is always outside it. A guard that can only ever refuse is worse
+    # than the defect it replaces.
+    #
+    # There is exactly one current snapshot. It cannot be backfilled, it cannot be asked about a
+    # past day, and the materialisation event is already the record of when it was taken — so the
+    # honest model has no date partition at all, and `as_of` comes from the DATA rather than from
+    # a partition key. That is the same rule the returns gate forced onto `security_return`.
     pool="yfinance",
     io_manager_key="parquet_io",
     group_name="indices",
     kinds={"finviz", "parquet"},
-    description="Sector performance as finviz publishes it — numbers, not a series. US listings.",
+    description="Sector performance as finviz publishes it — a current snapshot, not a series.",
 )
 def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -> Any:
     """THE PROVIDER'S OWN LABEL IS STORED, not the muffin id it maps to.
@@ -163,28 +177,15 @@ def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -
     nothing here" rather than a hole. The cost is that the sector lane only ever fills forward,
     which is a property of the source rather than a limitation of the design.
     """
-    window: tuple[datetime, datetime] = context.partition_time_window
-    today = date.today()
-    if not (window[0].date() <= today < window[1].date()):
-        context.log.warning(
-            "partition %s..%s has closed and finviz answers only for NOW — collecting nothing "
-            "rather than stamping today's snapshot with a past date",
-            window[0].date(),
-            window[1].date(),
-        )
-        context.add_output_metadata(
-            {"groups": 0, "rows": 0, "warnings": 0, "refused_past_partition": 1}
-        )
-        return []
-
+    taken = date.today()
     answer = openbb.sector_performance()
-    rows = indices.sector_rows(answer.rows, run_id=context.run_id)
+    rows = indices.sector_rows(answer.rows, run_id=context.run_id, taken=taken)
     context.add_output_metadata(
         {
             "groups": len(answer.rows),
             "rows": len(rows),
             "warnings": len(answer.warnings),
-            "refused_past_partition": 0,
+            "taken": taken.isoformat(),
         }
     )
     return rows
@@ -258,9 +259,10 @@ def index_return(
                 }
             )
 
-    # `as_of` is the partition's own day, which `raw_sector_performance` now guarantees is the day
-    # the snapshot was actually read — it collects nothing for a window that has already closed.
-    sectors, unmapped = indices.normalise_sectors(_rows(raw_sector_performance), as_of=as_of)
+    # THE SNAPSHOT'S OWN DATE, NOT THE PARTITION'S. `raw_sector_performance` is unpartitioned and
+    # records the day it was read, so re-running an old partition cannot misdate a sector figure —
+    # the date travels with the data, which is the rule the returns gate forced on the whole family.
+    sectors, unmapped = indices.normalise_sectors(_rows(raw_sector_performance))
     out.extend(sectors)
     if unmapped:
         # LOUD, NOT FATAL: a provider rename should degrade one sector, not blank the screen — and

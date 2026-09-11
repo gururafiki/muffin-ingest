@@ -78,10 +78,20 @@ def test_an_unmapped_label_is_REPORTED_and_never_filed_under_a_guess() -> None:
     """A provider rename should degrade one sector, not file its performance under a neighbour's
     name — which is worse than losing it, because the wrong number looks right."""
     rows = [
-        {"provider_label": "Technology", "period_code": "1m", "fraction": 0.021},
-        {"provider_label": "Cybernetics", "period_code": "1m", "fraction": 0.5},
+        {
+            "provider_label": "Technology",
+            "period_code": "1m",
+            "fraction": 0.021,
+            "taken": "2026-09-10",
+        },
+        {
+            "provider_label": "Cybernetics",
+            "period_code": "1m",
+            "fraction": 0.5,
+            "taken": "2026-09-10",
+        },
     ]
-    out, unmapped = indices.normalise_sectors(rows, as_of=date(2026, 9, 10))
+    out, unmapped = indices.normalise_sectors(rows)
 
     assert unmapped == ["Cybernetics"]
     assert [r["index_code"] for r in out] == ["sector:information-technology"]
@@ -93,8 +103,7 @@ def test_a_sector_s_total_return_is_NULL_rather_than_its_price_return() -> None:
     difference between "paid no income" and "we did not measure it" — and a reader comparing a
     sector's total return with a security's would be comparing two different quantities."""
     out, _ = indices.normalise_sectors(
-        [{"provider_label": "Energy", "period_code": "1y", "fraction": 0.3}],
-        as_of=date(2026, 9, 10),
+        [{"provider_label": "Energy", "period_code": "1y", "fraction": 0.3, "taken": "2026-09-10"}]
     )
     assert out[0]["total_return_pct"] is None
     assert out[0]["price_return_pct"] == pytest.approx(30.0)
@@ -104,7 +113,9 @@ def test_the_raw_artifact_keeps_the_PROVIDER_S_label_not_our_id() -> None:
     """Mapping is interpretation and belongs in stage 2. Keeping the raw label means a rename is
     diagnosable from the bytes on disk rather than by asking the provider again."""
     rows = indices.sector_rows(
-        [{"name": "Basic Materials", "Change %": 0.0042, "performance_1y": 0.2978}], run_id="r1"
+        [{"name": "Basic Materials", "Change %": 0.0042, "performance_1y": 0.2978}],
+        run_id="r1",
+        taken=date(2026, 9, 11),
     )
     assert {r["provider_label"] for r in rows} == {"Basic Materials"}
     assert {r["period_code"] for r in rows} == {"1d", "1y"}
@@ -112,4 +123,19 @@ def test_the_raw_artifact_keeps_the_PROVIDER_S_label_not_our_id() -> None:
 
 
 def test_a_row_with_no_name_is_skipped_rather_than_attributed_to_nothing() -> None:
-    assert indices.sector_rows([{"Change %": 0.01}], run_id="r1") == []
+    assert indices.sector_rows([{"Change %": 0.01}], run_id="r1", taken=date(2026, 9, 11)) == []
+
+
+def test_a_sector_figure_is_dated_by_WHEN_IT_WAS_TAKEN_not_by_who_asks() -> None:
+    """finviz publishes no date, so the raw artifact records the day it was read and every figure
+    downstream takes its `as_of` from there.
+
+    The alternative — letting the caller supply "now", or a partition key — is what put the 09-11
+    snapshot in the table under 09-10, and the parity comparison showed it as a 1.3pp disagreement
+    between two readings of the SAME provider.
+    """
+    raw = indices.sector_rows(
+        [{"name": "Energy", "Change %": 0.01}], run_id="r1", taken=date(2026, 9, 11)
+    )
+    out, _ = indices.normalise_sectors(raw)
+    assert {r["as_of"] for r in out} == {"2026-09-11"}
