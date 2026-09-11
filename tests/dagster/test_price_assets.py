@@ -306,3 +306,40 @@ def test_both_lanes_write_the_same_table_on_the_same_key(tmp_path: Path) -> None
     b = asset_prices.price_bar_history.metadata_by_key[asset_prices.price_bar_history.key]
     assert a["table"] == b["table"] == "market.price_bar"
     assert a["conflict"] == b["conflict"] == ["security_id", "trade_date"]
+
+
+def test_the_two_lanes_have_opposite_backfill_policies_and_that_is_deliberate() -> None:
+    """A DATE partition batches; A SECURITY PARTITION DOES NOT — and the cost of getting it wrong
+    is an OOM after the provider has been paid.
+
+    Lane A is partitioned by trading day, so one run is one batched sweep over the whole universe
+    and `single_run` is what makes a week-long gap cost one run instead of seven.
+
+    Lane B is partitioned by security. `openbb_yfinance` calls `yf.download(..., threads=False)`,
+    so the vendor is asked once per symbol however many partitions a run covers — there is nothing
+    to batch across them, and all `single_run` bought was an unbounded memory footprint. Measured:
+    96 securities is 683,391 raw bars and the child process was OOM-killed at 2.4 GB, because
+    `UPathIOManager.load_input` is eager and the clean stage holds the raw rows and their
+    normalised copies at once.
+
+    Pinned because the tidying instinct runs the wrong way: four assets in one file, three words
+    different, and making them "consistent" reintroduces the failure.
+    """
+    for asset in (asset_prices.raw_price_bars, asset_prices.price_bar):
+        policy = asset.backfill_policy
+        assert policy is not None and policy.max_partitions_per_run is None, (
+            f"{asset.key.to_user_string()} is partitioned by DATE — one run per range"
+        )
+
+    for asset in (asset_prices.raw_price_history, asset_prices.price_bar_history):
+        policy = asset.backfill_policy
+        assert policy is not None, f"{asset.key.to_user_string()} has no backfill policy"
+        assert policy.max_partitions_per_run == asset_prices.HISTORY_PARTITIONS_PER_RUN, (
+            f"{asset.key.to_user_string()} is partitioned by SECURITY, so its run width is a "
+            f"memory budget — an unbounded policy here is the OOM this test exists for"
+        )
+
+    assert asset_prices.HISTORY_PARTITIONS_PER_RUN <= 40, (
+        "96 securities reached 2.4 GB against a 2.5 GB container; the budget has ~600 MB of "
+        "headroom at 25 and none at all near 96"
+    )

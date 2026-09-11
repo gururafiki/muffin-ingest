@@ -210,9 +210,11 @@ refuses a multi-partition output outright**. It had never worked on either lane,
 the write could see it: the asset ran, fetched 96 securities' full history, **paid the provider for
 all of it**, and died afterwards.
 
-Its own suggested remedies are worse — a multi-run policy turned one backfill of 96 securities into
-96 runs, which for a batched provider is ten calls becoming ninety-six. **Override `handle_output`**
-so a run covering several partitions returns a mapping of partition key to rows, one file each.
+**Override `handle_output`** so a run covering several partitions returns a mapping of partition key
+to rows, one file each.
+
+*(An earlier version of this entry went on to reject a multi-run policy because it "turns ten calls
+into ninety-six". That is false for this provider and the correction is the next rule.)*
 
 **AND THE FIX FOR THE WRITE IS HALF THE FIX.** `UPathIOManager.load_input` hands a DOWNSTREAM
 step covering several partitions a `{partition_key: obj}` mapping too — so the next backfill got one
@@ -237,11 +239,29 @@ Three adjacent traps, each naming neither cause nor fix:
 * `dg.materialize` has no `asset_selection`; a partition range goes through the
   `dagster/asset_partition_range_{start,end}` tags.
 
-### Do not accumulate a whole backfill in memory
+### `single_run` is right for a DATE partition and wrong for a SUBJECT partition
 
-The history lane holds its entire page before returning. 96 securities × ~7,300 bars is fine; the
-full universe at 10,894 × 7,300 is 80 M rows and is not. **A full load is several backfills of a few
-hundred subjects**, not one of everything.
+The deciding question is **whether there is anything to batch ACROSS the partitions in a run**.
+
+* A **date** partition holds many subjects. One run is one batched sweep, and `single_run` is what
+  makes a week-long gap cost one run instead of seven. Keep it.
+* A **subject** partition holds one subject. `openbb_yfinance` calls `yf.download(...,
+  threads=False)`, so the vendor is asked **once per symbol** however many partitions the run
+  covers — joining symbols collapses OUR call count, never theirs. So `single_run` buys no provider
+  saving at all here, and costs an unbounded memory footprint.
+
+That footprint is not a tuning problem: **`UPathIOManager.load_input` is EAGER**, so a clean stage
+covering N partitions holds every one of their raw rows AND the normalised copies at the same time.
+No arrangement of that step makes the peak independent of the run's width. **The width IS the
+memory budget** — `BackfillPolicy.multi_run(N)`, with N chosen by measurement.
+
+Measured here, and the numbers are worth carrying: 96 securities is **683,391 raw bars** (~7,119
+each) and the child process was **OOM-killed at 2.4 GB** against a 2.5 GB container. 25 is ~178k
+rows and ~600 MB. So the full 10,894-security load is **~436 runs, not one** — and the extra run
+overhead buys the only property that lets it complete at all.
+
+Pin the asymmetry in a test. Four assets sit in one file with three words different between them,
+and the tidying instinct runs toward making them consistent — which reintroduces the OOM.
 
 ### Do not write an artifact only your own loader can read
 
