@@ -196,3 +196,21 @@ def test_the_divisors_are_the_real_ones() -> None:
     out, and getting it wrong is a factor-of-ten error in a currency that is already the highest
     valued on earth."""
     assert fx.SUBUNITS == {"ILA": ("ILS", 100.0), "ZAC": ("ZAR", 100.0), "KWF": ("KWD", 1000.0)}
+
+
+def test_the_source_code_is_one_a_migration_has_actually_seeded() -> None:
+    """`source_code` IS A FOREIGN KEY AND NOTHING DOWNSTREAM CAN CATCH A MISSING ROW.
+
+    The first real run proved it: the provider answered all 38 currencies, and the write then failed
+    entirely with `fx_rate_source_code_fkey — Key (source_code)=(yahoo) is not present in table
+    "data_source"`. CLAUDE.md already carried the rule from migration 88, where
+    `security-statements` lost a whole run's yfinance rows the same way.
+
+    `yfinance` rather than `yahoo` is the deliberate answer: `data_source` names the VENDOR, every
+    one of the 22,236 existing `fx_rate` rows says `yfinance`, and they were written by a resource
+    that also called Yahoo's chart endpoint directly. Whether our side uses a library or plain HTTP
+    is a fact about us.
+    """
+    assert fx.SOURCE_CODE == "yfinance"
+    rows = fx.core_rows([fx.Rate("EUR", date(2026, 9, 10), 1.16)])
+    assert {r["source_code"] for r in rows} == {"yfinance"}
