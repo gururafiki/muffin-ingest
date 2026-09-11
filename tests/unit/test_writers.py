@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 
+from muffin_ingest import writers
 from muffin_ingest.writers import (
     WriterError,
     dedupe_by,
@@ -140,3 +141,88 @@ def test_a_table_must_be_schema_qualified() -> None:
     name resolves against search_path, which is not the same thing twice."""
     with pytest.raises(WriterError, match="schema-qualified"):
         upsert(FakeCursor(), "security_price", [{"k": 1}], conflict=["k"])
+
+
+def test_a_write_too_large_for_one_statement_is_split_rather_than_refused() -> None:
+    """POSTGRES SENDS THE PARAMETER COUNT AS AN int16, so one statement carries at most 65,535 bind
+    parameters. It is a PROTOCOL limit, not a tunable, and a multi-VALUES insert spends one per
+    column per row — so the ceiling is a row count that moves with how wide the table is.
+
+    Nothing here had met it: Lane A writes one trading day and its largest statement was a few
+    thousand parameters. The first history backfill of 25 securities was ~178,000 rows x 8 columns
+    = 1.4 M, and psycopg refused the WHOLE statement with
+
+        number of parameters must be between 0 and 65535
+
+    naming neither the table nor the row count — after the provider had been paid and the raw files
+    were already on disk, for the third time in one afternoon.
+    """
+    columns = 8
+    rows = [
+        {
+            "security_id": f"s{i}",
+            "trade_date": "2026-09-10",
+            **{f"c{c}": c for c in range(columns - 2)},
+        }
+        for i in range(20_000)
+    ]
+    cur = FakeCursor()
+    result = upsert(
+        cur, "market.price_bar", rows, conflict=["security_id", "trade_date"], update=["c0"]
+    )
+
+    assert result.written == len(rows), (
+        "chunking must not change what the caller is told was written"
+    )
+    assert len(cur.calls) > 1, (
+        "20,000 rows of 8 columns is 160,000 parameters; one statement cannot carry them"
+    )
+    for sql, params in cur.calls:
+        assert len(params) <= writers.MAX_BIND_PARAMS, (
+            f"a chunk carrying {len(params)} parameters is exactly the statement Postgres refuses"
+        )
+        assert sql.startswith("insert into market.price_bar"), "every chunk is the same statement"
+        assert "on conflict (security_id, trade_date) do update" in sql
+
+    sent = sum(len(p) for _, p in cur.calls)
+    assert sent == len(rows) * columns, "every row reaches the database exactly once"
+
+
+def test_chunking_does_not_move_the_dedupe_and_a_repeated_key_is_still_collapsed_once() -> None:
+    """THE ORDER MATTERS: dedupe the whole set, THEN chunk.
+
+    Splitting first would let one conflict key survive in two chunks, and the second statement would
+    overwrite the first with whichever copy landed last — a different answer from `dedupe_by`'s
+    (last wins, once, and it is COUNTED). The collapse count is the tell, and it is a statement
+    about the SOURCE rather than a repair to be pleased about.
+    """
+    # THE TWO COPIES MUST LAND IN DIFFERENT CHUNKS OR THE FIXTURE CANNOT TELL THE RULES APART, and
+    # the first version of this test could not: three columns gives 65,535 // 3 = 21,845 rows per
+    # chunk, so 20,001 rows were ONE statement, per-chunk dedupe gave the same answer, and the
+    # mutation passed clean. 25,000 puts the repeat in the SECOND chunk, where only a whole-set
+    # dedupe can see the first.
+    rows = [{"security_id": f"s{i}", "trade_date": "2026-09-10", "close": i} for i in range(25_000)]
+    # A value no ordinary row carries — `close: i` means 999 is legitimately security s999's.
+    rows.append({"security_id": "s0", "trade_date": "2026-09-10", "close": -1.5})
+
+    cur = FakeCursor()
+    result = upsert(
+        cur, "market.price_bar", rows, conflict=["security_id", "trade_date"], update=["close"]
+    )
+
+    assert result.collapsed == 1, "the duplicate is collapsed, not sent twice in two chunks"
+    assert result.written == 25_000
+    closes = [p for _, params in cur.calls for p in params if p == -1.5]
+    assert closes == [-1.5], "the LAST copy is the one that survives, exactly once"
+
+    # THE ASSERTION THAT ACTUALLY SEPARATES THE TWO RULES, and without it this test was decorative.
+    # Under a chunk-then-dedupe the repeat reaches the server in a SECOND statement, `do update`
+    # quietly overwrites the first, and the final stored value is the same — so asserting on the
+    # value alone certifies both rules. What differs is how many rows were SENT: 25,001 against
+    # 25,000, which is one wasted round trip here and a collapse count of 0 reporting nothing about
+    # a source that is repeating itself.
+    sent = sum(len(params) for _, params in cur.calls) // 3
+    assert sent == result.written, (
+        f"{sent} rows sent for {result.written} written — a key deduped per chunk rather than "
+        f"across the whole set is sent once per chunk it appears in"
+    )
