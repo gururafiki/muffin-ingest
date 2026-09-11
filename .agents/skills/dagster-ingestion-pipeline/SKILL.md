@@ -357,6 +357,27 @@ There is exactly one current snapshot, and the materialisation event is already 
 it was taken. Leave it unpartitioned; let its consumers stay partitioned, because their inputs
 genuinely do have dates.
 
+### "Is this done?" is a question for Dagster, not for the data it produced
+
+A resumable loader has to ask what is still outstanding. The tempting predicate is a property of the
+OUTPUT — "this security's history reaches back before go-live" — and it has a head-of-line stall
+built in: **a subject the provider has nothing for never acquires that property**, so its window
+stays outstanding for ever and every round re-fetches everything beside it.
+
+Measured, in the driver written to avoid exactly this: two consecutive rounds wrote 139,732 and
+139,708 rows — the same securities twice — while the progress counter sat at 120 and
+`outstanding_windows` never moved. Six occurrences of this shape are already recorded in CLAUDE.md
+and it still got written.
+
+`instance.get_materialized_partitions(asset_key)` is the honest question. **Materialised means "we
+asked and stored whatever came back, including nothing"** — which is a fact about our work, where
+depth is a fact about the provider's coverage. A subject with no history leaves a materialised,
+empty partition, and the window moves on.
+
+The same distinction decides the progress counter a stall detector reads: count partitions
+materialised, not rows that look right, or a healthy round over a thin part of the universe reads as
+a stall.
+
 ### Do not map a many-to-one relation with a dict comprehension
 
 `{symbol: code for code, symbol in scopes}` keeps the LAST code per symbol. Measured: 62 index

@@ -595,3 +595,27 @@ def test_the_attempt_records_what_the_isolation_pass_ACTUALLY_established(tmp_pa
     closed = [params for fn, params in LEDGER_CALLS if fn == "close"]
     assert closed[0][4] is True, "the isolation pass ran and the attempt must record it"
     assert closed[0][5] is True, "the control answered and the attempt must record it"
+
+
+def test_the_cross_section_budget_can_actually_cover_the_universe() -> None:
+    """A DAY-PARTITIONED ASSET CLAIMS ITS CROSS-SECTION; THE BUDGET DECIDES WHETHER IT CAN.
+
+    Measured on the node: 200 securities in 244 seconds, so ~1.22 s each, and the 11,446 askable
+    equities are **3.9 hours**. At the previous default of one hour a nightly run would have covered
+    a quarter of them and stopped — materialising a partition that still claims the full
+    cross-section, which is the false claim the whole partitioning argument exists to prevent.
+
+    Pinned as arithmetic rather than as a number, so that if the universe grows or the provider
+    slows, this fails instead of the claim quietly becoming untrue.
+    """
+    seconds_per_security = 244 / 200
+    askable = 11_446
+    needed = askable * seconds_per_security
+
+    assert asset_prices.PriceRun().budget_seconds >= needed, (
+        f"the universe needs {needed / 3600:.1f}h and the budget is "
+        f"{asset_prices.PriceRun().budget_seconds / 3600:.1f}h — a run that stops early still "
+        f"materialises its partition, and the partition is the claim"
+    )
+    # And not absurdly generous either: a budget far past what the work takes stops being a bound.
+    assert asset_prices.PriceRun().budget_seconds <= needed * 2
