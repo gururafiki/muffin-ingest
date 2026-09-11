@@ -399,3 +399,65 @@ class FxPostgres(Postgres):
     @contextmanager
     def connect(self) -> Iterator[Any]:
         yield FxConn()
+
+
+def test_one_ETF_backing_SEVERAL_scopes_reaches_all_of_them(tmp_path: Path) -> None:
+    """A DICT COMPREHENSION SILENTLY KEPT THE LAST, AND NINE SCOPES GOT NO RETURNS.
+
+    Measured in production: 62 proxied scopes over **53 distinct symbols**. `EEM` backs
+    `ftse:em-emea`, `msci:emerging` AND `msci:em-emea`; `IVV` backs `country:US`, `ftse:na` and
+    `msci:na`. Written as `{symbol: code}` the map kept one code per symbol, and the run reported
+    `answered=52` beside `empty=0` — two numbers that cannot both be right, and the only trace.
+
+    It is not a modelling error. Those scopes genuinely ARE the same index, which is why the
+    relation is many-to-one and has to be stored as one.
+    """
+    from muffin_ingest.facets import indices as facet_indices
+    from muffin_ingest.providers import openbb as hub
+    from muffin_ingest.providers.openbb import Answer
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    key = "2026-09-10"
+    shared = [
+        ("group:ftse:em-emea", "EEM"),
+        ("group:msci:emerging", "EEM"),
+        ("group:msci:em-emea", "EEM"),
+        ("country:BR", "EWZ"),
+    ]
+
+    def bars(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(
+            rows=[
+                {"symbol": s, "date": "2026-09-10", "close": 40.0 + i, "volume": 1}
+                for i, s in enumerate(symbols)
+            ]
+        )
+
+    # Patched on the FACET module the asset imports, not through the asset's own namespace: a
+    # re-exported attribute is not an export, and mypy --strict says so.
+    saved_fetch = hub.price_history
+    saved_scopes = facet_indices.proxied_scopes
+    hub.price_history = bars
+    facet_indices.proxied_scopes = lambda conn: list(shared)
+    try:
+        result = dg.materialize(
+            [asset_indices.raw_index_bars],
+            partition_key=key,
+            resources={
+                "postgres": FxPostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        hub.price_history = saved_fetch
+        facet_indices.proxied_scopes = saved_scopes
+
+    assert result.success
+    got = sql(
+        tmp_path / "raw_index_bars" / f"{key}.parquet",
+        "select distinct index_code from {f} order by 1",
+    )
+    assert [c for (c,) in got] == sorted(code for code, _ in shared), (
+        f"only {[c for (c,) in got]} reached the file — a symbol backing several scopes must "
+        f"reach every one of them"
+    )
