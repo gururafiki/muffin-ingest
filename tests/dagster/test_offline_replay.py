@@ -412,6 +412,7 @@ def test_one_ETF_backing_SEVERAL_scopes_reaches_all_of_them(tmp_path: Path) -> N
     It is not a modelling error. Those scopes genuinely ARE the same index, which is why the
     relation is many-to-one and has to be stored as one.
     """
+    from muffin_ingest.facets import indices as facet_indices
     from muffin_ingest.providers import openbb as hub
     from muffin_ingest.providers.openbb import Answer
     from muffin_ingest_dagster.assets import indices as asset_indices
@@ -432,10 +433,12 @@ def test_one_ETF_backing_SEVERAL_scopes_reaches_all_of_them(tmp_path: Path) -> N
             ]
         )
 
+    # Patched on the FACET module the asset imports, not through the asset's own namespace: a
+    # re-exported attribute is not an export, and mypy --strict says so.
     saved_fetch = hub.price_history
-    saved_scopes = asset_indices.indices.proxied_scopes
+    saved_scopes = facet_indices.proxied_scopes
     hub.price_history = bars
-    asset_indices.indices.proxied_scopes = lambda conn: list(shared)
+    facet_indices.proxied_scopes = lambda conn: list(shared)
     try:
         result = dg.materialize(
             [asset_indices.raw_index_bars],
@@ -447,7 +450,7 @@ def test_one_ETF_backing_SEVERAL_scopes_reaches_all_of_them(tmp_path: Path) -> N
         )
     finally:
         hub.price_history = saved_fetch
-        asset_indices.indices.proxied_scopes = saved_scopes
+        facet_indices.proxied_scopes = saved_scopes
 
     assert result.success
     got = sql(
