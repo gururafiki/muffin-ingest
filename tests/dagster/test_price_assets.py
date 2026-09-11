@@ -8,6 +8,7 @@ I/O manager and assert on what reached the other side.
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import date, timedelta
@@ -424,3 +425,58 @@ class _Capture(dg.ConfigurableIOManager):
 
     def load_input(self, context: dg.InputContext) -> Any:
         raise NotImplementedError
+
+
+def test_a_snapshot_source_collects_NOTHING_for_a_window_that_has_closed() -> None:
+    """A SNAPSHOT CANNOT BE BACKFILLED, AND THE FIRST VERSION QUIETLY PRETENDED IT COULD.
+
+    finviz answers "as of now" and carries no date. Every other asset in this family can be asked
+    for a past day, because bars have dates on them; this one cannot. Run on 09-11 for the 09-10
+    partition it returned TODAY's numbers, and stage 2 stamped them 09-10.
+
+    Caught by the parity comparison rather than by any test: the sector rows sat 1.3pp from the old
+    table with `new_as_of=2026-09-10 old_as_of=2026-09-11` while BOTH sides had read the same
+    provider — so the gap was a day, not a disagreement.
+
+    Collecting nothing is the honest answer, and it is what the empty-partition marker already
+    encodes: "we looked, there is nothing here" rather than a hole.
+    """
+    from muffin_ingest.providers import openbb as hub
+    from muffin_ingest.providers.openbb import Answer
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    asked = 0
+
+    def never_called(provider: str = "finviz") -> Answer:
+        nonlocal asked
+        asked += 1
+        return Answer(rows=[{"name": "Technology", "Change %": 0.01}])
+
+    closed = (date.today() - timedelta(days=3)).isoformat()
+    saved = hub.sector_performance
+    hub.sector_performance = never_called
+    try:
+        result = dg.materialize(
+            [asset_indices.raw_sector_performance],
+            partition_key=closed,
+            resources={
+                "postgres": ReturnsPostgres(),
+                "parquet_io": ParquetIOManager(str(Path(tempfile.mkdtemp()))),
+            },
+        )
+    finally:
+        hub.sector_performance = saved
+
+    assert result.success, "a closed window is a normal outcome, not a failure"
+    assert asked == 0, (
+        "the provider must not even be asked for a day it cannot answer for — asking and then "
+        "discarding still spends the call, and storing the answer misdates it"
+    )
+    meta = meta_of(result, asset_indices.raw_sector_performance)
+    assert meta["refused_past_partition"] == 1
+    assert meta["rows"] == 0
+
+
+def meta_of(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
+    events = result.asset_materializations_for_node(asset.op.name)
+    return {k: v.value for k, v in events[0].metadata.items()}
