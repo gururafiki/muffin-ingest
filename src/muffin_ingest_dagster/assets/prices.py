@@ -165,7 +165,7 @@ def _collect(
         # Filtering here rather than trusting the request is the only version that holds, because
         # both causes are the provider's and neither is visible in what we asked for.
         for symbol, series in parsed.items():
-            kept = [b for b in series if start <= b.trade_date <= end]
+            kept = [b for b in series if start <= b.trade_date < end]
             stats["outside_window"] += len(series) - len(kept)
             parsed[symbol] = kept
         dead = {d.upper() for d in verdict.dead}
@@ -226,8 +226,21 @@ def _collect(
 def raw_price_bars(
     context: AssetExecutionContext, config: PriceRun, postgres: Postgres
 ) -> list[dict[str, Any]]:
+    # THE WINDOW'S OWN EXCLUSIVE END, NOT A DAY SUBTRACTED FROM IT — and the subtraction was
+    # costing a multiple of the data. Measured against the real hub:
+    #
+    #     start=2026-09-01 end=2026-09-01  ->  7 rows, 2026-09-01..2026-09-10
+    #     start=2026-09-01 end=2026-09-02  ->  2 rows, 2026-09-01..2026-09-02
+    #     start=2026-09-01 end=2026-09-03  ->  3 rows, exactly
+    #
+    # A DEGENERATE RANGE IS IGNORED: `start == end` returns everything from `start` to TODAY, so
+    # asking for one old day dragged back every session since it — 653 bars discarded for 96
+    # securities on the first parity run, which is what made it visible. A range of at least a day
+    # is honoured exactly, so handing the provider the half-open window Dagster already gives us
+    # asks for two days instead of two weeks. The inclusive filter below still keeps only the
+    # partition's own, so correctness never depended on this.
     window: tuple[datetime, datetime] = context.partition_time_window
-    start, end = window[0].date(), window[1].date() - timedelta(days=1)
+    start, end = window[0].date(), window[1].date()
 
     with postgres.connect() as conn:
         subjects = prices.askable_subjects(conn, provider=PROVIDER.code, limit=config.limit)
@@ -306,11 +319,11 @@ def raw_price_history(
         context,
         subjects,
         start=HISTORY_START,
-        # YESTERDAY, NOT TODAY. Somewhere a market is open, and its bar for today is a session in
-        # progress whose "close" is not a close. The daily lane collects each day once it has
-        # closed; history must not race ahead of it and write a partial bar that then looks
-        # settled.
-        end=date.today() - timedelta(days=1),
+        # EXCLUSIVE, AND THEREFORE "UP TO BUT NOT INCLUDING TODAY". Somewhere a market is open,
+        # and its bar for today is a session in progress whose "close" is not a close. The daily
+        # lane collects each day once it has closed; history must not race ahead of it and write a
+        # partial bar that then looks settled.
+        end=date.today(),
         # SMALLER THAN THE CROSS-SECTION'S, because this is a MEMORY budget wearing a time budget's
         # clothes: twelve symbols at full history measured 11.6 MB of JSON in 8.1 s.
         batch_size=PROVIDER.history_batch_size,
