@@ -243,3 +243,78 @@ def test_a_single_run_covering_several_partitions_writes_one_file_each(tmp_path:
             tmp_path / "raw_price_bars" / f"{key}.parquet", "select distinct trade_date from {f}"
         )
         assert rows == [(key,)], f"{key}'s file holds only {key}"
+
+
+class CapturingPostgresIO(dg.ConfigurableIOManager):
+    """Stands in for `PostgresIOManager` so a clean stage can be driven without a database.
+
+    It captures rather than writes, because the question here is what stage 2 PRODUCED — the real
+    manager's own behaviour (the conflict target, `replace_scope`, the updatable column set) is
+    covered by `test_io_managers.py` against a real table.
+    """
+
+    def handle_output(self, context: dg.OutputContext, obj: Any) -> None:
+        CAPTURED_WRITES.append(obj)
+
+    def load_input(self, context: dg.InputContext) -> Any:
+        raise NotImplementedError("nothing reads back out of this one")
+
+
+CAPTURED_WRITES: list[Any] = []
+
+
+def test_a_single_run_covering_several_partitions_normalises_all_of_them(tmp_path: Path) -> None:
+    """THE MIRROR OF THE TEST ABOVE, AND ITS ABSENCE COST A SECOND FAILED BACKFILL.
+
+    Fixing the multi-partition WRITE made the next run get one stage further and die on the LOAD:
+
+        Type check failed for step input "raw_price_history" - expected type "[Dict[String,Any]]"
+
+    `UPathIOManager.load_input` hands a downstream step covering several partitions a
+    `{partition_key: obj}` MAPPING, not the obj — so `single_run` changes the shape at every seam in
+    the lane, and the first fix only looked at the seam that had failed. Both times the provider had
+    already been paid: the raw files were on disk, 96 of them, 12 MB.
+
+    So this drives BOTH stages over a range and asserts the clean stage saw every partition's rows.
+    Driving only stage 1 is what left the gap — the write was tested and the read was not reachable,
+    because no test had ever materialised stage 2 at all.
+    """
+    keys = ["2026-09-08", "2026-09-09"]
+    rows = list(CAPTURED["batch_mixed_venues"]["rows"])
+
+    def both_days(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(rows=rows)
+
+    CAPTURED_WRITES.clear()
+    saved_fetch, saved_universe = openbb.price_history, list(fakes.UNIVERSE)
+    openbb.price_history = both_days
+    fakes.UNIVERSE[:] = BATCH_SUBJECTS
+    try:
+        result = dg.materialize(
+            [asset_prices.raw_price_bars, asset_prices.price_bar],
+            tags={
+                "dagster/asset_partition_range_start": keys[0],
+                "dagster/asset_partition_range_end": keys[-1],
+            },
+            resources={
+                "postgres": fakes.FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "postgres_io": CapturingPostgresIO(),
+            },
+        )
+    finally:
+        openbb.price_history = saved_fetch
+        fakes.UNIVERSE[:] = saved_universe
+
+    assert result.success, "the clean stage must survive a multi-partition load"
+    assert len(CAPTURED_WRITES) == 1, "single_run writes once for the whole range"
+
+    written = CAPTURED_WRITES[0]
+    dates = {r["trade_date"] for r in written}
+    assert dates == set(keys), (
+        f"both partitions' rows must reach the clean stage, got {sorted(dates)} — a load that "
+        f"returns only one partition's rows, or the mapping itself, fails here"
+    )
+    assert len(written) == len(BATCH_SUBJECTS) * len(keys), (
+        "four securities on each of two days, flattened into one list"
+    )
