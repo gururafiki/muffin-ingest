@@ -124,6 +124,35 @@ def _by_partition(
     return out
 
 
+def _loaded_rows(loaded: Any) -> list[dict[str, Any]]:
+    """The MIRROR of `_by_partition`, on the way back in — and it was missing, which cost a run.
+
+    `UPathIOManager.load_input` reads one file per partition and, when the downstream step covers
+    SEVERAL, hands back a `{partition_key: obj}` mapping rather than the obj. So a `single_run`
+    lane has two shapes, not one, and BOTH stages have to know it. Annotating the input
+    `list[dict[str, Any]]` makes Dagster type-check the mapping against a list and fail the step
+    with
+
+        Type check failed for step input "raw_price_history" - expected type "[Dict[String,Any]]"
+
+    — after the provider has been paid and the raw files are already on disk. That is the same
+    defect as the write refusing a multi-partition output, one stage downstream, and it survived
+    the fix for that one because the fix only looked at the OUTPUT side. When a backfill policy
+    hands an asset every partition at once, every seam in the lane changes shape, not just the
+    first one that fails.
+
+    The input is therefore annotated `Any` — Dagster derives a DagsterType from the annotation and
+    refuses a union, so there is no way to spell "either of these two" that it accepts. What
+    recovers the guarantee is this function being the only way in: the rows are flattened here, and
+    nothing downstream sees the difference.
+    """
+    if isinstance(loaded, dict):
+        # Ordered by key so a multi-partition run writes in a stable order — the upsert does not
+        # care, but a diff of two runs does.
+        return [row for _, rows in sorted(loaded.items()) for row in rows]
+    return list(loaded)
+
+
 def _collect(
     context: AssetExecutionContext,
     subjects: list[prices.Subject],
@@ -306,19 +335,20 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
     description="Raw bars as typed core rows. Never calls a provider, so a fix here is free.",
 )
 def price_bar(
-    context: AssetExecutionContext, postgres: Postgres, raw_price_bars: list[dict[str, Any]]
+    context: AssetExecutionContext, postgres: Postgres, raw_price_bars: Any
 ) -> list[dict[str, Any]]:
+    raw = _loaded_rows(raw_price_bars)
     with postgres.connect() as conn:
         currencies = prices.currency_by_security(conn)
 
-    rows = prices.normalise(raw_price_bars, currencies, source_code=PROVIDER.code)
+    rows = prices.normalise(raw, currencies, source_code=PROVIDER.code)
     # THE SECURITIES WITH NO CURRENCY ARE COUNTED, NOT HIDDEN. 425 of 10,894 have neither a listing
     # currency nor one of their own; the column is nullable so they still get a price, and this is
     # what stops that becoming normal.
     context.add_output_metadata(
         {
             "rows": len(rows),
-            "dropped": len(raw_price_bars) - len(rows),
+            "dropped": len(raw) - len(rows),
             "without_a_currency": sum(1 for r in rows if not r["currency_code"]),
         }
     )
@@ -377,7 +407,7 @@ def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres
     description="Lane B's raw history as typed core rows, into the same table Lane A writes.",
 )
 def price_bar_history(
-    context: AssetExecutionContext, postgres: Postgres, raw_price_history: list[dict[str, Any]]
+    context: AssetExecutionContext, postgres: Postgres, raw_price_history: Any
 ) -> list[dict[str, Any]]:
     """The other half of Lane B, which was missing: raw was landing and nothing normalised it.
 
@@ -390,14 +420,15 @@ def price_bar_history(
     that fetched 2010-2015 must not retract 2016 onwards written by the last one. Retraction is for
     a source that restates a whole scope, which a paged history fetch does not.
     """
+    raw = _loaded_rows(raw_price_history)
     with postgres.connect() as conn:
         currencies = prices.currency_by_security(conn)
 
-    rows = prices.normalise(raw_price_history, currencies, source_code=PROVIDER.code)
+    rows = prices.normalise(raw, currencies, source_code=PROVIDER.code)
     context.add_output_metadata(
         {
             "rows": len(rows),
-            "dropped": len(raw_price_history) - len(rows),
+            "dropped": len(raw) - len(rows),
             "without_a_currency": sum(1 for r in rows if not r["currency_code"]),
         }
     )

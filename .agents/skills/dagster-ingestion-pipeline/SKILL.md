@@ -203,6 +203,46 @@ sampled pairs there were **zero** shifts. Sample before generalising, and sample
 where the defect appeared — a weight-ordered sample is mostly large US and European names and is
 structurally blind to a defect in Chile or Qatar.
 
+### Do not assume `single_run` works — the WRITE is where it fails
+
+`BackfillPolicy.single_run()` hands the asset every partition at once, and **`UPathIOManager`
+refuses a multi-partition output outright**. It had never worked on either lane, and nothing before
+the write could see it: the asset ran, fetched 96 securities' full history, **paid the provider for
+all of it**, and died afterwards.
+
+Its own suggested remedies are worse — a multi-run policy turned one backfill of 96 securities into
+96 runs, which for a batched provider is ten calls becoming ninety-six. **Override `handle_output`**
+so a run covering several partitions returns a mapping of partition key to rows, one file each.
+
+**AND THE FIX FOR THE WRITE IS HALF THE FIX.** `UPathIOManager.load_input` hands a DOWNSTREAM
+step covering several partitions a `{partition_key: obj}` mapping too — so the next backfill got one
+stage further and died on the input type check:
+
+    Type check failed for step input "raw_price_history" - expected type "[Dict[String,Any]]"
+
+with the provider paid a second time and 96 raw files already on disk. **A backfill policy that
+hands an asset every partition at once changes the shape at EVERY seam in the lane**, not only at
+the one that failed first. Fix both ends together: a `_by_partition` on the way out and a
+`_loaded_rows` on the way in, with the input annotated `Any` so Dagster's check does not reject the
+mapping. The reason this survived the first fix is worth naming — the write had a test and the read
+did not, because **no test had ever materialised stage 2 at all**. A test that drives only the
+stage that broke cannot see the stage after it.
+
+Three adjacent traps, each naming neither cause nor fix:
+
+* `has_asset_partitions` is an **OutputContext** attribute. An asset context has `has_partition_key`
+  and `has_partition_key_range`; reaching for the wrong one is a bare `AttributeError` inside the op.
+* Dagster derives a DagsterType from the return annotation and **refuses a union** — an asset whose
+  shape depends on the run returns `Any`.
+* `dg.materialize` has no `asset_selection`; a partition range goes through the
+  `dagster/asset_partition_range_{start,end}` tags.
+
+### Do not accumulate a whole backfill in memory
+
+The history lane holds its entire page before returning. 96 securities × ~7,300 bars is fine; the
+full universe at 10,894 × 7,300 is 80 M rows and is not. **A full load is several backfills of a few
+hundred subjects**, not one of everything.
+
 ### Do not write an artifact only your own loader can read
 
 An empty partition written as `pa.table({})` is a Parquet file with **zero columns**. DuckDB:
