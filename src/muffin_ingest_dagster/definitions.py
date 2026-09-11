@@ -31,7 +31,7 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest import settings
-from muffin_ingest_dagster.assets import prices
+from muffin_ingest_dagster.assets import fx, prices
 from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager
 from muffin_ingest_dagster.resources import Postgres
 from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
@@ -122,6 +122,17 @@ daily_prices = dg.build_schedule_from_partitioned_job(
     default_status=dg.DefaultScheduleStatus.STOPPED,
 )
 
+#: The FX cross-section, stopped for the same reason and on the same terms: 43 requests a day is
+#: cheap, but a schedule started before anyone has compared its output against `market.fx_rate` is
+#: still spending a budget on numbers nobody has checked.
+daily_fx = dg.build_schedule_from_partitioned_job(
+    dg.define_asset_job(
+        "daily_fx",
+        selection=dg.AssetSelection.assets(fx.raw_fx_spot, fx.fx_rate),
+    ),
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+)
+
 
 defs = dg.Definitions(
     assets=[
@@ -135,11 +146,17 @@ defs = dg.Definitions(
         # Derived from the bars, eager on both lanes — no cron offset, which is what the old
         # system's :24/:54/:14 choreography was for.
         prices.security_return,
+        # FX, in the same two lanes — a daily cross-section that claims completeness, and a
+        # per-currency history whose subject IS the slice.
+        fx.raw_fx_spot,
+        fx.fx_rate,
+        fx.raw_fx_history,
+        fx.fx_rate_history,
     ],
     asset_checks=[every_symbol_keyed_facet_retracts],
     jobs=[prune_dagster_storage],
-    schedules=[ledger_heartbeat, nightly_pruning, daily_prices],
-    sensors=[prices.new_securities_need_history],
+    schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx],
+    sensors=[prices.new_securities_need_history, fx.new_currencies_need_history],
     resources={
         "postgres": Postgres(),
         # ONE MANAGER PER STORAGE CLASS, never one per asset — which is what makes the writers'

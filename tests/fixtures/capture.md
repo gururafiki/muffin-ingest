@@ -43,3 +43,31 @@ PY
 **The symbols are chosen, not arbitrary.** A US line, a Korean one whose session sits on the far
 side of UTC, and two the old pipeline disagreed with the provider about (`QIBK.QA`, `SQM-B.SN`) —
 so a re-capture keeps covering the cases that have already gone wrong once.
+
+## `fx_chart.json` — Yahoo's chart endpoint, captured 2026-09-11
+
+Five cases, chosen so each answers a question the others cannot. Every one of them turned out to
+carry a fact the code had guessed at:
+
+| case | what it pins |
+|---|---|
+| `eur_spot` | 6 points over a 5-day window with **a null among them** — `closes[-1]` is not safe |
+| `ils_history` | **524** weekly points over ten years; the subunit parent for ILA |
+| `gel_history` | **ONE** point, dated today — a history fetch that SUCCEEDS and loads nothing |
+| `unknown_pair` | **HTTP 404** with `{"code": "Not Found", "description": "No data found…"}` |
+| `twd_inverted` | `USDTWD=X` returns **31.60**, which the plausibility band must refuse |
+
+`unknown_pair` is why the capture was worth taking. The provider was written to raise on any
+non-200, which would have reported every unquoted currency as a *transport* failure — and since a
+transport failure must never mark a subject absent, the negative cache could never fill and those
+pairs would be re-asked for ever. The status says 404 and the body says the symbol has no data;
+only reading the body tells them apart.
+
+Re-capture: run this against the deployed image, which already carries `httpx`.
+
+```bash
+ssh muffin 'docker exec -i $(docker ps -qf name=muffin_muffin-ingest) python -' \
+  < scripts/capture_fx.py > tests/fixtures/fx_chart.json
+```
+
+The arrays are truncated to 600 points; `ils_history` fits whole.
