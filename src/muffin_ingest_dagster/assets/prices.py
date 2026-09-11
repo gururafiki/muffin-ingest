@@ -23,7 +23,7 @@ same thing.
 # stringifies every annotation and Dagster resolves `context` by comparing the actual class.
 
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -91,6 +91,37 @@ def _fetcher(start: date, end: date) -> Any:
         return openbb.price_history(subjects, start=start, end=end).rows
 
     return fetch
+
+
+def _by_partition(
+    context: AssetExecutionContext,
+    rows: list[dict[str, Any]],
+    *,
+    key: Callable[[dict[str, Any]], str],
+) -> list[dict[str, Any]] | dict[str, list[dict[str, Any]]]:
+    """One object per partition when a run covers several; the rows themselves when it covers one.
+
+    THE SHAPE IS DICTATED BY THE I/O MANAGER AND IT IS NOT OPTIONAL. A `single_run` backfill hands
+    the asset every partition at once, and one file has to be written per partition — so the output
+    has to say which rows belong to which. Returning a flat list works for a single partition and
+    dies at the WRITE for a range, after the provider has already been paid: the first 96-security
+    history backfill fetched everything and then failed on
+
+        does not support persisting an output associated with multiple partitions
+
+    Keeping the single-partition case a plain list is deliberate: it is the overwhelmingly common
+    path, and `UPathIOManager` already handles it.
+    """
+    # `has_asset_partitions` is an OutputContext attribute, not an asset one — reaching for it here
+    # fails with a bare AttributeError inside the op. `has_partition_key` is true for exactly one
+    # key; a single-run backfill covering a range sets `has_partition_key_range` instead.
+    if context.has_partition_key or not context.has_partition_key_range:
+        return rows
+    keys = list(context.partition_keys)
+    out: dict[str, list[dict[str, Any]]] = {k: [] for k in keys}
+    for row in rows:
+        out.setdefault(key(row), []).append(row)
+    return out
 
 
 def _collect(
@@ -229,9 +260,7 @@ def _collect(
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="What yfinance said about the whole universe for this window, unchanged.",
 )
-def raw_price_bars(
-    context: AssetExecutionContext, config: PriceRun, postgres: Postgres
-) -> list[dict[str, Any]]:
+def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: Postgres) -> Any:
     # THE WINDOW'S OWN EXCLUSIVE END, NOT A DAY SUBTRACTED FROM IT — and the subtraction was
     # costing a multiple of the data. Measured against the real hub:
     #
@@ -263,7 +292,7 @@ def raw_price_bars(
     # `rows: 0` IS A LEGITIMATE VALUE and is reported rather than filtered — a chart that cannot
     # draw a zero cannot show a collection that stopped, which is the only thing it is for.
     context.add_output_metadata({"subjects": len(subjects), "rows": len(rows), **stats})
-    return rows
+    return _by_partition(context, rows, key=lambda r: str(r["trade_date"]))
 
 
 @dg.asset(
@@ -308,9 +337,7 @@ def price_bar(
     kinds={"yfinance", "parquet"},
     description="Full history for these securities. Idles at zero; the load is one backfill.",
 )
-def raw_price_history(
-    context: AssetExecutionContext, config: PriceRun, postgres: Postgres
-) -> list[dict[str, Any]]:
+def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres: Postgres) -> Any:
     wanted = set(context.partition_keys)
 
     with postgres.connect() as conn:
@@ -336,7 +363,7 @@ def raw_price_history(
         budget_seconds=config.budget_seconds,
     )
     context.add_output_metadata({"requested": len(wanted), "rows": len(rows), **stats})
-    return rows
+    return _by_partition(context, rows, key=lambda r: str(r["security_id"]))
 
 
 @dg.asset(
