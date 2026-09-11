@@ -161,7 +161,10 @@ daily_prices = dg.build_schedule_from_partitioned_job(
         "daily_prices",
         selection=dg.AssetSelection.assets(prices.raw_price_bars, prices.price_bar),
     ),
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING AS OF THE CUTOVER. It shipped STOPPED deliberately — a schedule spending the provider
+    # budget on numbers nobody had compared was the wrong default — and the comparison has now
+    # happened. The old resources stop in the same change, so if this does not run, nothing does.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
 )
 
 #: The FX cross-section, stopped for the same reason and on the same terms: 43 requests a day is
@@ -177,7 +180,7 @@ daily_indices = dg.build_schedule_from_partitioned_job(
             indices.raw_index_bars, indices.raw_sector_performance, indices.index_return
         ),
     ),
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    default_status=dg.DefaultScheduleStatus.RUNNING,
 )
 
 daily_fx = dg.build_schedule_from_partitioned_job(
@@ -185,7 +188,26 @@ daily_fx = dg.build_schedule_from_partitioned_job(
         "daily_fx",
         selection=dg.AssetSelection.assets(fx.raw_fx_spot, fx.fx_rate),
     ),
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+)
+
+
+# THE AUTOMATION SENSOR SHIPS STOPPED, AND WITHOUT IT `AutomationCondition` DOES NOTHING.
+#
+# `security_return` declares `AutomationCondition.eager()` and had never once fired: measured
+# 2026-09-11, **`AUTO-MATERIALIZE runs ever: 0`** against 48 daemon ticks, all of them from the two
+# standard sensors, while the history load wrote 20 M rows and the returns table sat at the 96
+# securities a hand-run had given it. Dagster creates `default_automation_condition_sensor`
+# automatically and leaves it STOPPED, so the mechanism this design uses to replace the old
+# system's :24/:54/:14 cron choreography was inert.
+#
+# Declared here rather than started in the UI, for the same reason every other control in this
+# repo is: a thing switched on by hand is a thing the next rebuild forgets, and nothing would
+# report it — the runs simply would not happen.
+automation = dg.AutomationConditionSensorDefinition(
+    name="default_automation_condition_sensor",
+    target=dg.AssetSelection.all(),
+    default_status=dg.DefaultSensorStatus.RUNNING,
 )
 
 
@@ -216,7 +238,7 @@ defs = dg.Definitions(
     asset_checks=[every_symbol_keyed_facet_retracts, every_askable_security_was_asked],
     jobs=[prune_dagster_storage],
     schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx, daily_indices],
-    sensors=[prices.new_securities_need_history, fx.new_currencies_need_history],
+    sensors=[prices.new_securities_need_history, fx.new_currencies_need_history, automation],
     resources={
         "postgres": Postgres(),
         # ONE MANAGER PER STORAGE CLASS, never one per asset — which is what makes the writers'

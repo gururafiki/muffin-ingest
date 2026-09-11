@@ -619,3 +619,48 @@ def test_the_cross_section_budget_can_actually_cover_the_universe() -> None:
     )
     # And not absurdly generous either: a budget far past what the work takes stops being a bound.
     assert asset_prices.PriceRun().budget_seconds <= needed * 2
+
+
+def test_the_automation_sensor_is_declared_and_running() -> None:
+    """`AutomationCondition` DOES NOTHING WITHOUT ITS SENSOR, AND THAT SENSOR SHIPS STOPPED.
+
+    `security_return` declares `AutomationCondition.eager()` and had never once fired: measured
+    2026-09-11, **`AUTO-MATERIALIZE runs ever: 0`** against 48 daemon ticks — all of them from the
+    two standard sensors — while the history load wrote 20 M rows and the returns table sat at the
+    96 securities a hand-run had given it.
+
+    Dagster creates `default_automation_condition_sensor` automatically and leaves it STOPPED, so
+    the mechanism this design uses to replace the old system's cron choreography was inert. Nothing
+    reports that: the runs simply do not happen, and every asset that did run reports success.
+
+    Declared here rather than switched on in the UI, because a thing switched on by hand is a thing
+    the next rebuild forgets.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    sensors = {s.name: s for s in (d.defs.sensors or [])}
+    assert "default_automation_condition_sensor" in sensors, (
+        "the eager conditions on the derived assets are inert without it"
+    )
+    assert sensors["default_automation_condition_sensor"].default_status is (
+        dg.DefaultSensorStatus.RUNNING
+    )
+
+
+def test_every_collection_schedule_is_running() -> None:
+    """They shipped STOPPED deliberately — a schedule spending the provider budget on numbers
+    nobody had compared was the wrong default — and the comparison has now happened.
+
+    The cutover disables the ten old resources in the same change, so if these do not run, NOTHING
+    collects. Asserted rather than remembered, because "start the schedules" is exactly the kind of
+    step a runbook loses.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    collecting = {"daily_prices_schedule", "daily_fx_schedule", "daily_indices_schedule"}
+    running = {
+        s.name
+        for s in (d.defs.schedules or [])
+        if s.default_status is dg.DefaultScheduleStatus.RUNNING
+    }
+    assert collecting <= running, f"not running: {sorted(collecting - running)}"
