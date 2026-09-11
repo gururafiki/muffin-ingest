@@ -87,6 +87,48 @@ def every_symbol_keyed_facet_retracts(postgres: Postgres) -> dg.AssetCheckResult
     )
 
 
+@dg.asset_check(asset=prices.raw_price_bars, blocking=False)
+def every_askable_security_was_asked(
+    context: dg.AssetCheckExecutionContext,
+) -> dg.AssetCheckResult:
+    """A DAY-PARTITIONED ASSET CLAIMS ITS WHOLE CROSS-SECTION, so a run that stopped early lies.
+
+    This is the claim the entire partitioning argument rests on. "Did the collection run on
+    Tuesday?" is unanswerable from `price_bar` — a security with no bar looks identical whether its
+    market was shut, its symbol is dead, or nothing ran at all — so MATERIALISING THE PARTITION is
+    the answer. A run that spends its budget with subjects still unasked materialises the partition
+    anyway, and the claim quietly becomes false.
+
+    Measured: 200 securities took 244 s, so ~1.22 s each and the 11,446 askable equities are **3.9
+    hours**. The budget was one hour, which would have covered a quarter of them and reported
+    success — the exact shape of `remaining: 0` against a backlog of 9,013.
+
+    WARN, NOT ERROR. A short night is worth seeing and not worth failing a pipeline over, and a
+    check that takes the lane down because a provider was slow is a check someone disables.
+    """
+    key = prices.raw_price_bars.key
+    event = context.instance.get_latest_materialization_events([key]).get(key)
+    materialization = event.asset_materialization if event is not None else None
+    unasked = 0
+    partition = "none"
+    subjects = 0
+    if materialization is not None:
+        partition = materialization.partition or "none"
+        unasked = int(getattr(materialization.metadata.get("unasked"), "value", 0) or 0)
+        subjects = int(getattr(materialization.metadata.get("subjects"), "value", 0) or 0)
+
+    return dg.AssetCheckResult(
+        passed=unasked == 0,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "unasked": unasked,
+            "subjects": subjects,
+            "partition": partition,
+            "note": "a partition claims its whole cross-section; unasked subjects make that false",
+        },
+    )
+
+
 # HOURLY, AND THE SCHEDULE IS PART OF WHAT IS BEING SMOKE-TESTED. A smoke asset nobody runs proves
 # the code location parses; running it on a schedule proves the DAEMON is alive, the run queue
 # accepts work, a subprocess launches and the database is reachable from inside one — which is the
@@ -171,7 +213,7 @@ defs = dg.Definitions(
         indices.raw_sector_performance,
         indices.index_return,
     ],
-    asset_checks=[every_symbol_keyed_facet_retracts],
+    asset_checks=[every_symbol_keyed_facet_retracts, every_askable_security_was_asked],
     jobs=[prune_dagster_storage],
     schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx, daily_indices],
     sensors=[prices.new_securities_need_history, fx.new_currencies_need_history],

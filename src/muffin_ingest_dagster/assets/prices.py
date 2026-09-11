@@ -85,9 +85,16 @@ class PriceRun(dg.Config):
 
     #: Cap the universe. For a dual-run comparison or a first look, never for steady state.
     limit: int | None = None
-    #: Wall-clock budget. A run that stops early leaves its partition unmaterialised, which is
-    #: visible; one that runs for ever is not.
-    budget_seconds: int = 3600
+    #: Wall-clock budget. MEASURED, NOT CHOSEN: 200 securities took 244 s, so the cross-section is
+    #: ~1.22 s each and the 11,446 askable equities are **3.9 hours**. At the old default of one
+    #: hour a nightly run covered a quarter of the universe and stopped — while its partition still
+    #: claimed to have collected the whole cross-section, which is the false claim this design
+    #: exists to make impossible. Five hours leaves headroom for a slow night.
+    #:
+    #: IT HOLDS THE `yfinance` POOL FOR THAT WHOLE TIME, so the history lane cannot run beside it.
+    #: That is correct once history idles at zero, and is why the initial load runs before the
+    #: schedule is started rather than beside it.
+    budget_seconds: int = 18000
 
 
 def _fetcher(start: date, end: date) -> Any:
