@@ -169,6 +169,10 @@ def _by_partition(
     """
     if context.has_partition_key or not context.has_partition_key_range:
         return rows
+    # A RANGE OF EXACTLY ONE IS NOT A RANGE — `UPathIOManager` takes its single-partition path and
+    # would be handed a mapping to write. See the note in `assets/prices.py`.
+    if len(list(context.partition_keys)) == 1:
+        return rows
     out: dict[str, list[dict[str, Any]]] = {key: [] for key in context.partition_keys}
     for row in rows:
         out.setdefault(str(row["currency_code"]), []).append(row)

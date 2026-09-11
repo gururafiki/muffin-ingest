@@ -515,3 +515,54 @@ def test_the_index_lane_cuts_the_TOP_of_its_lookback_series(tmp_path: Path) -> N
         f"stored {[d for (d,) in dates]} — the lookback below the window is wanted, the session "
         f"above it is not"
     )
+
+
+def test_a_range_of_exactly_one_partition_is_written_as_one_partition(tmp_path: Path) -> None:
+    """A RANGE OF ONE IS NOT A RANGE, AND THE I/O MANAGER DISAGREES ABOUT WHICH IT IS.
+
+    `BackfillPolicy.multi_run` groups CONTIGUOUS partitions, so a backfill whose keys are scattered
+    through the partition set produces ONE RUN PER PARTITION — each carrying a
+    `partition_key_range` whose start equals its end. `_by_partition` saw the range and returned a
+    mapping; `UPathIOManager` saw one partition and took its single-partition path, handing the
+    mapping straight to the writer:
+
+        AttributeError: 'str' object has no attribute 'get'
+
+    — naming neither the partition nor the shape. Measured in production: 250 requested partitions
+    became 250 single-partition runs and the first three failed exactly this way.
+
+    The tags below are what Dagster itself sets for such a run, so this drives the real shape rather
+    than a described one.
+    """
+    key = "2026-09-08"
+    rows = list(CAPTURED["batch_mixed_venues"]["rows"])
+
+    def one_day(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(rows=rows)
+
+    saved_fetch, saved_universe = openbb.price_history, list(fakes.UNIVERSE)
+    openbb.price_history = one_day
+    fakes.UNIVERSE[:] = BATCH_SUBJECTS
+    try:
+        result = dg.materialize(
+            [asset_prices.raw_price_bars],
+            # START AND END THE SAME KEY — a "range" of one, which is what a scattered backfill
+            # produces and what `partition_key=` does not exercise.
+            tags={
+                "dagster/asset_partition_range_start": key,
+                "dagster/asset_partition_range_end": key,
+            },
+            resources={
+                "postgres": fakes.FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        openbb.price_history = saved_fetch
+        fakes.UNIVERSE[:] = saved_universe
+
+    assert result.success, "a one-partition range must write as a single partition"
+    written = sorted(p.stem for p in (tmp_path / "raw_price_bars").glob("*.parquet"))
+    assert written == [key]
+    got = sql(tmp_path / "raw_price_bars" / f"{key}.parquet", "select count(*) from {f}")
+    assert got[0][0] > 0, "and it must hold rows rather than a serialised mapping"

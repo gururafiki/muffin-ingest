@@ -125,10 +125,24 @@ def _by_partition(
     """
     # `has_asset_partitions` is an OutputContext attribute, not an asset one — reaching for it here
     # fails with a bare AttributeError inside the op. `has_partition_key` is true for exactly one
-    # key; a single-run backfill covering a range sets `has_partition_key_range` instead.
+    # key; a run covering a range sets `has_partition_key_range` instead.
     if context.has_partition_key or not context.has_partition_key_range:
         return rows
+
     keys = list(context.partition_keys)
+    # A RANGE OF EXACTLY ONE IS NOT A RANGE, AND THE I/O MANAGER DISAGREES ABOUT WHICH IT IS.
+    #
+    # `multi_run` groups CONTIGUOUS partitions, so a backfill whose keys are scattered through the
+    # partition set produces one run per partition — each with a `partition_key_range` whose start
+    # equals its end. This function then returned a MAPPING while `UPathIOManager` took its
+    # single-partition path and handed the mapping to the writer, which died on
+    #
+    #     AttributeError: 'str' object has no attribute 'get'
+    #
+    # naming neither the partition nor the shape. Measured in production: 250 requested partitions
+    # became 250 single-partition runs and the first three all failed this way.
+    if len(keys) == 1:
+        return rows
     out: dict[str, list[dict[str, Any]]] = {k: [] for k in keys}
     for row in rows:
         out.setdefault(key(row), []).append(row)
