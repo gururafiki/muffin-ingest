@@ -19,6 +19,7 @@ plausibility band, and subunits being DERIVED rather than fetched.
 # No `from __future__ import annotations` — Dagster resolves `context` by comparing the class.
 
 import time
+from datetime import date
 from typing import Any
 
 import dagster as dg
@@ -69,6 +70,7 @@ def _collect(
     range_: str,
     interval: str,
     budget_seconds: int,
+    window: tuple[date, date] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     """Ask for each currency in turn and return raw rows plus what the asking established.
 
@@ -83,7 +85,18 @@ def _collect(
     """
     deadline = time.monotonic() + budget_seconds
     rows: list[dict[str, Any]] = []
-    stats = {"calls": 0, "answered": 0, "empty": 0, "transport": 0, "unasked": 0, "points": 0}
+    stats = {
+        "calls": 0,
+        "answered": 0,
+        "empty": 0,
+        "transport": 0,
+        "unasked": 0,
+        "points": 0,
+        # Points the provider returned that do not belong to the window we asked for. Counted
+        # rather than dropped in silence: a non-zero value is a statement about the PROVIDER's idea
+        # of a range, and the day it becomes zero is the day this filter stopped being needed.
+        "outside_window": 0,
+    }
     empty: list[str] = []
     last_error: str | None = None
     consecutive_transport = 0
@@ -112,6 +125,12 @@ def _collect(
             continue
 
         consecutive_transport = 0
+        if window is not None:
+            start, end = window
+            kept = [p for p in points if start <= p.as_of < end]
+            stats["outside_window"] += len(points) - len(kept)
+            points = kept
+
         if not points:
             stats["empty"] += 1
             empty.append(currency)
@@ -168,31 +187,43 @@ def _loaded_rows(loaded: Any) -> list[dict[str, Any]]:
     description="Every tracked currency's latest close against USD, as the provider gave it.",
 )
 def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgres) -> Any:
+    """THE PARTITION'S OWN DAY, NOT THE NEWEST THING THE PROVIDER HAS.
+
+    A five-day range is requested so the partition's day is certainly inside what comes back — a
+    weekend, a holiday, or a provider that pads. It is NOT requested so that five days can be
+    stored, and the first version of this asset took the newest point instead: a run for the
+    2026-09-10 partition wrote 42 rates dated **2026-09-11**.
+
+    Both halves of that are wrong. A partition claims to have collected its own window, so writing
+    another day's value makes the claim false; and 09-11 was a session still in progress, which is
+    precisely what this pipeline refuses to publish for prices — a mid-session quote is not a close,
+    and it looks exactly like one.
+
+    A day with no rate therefore materialises EMPTY, which is the honest answer: there is no Sunday
+    exchange rate, and the I/O manager's empty-partition marker says "collected, nothing there"
+    rather than leaving a hole indistinguishable from a run that never happened.
+    """
+    # Indexed rather than `.start`/`.end`, matching the price lane — and with `single_run` this
+    # covers the WHOLE backfilled range, so the filter is right for a range as well as a day.
+    window = context.partition_time_window
+    start, end = window[0].date(), window[1].date()
     with postgres.connect() as conn:
         currencies = fx.askable_currencies(conn, include_absent=config.include_absent)
     if config.limit is not None:
         currencies = currencies[: config.limit]
 
-    context.log.info("spot for %s currencies", len(currencies))
+    context.log.info("spot for %s currencies over %s..%s", len(currencies), start, end)
     rows, stats = _collect(
         context,
         currencies,
         range_=SPOT_RANGE,
         interval="1d",
         budget_seconds=config.budget_seconds,
+        window=(start, end),
     )
 
-    # ONE ROW PER CURRENCY, THE NEWEST. The five-day window exists so a weekend still yields a real
-    # close, not so five of them are stored — and the window's older days belong to earlier
-    # partitions, which already claimed them.
-    newest: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        code = str(row["currency_code"])
-        if code not in newest or str(row["as_of"]) > str(newest[code]["as_of"]):
-            newest[code] = row
-
-    context.add_output_metadata({**stats, "rows": len(newest), "currencies": len(currencies)})
-    return list(newest.values())
+    context.add_output_metadata({**stats, "rows": len(rows), "currencies": len(currencies)})
+    return rows
 
 
 @dg.asset(
