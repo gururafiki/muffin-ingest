@@ -322,6 +322,41 @@ Count both drops. `live_dropped` non-zero is normal during a session and zero af
 `nulls_dropped` says the provider is padding. **Capture the `meta` with the fixture** — the first
 capture here omitted it, and that omission is what let both defects ship.
 
+### A DATE MUST COME FROM THE DATA — four times in one family, in four different disguises
+
+Every one of these produced a plausible number with a wrong date, and none was visible to a test:
+
+1. **The clock.** `as_of = date.today()` on a derived asset claims a figure is current when its
+   newest input may be days old.
+2. **The window's anchor.** Measuring the window from `now` while measuring the value from the last
+   bar makes the same bars give different numbers on different days.
+3. **A partition key, for a source that has no dates at all.** A snapshot provider answers "as of
+   now"; stamping its answer with the partition being materialised misdates it by however long ago
+   that partition was.
+4. **The TOP of a lookback series.** A lane asking for 1,900 days *up to the partition's end*
+   brings back today's in-progress bar, and the newest close is then a mid-session price. The first
+   three were all at the BOTTOM of a window, which is exactly why this one was not looked for.
+
+The rule that covers all four: **the date travels with the data.** Stamp from the last input
+actually used; anchor windows on the data; cut a series at BOTH ends of the partition's window; and
+where a source genuinely has no date, record when it was READ, in the raw artifact, so nothing
+downstream has to invent one.
+
+### A source that cannot be asked about a past day must not be date-partitioned
+
+finviz answers "as of now" and carries no date — it cannot be backfilled. A daily partition there
+claims something the source cannot support.
+
+**And the obvious guard is worse than the defect.** Refusing a partition whose window has closed
+looks right and can never collect anything: with `end_offset` at 0 the newest *materialisable*
+partition is always yesterday, so today is always outside it. It would have run for ever, collecting
+nothing, reporting success. Only working out what it would do in production caught it — the test
+used a deliberately-closed window and passed for the same reason the real thing would have failed.
+
+There is exactly one current snapshot, and the materialisation event is already the record of when
+it was taken. Leave it unpartitioned; let its consumers stay partitioned, because their inputs
+genuinely do have dates.
+
 ### Do not map a many-to-one relation with a dict comprehension
 
 `{symbol: code for code, symbol in scopes}` keeps the LAST code per symbol. Measured: 62 index
