@@ -302,6 +302,37 @@ current for ever. Keep that one use and pass it separately.
 tell "anchored on the clock" from "anchored on the last bar". Make the series end well before `now`
 and the rules disagree.
 
+### Do not read a provider's timestamp in UTC, and do not assume the last point is a bar
+
+Two facts that live in a chart response's `meta` block and nowhere else, both of which cost a
+production run:
+
+* **A bar is dated in its EXCHANGE's timezone.** An FX daily bar is stamped at the session's *open*
+  in `exchangeTimezoneName` — `Europe/London` — so the 2026-09-10 session arrives as
+  `2026-09-09T23:00Z`. A UTC `.date()` dates every bar a day early, and a partition filtering to
+  its own window then discards the lot: `outside_window=190`, 38 currencies × 5 points, **writing
+  nothing while reporting success**. Read `gmtoffset` from the response; never assume a venue.
+* **The last point is often a LIVE QUOTE, not a completed bar**, and it is exactly identifiable:
+  its timestamp *equals* `regularMarketTime`. Storing it publishes a mid-session price wearing a
+  close's clothes — the defect that makes the resource being replaced disagree with this one.
+  `GELUSD=X` is the extreme: its only point is the live quote, so the provider has no completed bar
+  for the lari at all, which is what the negative cache needs to hear.
+
+Count both drops. `live_dropped` non-zero is normal during a session and zero after it closes;
+`nulls_dropped` says the provider is padding. **Capture the `meta` with the fixture** — the first
+capture here omitted it, and that omission is what let both defects ship.
+
+### Do not map a many-to-one relation with a dict comprehension
+
+`{symbol: code for code, symbol in scopes}` keeps the LAST code per symbol. Measured: 62 index
+scopes over **53 distinct symbols** — `EEM` backs three of them, `IVV` backs three including
+`country:US` — so nine scopes silently got no data. The run said `answered=52` beside `empty=0`,
+two numbers that cannot both be right, and that was the only trace.
+
+It is usually not a modelling error. Those scopes genuinely *are* the same index; the relation is
+many-to-one and has to be stored as one. **Make the counters count the thing you care about** — here
+`answered` counting scopes rather than symbols is what stops the two figures from disagreeing.
+
 ### Do not write an artifact only your own loader can read
 
 An empty partition written as `pa.table({})` is a Parquet file with **zero columns**. DuckDB:
