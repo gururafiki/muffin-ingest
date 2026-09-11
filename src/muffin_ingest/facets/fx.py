@@ -117,7 +117,25 @@ def raw_rows(
     ]
 
 
-def normalise(rows: Sequence[dict[str, Any]], *, source_code: str = "yahoo") -> list[Rate]:
+#: THE SOURCE IS `yfinance`, NOT `yahoo`, AND THAT IS DELIBERATE DESPITE THE CALL BEING DIRECT.
+#:
+#: `market.data_source` names the VENDOR, and this schema has always called Yahoo `yfinance` — all
+#: 22,236 existing `fx_rate` rows say so, written by a resource that also called
+#: `query2.finance.yahoo.com/v8/finance/chart` directly. Whether our side reaches it through a
+#: Python library or over HTTP is a fact about us, not about who published the number.
+#:
+#: Seeding a second code for one vendor would split the table and make "which source said this"
+#: ambiguous — the same-fact-in-two-places drift this codebase keeps paying for. It would also cost
+#: a migration and therefore a deploy, to record a distinction nobody reading the data wants.
+#:
+#: The first run found this the way the rule says it will: `source_code` is a foreign key, the code
+#: was not seeded, and the whole write failed with `fx_rate_source_code_fkey` AFTER the provider had
+#: answered all 38 currencies. "A resource that writes a new source_code must seed it in the same
+#: migration, and nothing downstream can catch the omission."
+SOURCE_CODE = "yfinance"
+
+
+def normalise(rows: Sequence[dict[str, Any]], *, source_code: str = SOURCE_CODE) -> list[Rate]:
     """Raw points to typed rates, dropping anything the band refuses.
 
     DROPPED, NOT CORRECTED, AND COUNTED BY THE CALLER. An implausible rate is most likely an
@@ -175,7 +193,7 @@ def with_subunits(rates: Sequence[Rate]) -> list[Rate]:
     return out
 
 
-def core_rows(rates: Sequence[Rate], *, source_code: str = "yahoo") -> list[dict[str, Any]]:
+def core_rows(rates: Sequence[Rate], *, source_code: str = SOURCE_CODE) -> list[dict[str, Any]]:
     """Typed rates as `market.fx_rate` rows."""
     return [
         {
