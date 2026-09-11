@@ -134,10 +134,10 @@ class Subject:
 #: Securities that are equities, that this provider has a name for, and that the ledger has not
 #: recorded as unanswerable.
 #:
-#: THE LEFT JOIN IS THE WHOLE POINT AND IT IS CORRECT BEFORE THE FACET EXISTS. `ingest.task` holds
-#: no `price_daily` rows until a cutover migration seeds them, and a LEFT JOIN excludes nothing when
-#: there is nothing to exclude — so this query is right on day one and stays right afterwards,
-#: rather than needing to be revisited at exactly the moment it starts to matter.
+#: THE LEFT JOIN IS CORRECT BEFORE THE FACET EXISTS. `ingest.task` held no `prices` rows until the
+#: facet was seeded, and a LEFT JOIN excludes nothing when there is nothing to exclude — so this
+#: query was right on day one and stayed right afterwards, rather than needing to be revisited at
+#: exactly the moment it started to matter.
 #:
 #: `coalesce(provider_symbol, ticker)`, never the ticker first: OpenFIGI's US lookup is a thin OTC
 #: foreign-ordinary line for most foreign companies, and pricing off it prices a different
@@ -151,8 +151,14 @@ select s.security_id::text,
   left join market.security_provider_symbol ps
          on ps.security_id = s.security_id and ps.provider_code = %s
   left join market.fund_holding_current h on h.security_id = s.security_id
+  -- AN ABSENCE EXPIRES, AND THE FIRST VERSION OF THIS JOIN MADE IT PERMANENT. `mark_absent` sets
+  -- `next_due_at = now() + absent_ttl` precisely so a 30-day mark is thirty days and not for ever —
+  -- a security can gain a listing, and a symbol repair must be allowed to prove the provider wrong.
+  -- Matching on `status = 'absent'` alone ignored that and would have locked a security out
+  -- permanently on one bad afternoon, which is the 1,369-security incident's exact shape.
   left join ingest.task t
-         on t.facet = %s and t.security_id = s.security_id and t.status = 'absent'
+         on t.facet = %s and t.security_id = s.security_id
+        and t.status = 'absent' and t.next_due_at > now()
  where s.security_type_code = 'equity'
    and coalesce(ps.symbol, sym.symbol) is not null
    and t.subject is null
@@ -161,8 +167,15 @@ select s.security_id::text,
 """
 
 
+#: THE LEDGER'S NAME FOR THIS FACET, DECLARED ONCE. It was defaulted to `price_daily` here and
+#: seeded as `prices` in the migration — two spellings of one thing, so the join that excludes an
+#: absent security would have matched NOTHING and marking would have had no effect at all, silently.
+#: Every count would have looked right: the marks would be written and never read.
+FACET = "prices"
+
+
 def askable_subjects(
-    conn: Any, *, provider: str = "yfinance", facet: str = "price_daily", limit: int | None = None
+    conn: Any, *, provider: str = "yfinance", facet: str = FACET, limit: int | None = None
 ) -> list[Subject]:
     """The universe this run will ask about, heaviest holdings first."""
     sql = ASKABLE_SUBJECTS + (" limit %s" if limit is not None else "")
