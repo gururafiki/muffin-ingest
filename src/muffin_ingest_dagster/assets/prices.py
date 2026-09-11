@@ -503,6 +503,18 @@ def security_return(
                     # rules exist to withhold.
                     continue
                 stats["with_returns"] += 1
+                # THE DATE OF THE LAST BAR ACTUALLY USED, NEVER THE RUN'S OWN DATE. Every one of
+                # these returns is `series[-1].close` over an anchor, so stamping `today` claims a
+                # number is current when its newest input may be days old — a market closed for a
+                # holiday, a series the provider has stopped updating, or simply a run that fires
+                # before a venue's close.
+                #
+                # Found by the returns parity gate, where it made the comparison meaningless rather
+                # than merely mislabelled: the old resource refreshed at 10:55 UTC on 09-10 with
+                # 09-09 as its newest US bar, ours held 09-10, and SCCO moved -7.2% on the day
+                # between them. Both sides were arithmetically right and one trading day apart,
+                # and with `as_of` stamped from the clock nothing in either table said so.
+                as_of = bars[-1].trade_date
                 for period in sorted(set(priced) | set(total)):
                     stats["periods"] += 1
                     stats["with_total_return"] += total.get(period) is not None
@@ -510,7 +522,7 @@ def security_return(
                         {
                             "security_id": security_id,
                             "period_code": period,
-                            "as_of": today.isoformat(),
+                            "as_of": as_of.isoformat(),
                             "price_return_pct": priced.get(period),
                             # NEVER COALESCED TO THE PRICE RETURN. NULL means "not computed" — no
                             # dividend data, or a series ineligible for the window — and filling it

@@ -10,8 +10,9 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import dagster as dg
 import pytest
@@ -343,3 +344,83 @@ def test_the_two_lanes_have_opposite_backfill_policies_and_that_is_deliberate() 
         "96 securities reached 2.4 GB against a 2.5 GB container; the budget has ~600 MB of "
         "headroom at 25 and none at all near 96"
     )
+
+
+class ReturnsConn:
+    """A conn that answers the two queries `security_return` makes, with a series that ENDS IN THE
+    PAST — which is the whole point of the test below."""
+
+    def __init__(self, last_bar: date, days: int = 500) -> None:
+        self.last_bar = last_bar
+        self.days = days
+        self._sql = ""
+
+    def cursor(self) -> ReturnsConn:
+        return self
+
+    def __enter__(self) -> ReturnsConn:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = ()) -> None:
+        self._sql = sql
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        sid = "11111111-1111-1111-1111-111111111111"
+        if "group by pb.security_id" in self._sql:
+            return [(sid,)]
+        # A series that MOVES every day, so no window is refused for being flat.
+        return [
+            (sid, self.last_bar - timedelta(days=n), 100.0 + n, 1_000, None)
+            for n in range(self.days, -1, -1)
+        ]
+
+    def commit(self) -> None:
+        return None
+
+
+class ReturnsPostgres(Postgres):
+    last_bar_offset: int = 1
+
+    @contextmanager
+    def connect(self) -> Iterator[Any]:
+        yield ReturnsConn(date.today() - timedelta(days=self.last_bar_offset))
+
+
+def test_a_return_is_stamped_with_the_last_bar_it_used_not_with_the_run_s_own_date() -> None:
+    """A NUMBER THAT IS NOT WHAT ITS NAME SAYS, and the returns parity gate is what exposed it.
+
+    Every one of these returns is `series[-1].close` over an anchor, so stamping `date.today()`
+    claims the figure is current when its newest input may be days old — a venue closed for a
+    holiday, a series the provider has stopped updating, or a run firing before a market's close.
+
+    It was not merely cosmetic. The old resource refreshed at 10:55 UTC on 2026-09-10 holding
+    09-09 as its newest US bar; ours held 09-10; SCCO moved -7.2% on the day between them. Both
+    sides were arithmetically correct and one trading day apart, and with `as_of` taken from the
+    clock there was nothing in either table that could say so — which made the comparison read as
+    a 57% disagreement rather than as an offset.
+    """
+    rows = dg.materialize(
+        [asset_prices.security_return],
+        selection=[asset_prices.security_return],
+        resources={"postgres": ReturnsPostgres(), "postgres_io": _Capture()},
+    )
+    assert rows.success
+
+    stamped = {r["as_of"] for r in _Capture.last}
+    assert stamped == {(date.today() - timedelta(days=1)).isoformat()}, (
+        f"stamped {stamped} — a run on a series whose newest bar is yesterday must say yesterday, "
+        f"not {date.today().isoformat()}"
+    )
+
+
+class _Capture(dg.ConfigurableIOManager):
+    last: ClassVar[list[dict[str, Any]]] = []
+
+    def handle_output(self, context: dg.OutputContext, obj: Any) -> None:
+        _Capture.last = list(obj)
+
+    def load_input(self, context: dg.InputContext) -> Any:
+        raise NotImplementedError

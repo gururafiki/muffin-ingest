@@ -6,6 +6,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from muffin_ingest.derive import returns
 from muffin_ingest.derive.returns import (
     PERIOD_DAYS,
     first_comparable_index,
@@ -273,3 +274,53 @@ def test_what_these_tests_prove_and_what_they_do_not() -> None:
     meaningful — but it is a PARITY RUN against 200 securities and every period, not a unit test,
     and it is the gate before the old resource is switched off.
     """
+
+
+def test_the_same_bars_give_the_same_returns_whatever_day_the_job_runs() -> None:
+    """AN ASSET RE-RUN OVER UNCHANGED INPUTS MUST NOT PRODUCE A DIFFERENT NUMBER, and until the
+    windows were anchored on the last bar this one did.
+
+    `price_returns` measures the VALUE from `series[-1]` and used to measure the WINDOW from
+    wall-clock `now`, so a 3-month return over a series ending on a Friday started three months
+    before Friday when the job ran on Friday and three months before the following Wednesday when
+    it ran on Wednesday — silently including or dropping a bar at the far end. Nothing reported it;
+    the number simply moved.
+
+    Measured consequence: the returns parity gate reported 57% disagreement with the old resource,
+    and 21% of the sampled disagreements were reproduced EXACTLY by recomputing over our own
+    unchanged bars with the last bar as the basis. The old resource had always anchored that way.
+
+    The fixture makes the two rules disagree on purpose — the series ends well before `now`, so a
+    clock-anchored window and a data-anchored one cannot pick the same bar.
+    """
+    last = date(2026, 6, 30)
+    series = [
+        Bar(trade_date=last - timedelta(days=n), close=100.0 + (n % 37) + n * 0.05)
+        for n in range(420, -1, -1)
+    ]
+
+    on_the_day = returns.price_returns(series, last)
+    a_week_later = returns.price_returns(series, last + timedelta(days=7))
+
+    assert on_the_day, "the fixture must actually produce returns or this asserts nothing"
+    assert on_the_day == a_week_later, (
+        "the same bars produced different returns a week apart — the window is being measured "
+        "from the clock while the value is measured from the last bar"
+    )
+
+
+def test_staleness_still_reads_the_CLOCK_and_not_the_data() -> None:
+    """THE OTHER HALF OF THAT SPLIT, and deleting it would be invisible in the test above.
+
+    `now` still has one job: deciding whether a series is being updated at all. Only a clock can
+    answer that — a series anchored entirely on its own last bar would call a dead listing perfectly
+    current for ever, which is precisely the state `STALE_DAYS` exists to refuse.
+    """
+    last = date(2026, 6, 30)
+    series = [Bar(trade_date=last - timedelta(days=n), close=100.0 + n) for n in range(60, -1, -1)]
+
+    assert returns.price_returns(series, last), "fresh at its own last bar"
+    long_after = last + timedelta(days=returns.STALE_DAYS + 5)
+    assert returns.price_returns(series, long_after) == {}, (
+        "a series whose newest bar is weeks old must yield nothing, however well-formed it is"
+    )

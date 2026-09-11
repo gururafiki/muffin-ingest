@@ -282,6 +282,26 @@ both rules. The difference is in how many rows were SENT and in the collapse cou
 so assert `rows sent == rows written`. And the fixture has to put the repeat past a chunk boundary,
 or every candidate rule agrees and the mutation passes clean.
 
+### Do not let a derived asset read the wall clock for anything but staleness
+
+A derived asset re-run over unchanged inputs must produce an unchanged number. Two clock reads break
+that, and both were live in the price family until a parity gate found them:
+
+* **The window anchor.** A return takes its VALUE from the last bar and used to take its WINDOW from
+  `date.today()` — so a 3-month return over a series ending Friday started three months before
+  Friday on Friday and three months before Wednesday on Wednesday, silently dropping or including a
+  bar at the far end. Anchor the window on the last bar.
+* **The `as_of` label.** Stamping the run's date claims a figure is current when its newest input
+  may be days old. Stamp the date of the last input actually used.
+
+Wall-clock has exactly one legitimate job here: asking whether the series is still being updated.
+Nothing else can answer that — a series judged only against its own last bar calls a dead listing
+current for ever. Keep that one use and pass it separately.
+
+**Both were invisible to every existing test**, because a fixture whose series ends today cannot
+tell "anchored on the clock" from "anchored on the last bar". Make the series end well before `now`
+and the rules disagree.
+
 ### Do not write an artifact only your own loader can read
 
 An empty partition written as `pa.table({})` is a Parquet file with **zero columns**. DuckDB:
