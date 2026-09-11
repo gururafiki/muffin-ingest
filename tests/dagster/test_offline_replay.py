@@ -461,3 +461,57 @@ def test_one_ETF_backing_SEVERAL_scopes_reaches_all_of_them(tmp_path: Path) -> N
         f"only {[c for (c,) in got]} reached the file — a symbol backing several scopes must "
         f"reach every one of them"
     )
+
+
+def test_the_index_lane_cuts_the_TOP_of_its_lookback_series(tmp_path: Path) -> None:
+    """A LOOKBACK SERIES STILL HAS A TOP, AND THIS LANE FORGOT IT.
+
+    `raw_index_bars` asks for 1,900 days up to the partition's `end` so the 5y anchor exists — and
+    a range ending today brings TODAY's bar back with it, which is a session in progress.
+    `index_return` then stamped every country and group `as_of 2026-09-11` from the 09-10 partition,
+    with the newest close a mid-session price.
+
+    Fourth time in this family that a date came from the wrong place, and the first three were all
+    at the BOTTOM of a window — which is why this one was not looked for.
+    """
+    from muffin_ingest.facets import indices as facet_indices
+    from muffin_ingest.providers import openbb as hub
+    from muffin_ingest.providers.openbb import Answer
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    key = "2026-09-10"
+
+    def with_today(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(
+            rows=[
+                {"symbol": "EWZ", "date": "2026-09-08", "close": 30.0},
+                {"symbol": "EWZ", "date": "2026-09-10", "close": 31.0},
+                # The partition's window is [09-10, 09-11); this one is a session in progress.
+                {"symbol": "EWZ", "date": "2026-09-11", "close": 31.5},
+            ]
+        )
+
+    saved_fetch, saved_scopes = hub.price_history, facet_indices.proxied_scopes
+    hub.price_history = with_today
+    facet_indices.proxied_scopes = lambda conn: [("country:BR", "EWZ")]
+    try:
+        result = dg.materialize(
+            [asset_indices.raw_index_bars],
+            partition_key=key,
+            resources={
+                "postgres": FxPostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        hub.price_history, facet_indices.proxied_scopes = saved_fetch, saved_scopes
+
+    assert result.success
+    dates = sql(
+        tmp_path / "raw_index_bars" / f"{key}.parquet",
+        "select distinct trade_date from {f} order by 1",
+    )
+    assert [d for (d,) in dates] == ["2026-09-08", "2026-09-10"], (
+        f"stored {[d for (d,) in dates]} — the lookback below the window is wanted, the session "
+        f"above it is not"
+    )

@@ -93,7 +93,20 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
     )
 
     rows: list[dict[str, Any]] = []
-    stats = {"calls": 0, "answered": 0, "empty": 0, "transport": 0, "bars": 0, "unattributed": 0}
+    stats = {
+        "calls": 0,
+        "answered": 0,
+        "empty": 0,
+        "transport": 0,
+        "bars": 0,
+        "unattributed": 0,
+        # Bars newer than the partition's window. A LOOKBACK SERIES STILL HAS A TOP, and this lane
+        # forgot it: asking for 1,900 days up to `end` brings back TODAY's bar, which is a session
+        # in progress, and `index_return` then stamps every country and group with today's date and
+        # a mid-session price. Measured — country and group rows came out `as_of 2026-09-11` from
+        # the 09-10 partition. Fourth time in this family that a date came from the wrong place.
+        "outside_window": 0,
+    }
     for index in range(0, len(symbols), BATCH):
         batch = symbols[index : index + BATCH]
         stats["calls"] += 1
@@ -105,6 +118,13 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
             continue
 
         parsed = prices.bars_by_symbol(answer.rows, batch[0] if len(batch) == 1 else "")
+        # ONLY THE TOP IS CUT. Everything before `end` is the lookback the long periods need; what
+        # must go is anything the partition does not cover, which for a daily partition is today.
+        for symbol, series in parsed.items():
+            kept = [bar for bar in series if bar.trade_date < end]
+            stats["outside_window"] += len(series) - len(kept)
+            parsed[symbol] = kept
+
         for symbol, series in parsed.items():
             codes = by_symbol.get(symbol) or by_symbol.get(symbol.upper())
             if not codes:
