@@ -82,15 +82,7 @@ def _fetcher(start: date, end: date) -> Any:
     """
 
     def fetch(subjects: Sequence[str], timeout_s: float) -> list[dict[str, object]]:
-        answer = openbb.fetch(
-            "equity.price.historical",
-            symbol=",".join(subjects),
-            provider="yfinance",
-            start_date=start.isoformat(),
-            end_date=end.isoformat(),
-            interval="1d",
-        )
-        return answer.rows
+        return openbb.price_history(subjects, start=start, end=end).rows
 
     return fetch
 
@@ -130,8 +122,13 @@ def _collect(
     last_error: str | None = None
     consecutive_transport = 0
 
+    since_last_call = 0.0
     for i in range(0, len(subjects), batch_size):
         batch = subjects[i : i + batch_size]
+        if since_last_call:
+            wait = PROVIDER.min_seconds_between_calls - (time.monotonic() - since_last_call)
+            if wait > 0:
+                time.sleep(wait)
         if time.monotonic() >= deadline:
             # NOT AN ERROR AND NOT AN ABSENCE. Subjects we never asked about must not look like
             # subjects that answered nothing — that conflation is what once recorded ~8,300
@@ -144,6 +141,7 @@ def _collect(
 
         by_symbol = {s.symbol: s for s in batch}
         stats["calls"] += 1
+        since_last_call = time.monotonic()
         verdict: BatchVerdict = fetch_with_isolation(
             _fetcher(start, end),
             list(by_symbol),

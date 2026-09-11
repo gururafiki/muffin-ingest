@@ -1,8 +1,14 @@
-"""The hub is imported rather than called over HTTP, and these are the reasons.
+"""What the in-process hub keeps that the REST hop destroys, and how a message is read.
 
-Every test drives a FAKE hub. That is not only speed: the CI `checks` job deliberately does not
-install openbb (it is ~250 MB and AGPL), and a seam that can only be tested with the real thing
-installed is a seam nobody tests.
+Every test drives a FAKE result. That is not only speed: the CI `checks` job deliberately does not
+install openbb (~250 MB, AGPL), and a seam that can only be tested with the real thing installed is
+a seam nobody tests.
+
+THERE IS NO ROUTE TABLE TO TEST ANY MORE. There used to be a `ROUTES` dict walked with `getattr`,
+and two tests here asserted its contents. Measured before deleting it: all 26 entries mapped a
+string to ITSELF, and its stated justification — the REST convention being irregular — was about a
+URL this pipeline stopped using when the hub moved in-process. The calls are written out and typed
+now, so the question those tests asked is answered by mypy where the hub is installed.
 """
 
 import re
@@ -38,146 +44,73 @@ class FakeResult:
         self.provider = "yfinance"
 
 
-class FakeHub:
-    """A hub whose dotted paths resolve, recording what it was called with."""
-
-    def __init__(self, result: FakeResult) -> None:
-        self._result = result
-        self.calls: list[dict[str, Any]] = []
-
-        hub = self
-
-        class Node:
-            def __init__(self, depth: int = 0) -> None:
-                self._depth = depth
-
-            def __getattr__(self, name: str) -> "Node":
-                return Node(self._depth + 1)
-
-            def __call__(self, **params: Any) -> FakeResult:
-                hub.calls.append(params)
-                return hub._result
-
-        self._root = Node()
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._root, name)
-
-
 def test_a_throttle_stated_in_a_warning_is_not_an_empty_answer() -> None:
-    """THE WHOLE REASON THIS MODULE EXISTS.
-
-    Alpha Vantage answers an exhausted quota with 200 plus an `Information` field, and openbb's
-    REST hop turns that into an empty 204 — byte-identical to "this symbol has no data". That
-    conflation once recorded ~8,300 securities as permanently unanswerable in an afternoon.
-
-    In-process the warning survives, so the call raises instead of returning a plausible nothing.
-    """
-    hub = FakeHub(
-        FakeResult(
-            results=[],
-            warnings=[
-                FakeWarning(
-                    "Thank you for using Alpha Vantage! Our standard API rate limit is 25 requests"
-                )
-            ],
-        )
+    """THE WHOLE REASON THE HUB IS IMPORTED. Over HTTP this same call is a 200 with no rows —
+    byte-identical to a symbol the provider does not carry — and a caller that cannot tell those
+    apart eventually records a real company as permanently unanswerable."""
+    result = FakeResult(
+        results=[],
+        warnings=[FakeWarning("YFRateLimitError: Too Many Requests. Rate limited.")],
     )
     with pytest.raises(openbb.ProviderRefused):
-        openbb.fetch("equity.fundamental.metrics", hub=hub, symbol="MSFT")
+        openbb.answer_from(result)
 
 
 def test_an_empty_answer_with_no_warning_is_returned_not_raised() -> None:
-    """openbb answers 204 when a provider legitimately has nothing, and that is an ANSWER.
-
-    Strictness belongs at the caller that requires rows. Treating 204 as a failure in the fetcher
-    once failed 22 of 24 batches over a few listings yfinance does not carry, losing the good
-    symbols batched alongside them.
-    """
-    answer = openbb.fetch("equity.profile", hub=FakeHub(FakeResult(results=[])), symbol="ICT.PS")
-    assert answer.empty
+    """openbb answers 204 when a provider legitimately has nothing. Strictness belongs at the
+    caller that requires rows — treating 204 as a failure once failed 22 of 24 batches over a few
+    listings yfinance does not carry."""
+    answer = openbb.answer_from(FakeResult(results=[]))
+    assert answer.rows == []
     assert answer.warnings == []
 
 
 def test_a_warning_that_is_not_a_throttle_is_carried_not_raised() -> None:
-    """A degraded provider is not a refusing one, and the caller may still want the rows."""
-    hub = FakeHub(
-        FakeResult(
-            results=[FakeRow(symbol="AAPL", close=1.0)],
-            warnings=[FakeWarning("Data for 1 symbol was not returned")],
-        )
+    """A provider can degrade itself while still answering. The message travels with the rows so a
+    caller can record it, rather than being turned into a failure nobody asked for."""
+    result = FakeResult(
+        results=[FakeRow(date="2026-09-09", close=1.0)],
+        warnings=[FakeWarning("Symbol Error: No data found for FOO")],
     )
-    answer = openbb.fetch("equity.price.historical", hub=hub, symbol="AAPL")
-    assert answer.rows == [{"symbol": "AAPL", "close": 1.0}]
-    assert answer.warnings == ["Data for 1 symbol was not returned"]
+    answer = openbb.answer_from(result)
+    assert len(answer.rows) == 1
+    assert "No data found" in answer.warnings[0]
 
 
 def test_a_single_result_is_still_a_list_of_rows() -> None:
-    """Some routes return one object rather than a list of them.
-
-    The same shape hazard as a provider adding a `symbol` column only when several symbols are
-    requested: code written against the many-case silently mishandles the one-case.
-    """
-    answer = openbb.fetch(
-        "equity.profile", hub=FakeHub(FakeResult(results=FakeRow(symbol="AAPL"))), symbol="AAPL"
-    )
-    assert answer.rows == [{"symbol": "AAPL"}]
+    """Some routes return one object rather than a list — the same shape problem as a provider
+    adding a `symbol` column only when several symbols are requested."""
+    answer = openbb.answer_from(FakeResult(results=FakeRow(symbol="AAPL", name="Apple")))
+    assert answer.rows == [{"symbol": "AAPL", "name": "Apple"}]
 
 
 def test_no_results_at_all_is_no_rows_rather_than_a_crash() -> None:
-    assert openbb.fetch("equity.profile", hub=FakeHub(FakeResult(results=None))).rows == []
-
-
-def test_an_unknown_route_names_itself() -> None:
-    """An AttributeError deep in the hub reads like an openbb version problem.
-
-    The route table is data precisely so a typo fails here, saying which entry is missing.
-    """
-    with pytest.raises(KeyError, match=re.escape("equity.price.perfomance")):
-        openbb.fetch("equity.price.perfomance", hub=FakeHub(FakeResult()))
-
-
-def test_the_irregular_route_is_in_the_table_under_its_real_name() -> None:
-    """`obb.x.y.z` -> `/api/v1/x/y/z` is NOT perfectly regular, and this is the case that proves it.
-
-    `/equity/price/performance` sits beside `/etf/price_performance`. Anyone "correcting" the
-    second into the pattern gets an AttributeError at runtime, on a route that had been working.
-    """
-    assert openbb.ROUTES["etf.price_performance"] == "etf.price_performance"
-    assert "etf.price.performance" not in openbb.ROUTES
+    assert openbb.answer_from(FakeResult(results=None)).rows == []
 
 
 def test_classify_reads_a_throttle_before_an_absence() -> None:
-    """A message carrying BOTH vocabularies is a throttle, not an absence.
-
-    THE FIRST VERSION OF THIS TEST COULD NOT FAIL. It asserted a throttle message and an absence
-    message separately, and swapping the order of the two checks passed clean — because
-    `vocab.py` guarantees the sets are disjoint, so on any single-vocabulary message the order
-    genuinely does not matter. A fixture where the candidate rules agree cannot tell them apart.
-
-    A message carrying both is not hypothetical: this file already records Tiingo saying "run over
-    your hourly request limit", where two throttle terms overlap, and a provider under load
-    reporting a limit AND a missing series in one breath is the realistic shape. Getting it wrong
-    costs a month of negative cache on a company that is perfectly fine, so throttle wins.
-    """
-    both = "Rate limit reached; no dividend data found for TSLA"
+    """ORDER IS NOT ARBITRARY. A provider refusing us often also says something that reads like an
+    absence, and calling that an absence negative-caches real companies for a month."""
+    both = "Rate limited: no data found for AAPL"
     assert openbb.classify(both) is Outcome.THROTTLED, (
-        "a message that says both must be read as the provider refusing us, never as an absence"
+        "a message carrying BOTH vocabularies must read as the provider refusing us, never as a "
+        "statement about the symbol"
     )
-
-    throttle = "Error: You have run over your hourly request limit"
-    assert openbb.classify(throttle) is Outcome.THROTTLED
+    assert openbb.classify("YFRateLimitError") is Outcome.THROTTLED
     assert openbb.classify("No dividend data found for TSLA") is Outcome.DEAD_SUBJECT
     assert openbb.classify("Could not find CIK for symbol") is Outcome.DEAD_SUBJECT
-    # Says nothing about the subject, so it must back off and mark NOTHING.
     assert openbb.classify("connection refused") is Outcome.TRANSPORT
 
 
-def test_the_hub_is_not_imported_until_a_call_needs_it() -> None:
-    """~250 MB and ~2 s at import would be paid by `dagster definitions validate`, by every unit
-    test, and by the CI job that deliberately does not install openbb at all."""
-    import sys
+def test_the_hub_is_not_imported_by_importing_this_module() -> None:
+    """~250 MB and ~2 s would otherwise be paid by `dagster definitions validate`, by every unit
+    test, and by the CI job that deliberately has no openbb installed. The import lives inside the
+    call that needs it, so this module and its callers stay cheap to load."""
+    import pathlib
 
-    assert "openbb" not in sys.modules, "importing this module must not import the hub"
-    openbb.fetch("equity.profile", hub=FakeHub(FakeResult(results=[])), symbol="AAPL")
-    assert "openbb" not in sys.modules, "passing a hub must not trigger the import either"
+    text = pathlib.Path(openbb.__file__ or "").read_text()
+    module_level = text.split("def price_history")[0]
+    assert not re.search(r"^from openbb import", module_level, re.M), (
+        "the hub import must be function-local"
+    )
+    assert not re.search(r"^import openbb", module_level, re.M)

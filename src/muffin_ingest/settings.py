@@ -47,11 +47,6 @@ def raw_root() -> str:
     return _env("MUFFIN_RAW_ROOT", "/var/lib/muffin-ingest/raw")
 
 
-def cache_base() -> str:
-    """The read-through cache in front of every provider."""
-    return _env("HTTP_CACHE_URL", "http://http-cache:8080")
-
-
 def provider_base(provider: str, real_origin: str) -> str:
     """Where to reach a provider: the cache location if one is configured, else the real origin.
 

@@ -15,58 +15,27 @@ In-process, two things survive that the hop destroys:
 So `classify()` has something real to read, and `THROTTLED` stays distinguishable from `EMPTY` at
 the source rather than by string-matching a flattened body.
 
-Costs, accepted deliberately: the import is ~250 MB and ~2 s, so it happens on FIRST CALL and not
-at module import — `dagster definitions validate`, the unit tests and the CI `checks` job must all
-run without openbb installed. And `openbb-core` is AGPL-3.0, which is why this repo is.
+CALLS ARE DIRECT AND TYPED, AND THERE IS NO ROUTE TABLE ANY MORE. There used to be a `ROUTES` dict
+walked with `getattr`, justified by the REST convention being irregular —
+`/equity/price/performance` sits beside `/etf/price_performance`. That irregularity is in the URL,
+and we stopped using URLs: measured, all 26 entries mapped a string to ITSELF, so the table encoded
+nothing and cost a layer of indirection plus a runtime failure mode.
 
-THE ROUTE TABLE IS DATA BECAUSE THE CONVENTION IS NOT REGULAR. `obb.x.y.z` maps to `/api/v1/x/y/z`
-*mostly*: `/equity/price/performance` sits beside `/etf/price_performance`. Every route here was
-taken from the deployed `/openapi.json` or from a call this pipeline already makes; none is
-inferred from the pattern.
+Written out, `obb.equity.price.historical(...)` is checkable: openbb ships `py.typed`, so a wrong
+keyword is an error where mypy runs with the hub installed rather than a `TypeError` inside a
+Dagster run. The import stays function-local because it is ~250 MB and ~2 s — `dagster definitions
+validate`, the unit tests and the CI `checks` job all run without openbb present.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from muffin_ingest.providers.outcome import Outcome
 from muffin_ingest.providers.vocab import no_data_for_subject, throttled
-
-#: Logical name -> the dotted path on the hub. Kept as data so a facet names a ROUTE and never a
-#: path, and so the irregular ones (`etf.price_performance`) cannot be "corrected" into the pattern.
-ROUTES: dict[str, str] = {
-    "equity.price.historical": "equity.price.historical",
-    "equity.price.performance": "equity.price.performance",
-    "equity.profile": "equity.profile",
-    "equity.fundamental.metrics": "equity.fundamental.metrics",
-    "equity.fundamental.income": "equity.fundamental.income",
-    "equity.fundamental.balance": "equity.fundamental.balance",
-    "equity.fundamental.cash": "equity.fundamental.cash",
-    "equity.fundamental.dividends": "equity.fundamental.dividends",
-    "equity.fundamental.management": "equity.fundamental.management",
-    "equity.calendar.earnings": "equity.calendar.earnings",
-    "equity.estimates.consensus": "equity.estimates.consensus",
-    "equity.estimates.price_target": "equity.estimates.price_target",
-    "equity.compare.groups": "equity.compare.groups",
-    # NOT `etf.price.performance`. finviz's per-symbol variant is broken upstream (it mangles the
-    # symbol: AAPL -> 'AAAPL' is not in list) and fmp's is premium, which is why country returns
-    # are computed from `etf.historical` instead.
-    "etf.price_performance": "etf.price_performance",
-    "etf.historical": "etf.historical",
-    "economy.cpi": "economy.cpi",
-    "economy.gdp.real": "economy.gdp.real",
-    "economy.gdp.nominal": "economy.gdp.nominal",
-    "economy.unemployment": "economy.unemployment",
-    "economy.fred_series": "economy.fred_series",
-    "fixedincome.government.yield_curve": "fixedincome.government.yield_curve",
-    "fixedincome.rate.effr": "fixedincome.rate.effr",
-    "fixedincome.rate.sofr": "fixedincome.rate.sofr",
-    "index.price.historical": "index.price.historical",
-    "crypto.price.historical": "crypto.price.historical",
-    "derivatives.futures.historical": "derivatives.futures.historical",
-}
 
 
 class ProviderRefused(Exception):
@@ -83,54 +52,8 @@ class Answer:
     warnings: list[str] = field(default_factory=list)
     provider: str | None = None
 
-    @property
-    def empty(self) -> bool:
-        return not self.rows
 
-
-def _load_hub() -> Any:
-    """Import the hub. Slow and large, so never at module import.
-
-    Called on the first fetch of a run subprocess. Each Dagster run is its own process, so this is
-    paid once per run rather than once per call.
-    """
-    # Deliberately a function-local import; see the module docstring.
-    from openbb import obb
-
-    return obb
-
-
-def _resolve(hub: Any, route: str) -> Callable[..., Any]:
-    """Walk the dotted path to the callable, refusing a route that is not in the table.
-
-    An unknown route must fail HERE, naming itself, rather than as an AttributeError deep inside
-    the hub that reads like an openbb version problem.
-    """
-    if route not in ROUTES:
-        raise KeyError(f"unknown route {route!r}; add it to ROUTES with the source it came from")
-    node = hub
-    walked: list[str] = []
-    for part in ROUTES[route].split("."):
-        # A MISSING ROUTER LOOKS LIKE A BROKEN HUB, AND THE BARE AttributeError SAYS SO:
-        # `'App' object has no attribute 'equity'`, which names neither the cause nor the fix. An
-        # extension supplying the DATA (openbb-yfinance) is not the one supplying the NAMESPACE you
-        # reach it through (openbb-equity), and installing only the first leaves a hub that imports
-        # perfectly and cannot serve a single route.
-        if not hasattr(node, part):
-            namespace = ".".join([*walked, part]) or part
-            raise AttributeError(
-                f"route {route!r} needs `{namespace}`, which this hub does not have — the router "
-                f"extension for it is probably not installed (openbb-{part} for a top-level "
-                f"namespace). Installed providers supply data, not namespaces."
-            )
-        node = getattr(node, part)
-        walked.append(part)
-    if not callable(node):
-        raise TypeError(f"route {route!r} resolved to {type(node).__name__}, not a callable")
-    return node  # type: ignore[no-any-return]
-
-
-def _records(results: Any) -> list[dict[str, Any]]:
+def _rows(results: Any) -> list[dict[str, Any]]:
     """`OBBject.results` to plain dicts, WITHOUT going through pandas.
 
     `to_df()` exists and would pull a DataFrame into memory for what is a list of pydantic models;
@@ -148,6 +71,33 @@ def _records(results: Any) -> list[dict[str, Any]]:
     return out
 
 
+def answer_from(result: Any) -> Answer:
+    """The one thing worth sharing between call sites: read the warnings before the rows.
+
+    Raises `ProviderRefused` when a warning says the provider is throttling us. That is the whole
+    reason for an in-process hub: over HTTP the same call returns 200 with no rows, which is
+    indistinguishable from a symbol the provider genuinely does not carry, and a caller that cannot
+    tell those apart eventually marks the wrong thing.
+
+    An EMPTY answer is NOT an error here — openbb answers `204 No Content` when a provider
+    legitimately has nothing, and strictness belongs at the caller that requires rows, never in the
+    fetcher: treating 204 as a failure once failed 22 of 24 batches over a few listings yfinance
+    does not carry.
+    """
+    warnings = [
+        w.message for w in (getattr(result, "warnings", None) or []) if getattr(w, "message", None)
+    ]
+    for message in warnings:
+        if throttled(message):
+            raise ProviderRefused(message)
+
+    return Answer(
+        rows=_rows(getattr(result, "results", None)),
+        warnings=warnings,
+        provider=getattr(result, "provider", None),
+    )
+
+
 def classify(text: str) -> Outcome:
     """What a message from the hub or a provider beneath it MEANS.
 
@@ -163,31 +113,36 @@ def classify(text: str) -> Outcome:
     return Outcome.TRANSPORT
 
 
-def fetch(route: str, *, hub: Any | None = None, **params: Any) -> Answer:
-    """Call one route and return rows plus the warnings the REST hop would have discarded.
+# ── the calls themselves ───────────────────────────────────────────────────────────────────────
+#
+# One named function per route this pipeline uses. Each is a thin, TYPED call: the keyword names and
+# their types are openbb's, checked where mypy can see the hub, rather than a string looked up in a
+# table and a `**params` that nothing validates until it runs.
 
-    Raises `ProviderRefused` when a warning says the provider is throttling us. That is the whole
-    reason for this module: over HTTP the same call returns 200 with no rows, indistinguishable
-    from a symbol the provider genuinely does not carry, and a caller that cannot tell those apart
-    eventually marks the wrong thing.
 
-    Everything else is left to the caller. An EMPTY answer is not an error here — openbb answers
-    `204 No Content` when a provider legitimately has nothing, and strictness belongs at the caller
-    that requires rows, never in the fetcher: treating 204 as a failure once failed 22 of 24
-    batches over a few listings yfinance does not carry.
+def price_history(
+    symbols: Sequence[str],
+    *,
+    start: date,
+    end: date,
+    provider: str = "yfinance",
+    interval: str = "1d",
+) -> Answer:
+    """Daily bars for one or more symbols.
+
+    COMMA-JOINED, AND THAT IS NOT A BATCHED REQUEST. `openbb_yfinance` calls
+    `yf.download(tickers=symbol, ..., threads=False)`, so the vendor sees ONE REQUEST PER SYMBOL,
+    serially. Joining collapses our call count, not theirs — which is why pacing is denominated in
+    symbols and why "batching saves the provider budget" is false.
     """
-    node = _resolve(hub if hub is not None else _load_hub(), route)
-    result = node(**params)
+    from openbb import obb
 
-    warnings = [
-        w.message for w in (getattr(result, "warnings", None) or []) if getattr(w, "message", None)
-    ]
-    for message in warnings:
-        if throttled(message):
-            raise ProviderRefused(f"{route}: {message}")
-
-    return Answer(
-        rows=_records(getattr(result, "results", None)),
-        warnings=warnings,
-        provider=getattr(result, "provider", None),
+    return answer_from(
+        obb.equity.price.historical(
+            symbol=",".join(symbols),
+            provider=provider,
+            start_date=start.isoformat(),
+            end_date=end.isoformat(),
+            interval=interval,
+        )
     )

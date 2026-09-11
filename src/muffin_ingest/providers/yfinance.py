@@ -45,6 +45,21 @@ class Yfinance:
     #: for an empty response. Without one, marking is impossible — which is the safe direction.
     control_subject = "AAPL"
 
+    #: Seconds to leave between calls. NOT A LIBRARY, AND NOT A DISTRIBUTED BUCKET, because the
+    #: Dagster pool for this provider is `limit: 1` — exactly one run touches it at a time, so
+    #: exactly one process is calling it and there is no contention to coordinate. A token bucket in
+    #: Postgres would be arbitrating between runs that cannot overlap.
+    #:
+    #: DENOMINATED IN CALLS, WHICH IS NOT THE SAME AS SYMBOLS. One call of twenty symbols is twenty
+    #: Yahoo requests issued serially inside `yf.download(..., threads=False)`, each measured at
+    #: ~0.67 s — so a batch already paces itself at roughly one request a second, and this interval
+    #: is the gap BETWEEN batches. Setting it from a symbol rate would double-count the provider's
+    #: own serialisation.
+    #:
+    #: IF THE POOL IS EVER WIDENED PAST 1, THIS SILENTLY BECOMES N TIMES LOOSER. That is the one
+    #: thing to remember about it, and it belongs at the pool as much as here.
+    min_seconds_between_calls = 1.0
+
     def spell(self, security: SecurityRef) -> str | None:
         """The PROVIDER symbol, and never the US ticker when a provider symbol exists.
 

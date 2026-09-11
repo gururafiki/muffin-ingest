@@ -13,7 +13,6 @@ from muffin_ingest.writers import (
     dedupe_by,
     numeric_or_none,
     replace_scope,
-    require_currency,
     upsert,
 )
 
@@ -127,20 +126,6 @@ def test_a_numeric_looking_string_is_not_a_number() -> None:
     assert numeric_or_none(None) is None
     # `bool` is an `int` in Python, so True would otherwise store as 1.
     assert numeric_or_none(True) is None
-
-
-def test_money_without_a_currency_is_refused() -> None:
-    """Alibaba's CNY 1,023,670,000,000 revenue rendered as "$1.02T" against a true ~$141B.
-
-    Withholding the label is the correct rendering of an unknown currency and it looks like a bug;
-    inferring one is how that started. The refusal is here, where the source is still visible.
-    """
-    with pytest.raises(WriterError, match="must carry its currency"):
-        require_currency(
-            [{"revenue": 1_023_670_000_000, "currency_code": None}], "revenue", "currency_code"
-        )
-    # A row with no amount at all is fine — that is an absence, not an unlabelled figure.
-    require_currency([{"revenue": None, "currency_code": None}], "revenue", "currency_code")
 
 
 def test_dedupe_keeps_the_last_and_says_how_many_it_dropped() -> None:

@@ -67,7 +67,19 @@ class ParquetIOManager(dg.UPathIOManager):
             # and the difference between "we collected that day and there was nothing" and "we never
             # collected that day" is the whole reason the cross-section is partitioned by date.
             # Writing nothing would make the two indistinguishable on disk.
-            pq.write_table(pa.table({}), path.path if hasattr(path, "path") else str(path))
+            #
+            # WITH A COLUMN, THOUGH — `pa.table({})` produces a file with ZERO columns, which this
+            # manager could read back and nothing else could: DuckDB refuses it outright with "Need
+            # at least one non-root column in the file". Found by the offline replay test the first
+            # time it asked a question of an empty partition. A zero-row file that other tools can
+            # open is the difference between raw being inspectable and raw being ours alone.
+            #
+            # A glob spanning empty and populated partitions therefore needs `union_by_name=true`,
+            # which is the honest cost of recording the distinction at all.
+            pq.write_table(
+                pa.table({"collected_nothing": pa.array([], type=pa.bool_())}),
+                path.path if hasattr(path, "path") else str(path),
+            )
             return
 
         columns = sorted({key for row in rows for key in row})
@@ -78,7 +90,12 @@ class ParquetIOManager(dg.UPathIOManager):
         import pyarrow.parquet as pq
 
         table = pq.read_table(path.path if hasattr(path, "path") else str(path))
-        return table.to_pylist() if table.num_columns else []
+        # The empty-partition marker is not data; a partition that collected nothing loads as no
+        # rows, which is what every downstream stage should see.
+        if table.column_names == ["collected_nothing"]:
+            return []
+        rows: list[dict[str, Any]] = table.to_pylist()
+        return rows
 
 
 class PostgresIOManager(dg.ConfigurableIOManager):

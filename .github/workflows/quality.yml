@@ -70,7 +70,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "dagster>=1.11,<1.13" "psycopg[binary]" pyarrow pydantic httpx \
-            prometheus-client mypy pytest
+            duckdb mypy pytest
       - name: The code location loads
         # `dagster definitions validate` is the same load the gRPC server performs at startup, so a
         # green here means the service can start.
@@ -123,39 +123,26 @@ jobs:
               echo "ok  $bin"
             done'
 
-      - name: Every route the library declares resolves on the real hub
-        # NO `--user`, DELIBERATELY: this must run as whoever the image runs as, because that is the
-        # whole failure. `import openbb` reconciles installed extensions against a static map inside
-        # site-packages and REBUILDS when they differ — which needs write access the runtime user
-        # does not have, and raises PermissionError on every provider call.
+      - name: The hub's own signatures type-check, against the real hub
+        # REPLACES THE ROUTE-RESOLUTION GUARD, which existed to protect a `ROUTES` table that has
+        # been deleted — measured, all 26 of its entries mapped a string to itself, so it encoded
+        # nothing while costing a layer of indirection and a runtime failure mode.
         #
-        # It did not look like a packaging problem. The exception surfaced as a failed batch, the
-        # isolation pass failed every symbol, and the asset reported fifty securities as having
-        # answered nothing. Found by driving the asset against production; no unit test could see it,
-        # because the tests drive a fake hub for exactly the reason that makes this possible.
-        # AND THE IMPORT SUCCEEDING IS ITSELF HALF THE TEST. As the runtime user a rebuild raises
-        # PermissionError, so reaching the loop at all proves the map shipped built.
+        # The calls are written out now (`obb.equity.price.historical(...)`), and openbb ships
+        # `py.typed`, so mypy can check the keyword names and their types. That only works where the
+        # hub is INSTALLED, which is exactly here and nowhere else in CI: the `checks` job
+        # deliberately has no openbb (~250 MB, AGPL) and treats it as `Any`.
         #
-        # The other half is that a hub can import perfectly and serve nothing. An extension
-        # supplying the DATA is not the one supplying the NAMESPACE: with providers alone,
-        # `obb.equity` does not exist and every call dies on a bare AttributeError. The built
-        # package held eleven modules, all `economy*` and `fixedincome*`, and no test could see it
-        # because the unit tests drive a FAKE hub — deliberately, so they need no 250 MB of AGPL
-        # code, which is exactly what makes this check the only place the real one is exercised.
+        # Importing it first is not optional — openbb GENERATES its typed package on first import,
+        # so mypy has nothing to read until that has happened.
+        #
+        # The failure this catches is a wrong keyword, which used to surface as a `TypeError` inside
+        # a Dagster run against a live provider. Half of it is also covered by simply importing:
+        # as the runtime user a rebuild raises PermissionError, so reaching mypy at all proves the
+        # extension map shipped built.
         run: |
-          docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} \
-            python -c '
-          import sys
-          # The INSTALLED package, not /app/src — what the service actually imports.
-          from muffin_ingest.providers.openbb import ROUTES, _load_hub, _resolve
-          hub = _load_hub()
-          missing = []
-          for route in sorted(ROUTES):
-              try:
-                  _resolve(hub, route)
-              except Exception as e:
-                  missing.append(f"{route}: {type(e).__name__}: {e}")
-          for m in missing:
-              print(f"::error::{m}")
-          print(f"{len(ROUTES) - len(missing)}/{len(ROUTES)} routes resolve")
-          sys.exit(1 if missing else 0)'
+          docker run --rm -v "$PWD":/src ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} sh -c '
+            set -e
+            python -c "import openbb; print(\"hub imported\")"
+            pip install --quiet --disable-pip-version-check mypy
+            cd /src && mypy --strict src/muffin_ingest/providers/openbb.py'

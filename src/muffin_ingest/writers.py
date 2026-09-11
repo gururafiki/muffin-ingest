@@ -26,15 +26,24 @@ handler while three other handlers negative-cached thousands of securities witho
      cleanly and stores a wrong type in silence, while `"n/a"` RAISES — and inside a migration
      applied `--single-transaction` that aborts the whole deploy. `numeric_or_none` is the gate.
 
-  4. MONEY WITHOUT ITS CURRENCY IS NOT A FIGURE. Alibaba's CNY 1,023,670,000,000 revenue rendered
-     as "$1.02T" against a true ~$141B. Defaulting to dollars is how that started, so a money row
-     that cannot state its currency is refused here rather than labelled later.
+  4. MONEY WITHOUT ITS CURRENCY IS NOT A FIGURE — AND THAT RULE BELONGS IN THE DDL, NOT HERE.
+     Alibaba's CNY 1,023,670,000,000 revenue rendered as "$1.02T" against a true ~$141B, and the
+     bug was INFERRING a currency rather than lacking one. This module used to carry a
+     `require_currency` helper that refused any money row without one; wiring it into `upsert` was
+     tried and REVERTED, because `market.price_bar.currency_code` is deliberately nullable — 425 of
+     10,894 askable equities have no currency from any source, and refusing them a price row is
+     worse than the unlabelled number the app already renders correctly. A blanket rule here would
+     have silently dropped exactly those securities.
+
+     `not null` on the column is the enforcement that cannot be forgotten and cannot be wrong about
+     which tables mean it. The serving layer withholds a label it cannot justify; that is where the
+     Alibaba fix actually lives.
 """
 
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -110,21 +119,6 @@ def numeric_or_none(value: Any) -> float | None:
     if isinstance(value, int | float):
         return float(value)
     return None
-
-
-def require_currency(rows: Iterable[Mapping[str, Any]], amount: str, currency: str) -> None:
-    """Refuse money that cannot say what it is denominated in.
-
-    Withholding the label is the correct rendering of an unknown currency and it looks like a bug;
-    inferring one is how a CNY figure became "$1.02T". So the refusal is here, at the write, where
-    the source is still visible — not at the page, where only a symbol is left to guess from.
-    """
-    for row in rows:
-        if row.get(amount) is not None and not row.get(currency):
-            raise WriterError(
-                f"row states {amount}={row[amount]!r} with no {currency}; money must carry its "
-                f"currency, and defaulting to USD is how Alibaba's revenue rendered as dollars"
-            )
 
 
 def _values_sql(columns: Sequence[str], count: int) -> str:
