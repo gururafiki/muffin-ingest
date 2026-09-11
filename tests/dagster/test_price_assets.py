@@ -39,7 +39,8 @@ CURRENCIES = [
 
 
 class FakeCursor:
-    def __init__(self) -> None:
+    def __init__(self, subjects: list[tuple[str, str, float]]) -> None:
+        self._subjects = subjects
         self.rows: list[tuple[Any, ...]] = []
 
     def __enter__(self) -> FakeCursor:
@@ -51,24 +52,37 @@ class FakeCursor:
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         # Answered by SHAPE rather than by exact text, so reformatting a query does not silently
         # turn a test into one that asserts nothing.
-        self.rows = list(CURRENCIES) if "market.listing" in sql else list(SUBJECTS)
+        if "market.listing" in sql:
+            self.rows = [(sid, "USD") for sid, _, _ in self._subjects]
+        else:
+            self.rows = list(self._subjects)
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self.rows
 
 
 class FakeConn:
+    def __init__(self, subjects: list[tuple[str, str, float]]) -> None:
+        self._subjects = subjects
+
     def cursor(self) -> FakeCursor:
-        return FakeCursor()
+        return FakeCursor(self._subjects)
 
     def commit(self) -> None:
         return None
 
 
+#: The universe a fake run can see. A MODULE-LEVEL LIST, set and restored the same way the provider
+#: fake is, because `ConfigurableResource` is a pydantic model: a class attribute becomes a CONFIG
+#: field, and a list of tuples is not a config type — Dagster rejects it with "Array specifications
+#: must only be of length 1", which names neither the attribute nor the reason.
+UNIVERSE: list[tuple[str, str, float]] = list(SUBJECTS)
+
+
 class FakePostgres(Postgres):
     @contextmanager
     def connect(self) -> Iterator[Any]:
-        yield FakeConn()
+        yield FakeConn(UNIVERSE)
 
 
 def materialise(

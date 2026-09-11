@@ -70,7 +70,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install "dagster>=1.11,<1.13" "psycopg[binary]" pyarrow pydantic httpx \
-            prometheus-client mypy pytest
+            duckdb mypy pytest
       - name: The code location loads
         # `dagster definitions validate` is the same load the gRPC server performs at startup, so a
         # green here means the service can start.

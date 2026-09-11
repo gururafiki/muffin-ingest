@@ -86,6 +86,11 @@ dev = [
   "pytest-cov>=6.0",
   "respx>=0.22",
   "testcontainers[postgres]>=4.9",
+  # The assertion engine for the offline replay, NOT an I/O manager. `dagster-duckdb` pins
+  # `dagster==1.13.21` against our `<1.13`, and it is not needed: raw already lands as Parquet and
+  # DuckDB reads Parquet directly, so the real graph runs with the real I/O manager and the
+  # questions are asked of the files it wrote.
+  "duckdb>=1.1,<2",
 ]
 
 [build-system]
