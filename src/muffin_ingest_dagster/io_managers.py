@@ -56,6 +56,52 @@ class ParquetIOManager(dg.UPathIOManager):
 
         super().__init__(base_path=UPath(base_path))
 
+    def handle_output(self, context: dg.OutputContext, obj: Rows | Mapping[str, Rows]) -> None:
+        """Write one file per partition, including when a single run covers several.
+
+        `UPathIOManager` REFUSES A MULTI-PARTITION OUTPUT OUTRIGHT:
+
+            The current IO manager does not support persisting an output associated with multiple
+            partitions. This error is likely occurring because a backfill was launched using the
+            'single run' option.
+
+        and the ways out it suggests are both worse. A multi-run policy turns one backfill of 96
+        securities into 96 runs — and because this provider is asked one batch at a time, that is
+        ten calls becoming ninety-six, a tenfold increase in provider spend for the same data.
+        Opting out of I/O managers entirely puts a file path back inside every asset.
+        WITHOUT THIS OVERRIDE `BackfillPolicy.single_run()` IS DECORATIVE, which is how it reached
+        production: the asset ran, fetched all 96 securities' history, and died at the write.
+
+        So a run covering several partitions returns a MAPPING of partition key to its rows, and
+        each lands in its own file — which is what the partition means.
+        """
+        if context.has_asset_partitions and len(context.asset_partition_keys) > 1:
+            paths = self._get_paths_for_partitions(context)
+            if not isinstance(obj, Mapping):
+                raise dg.DagsterInvariantViolationError(
+                    f"{context.asset_key.to_user_string()} covers "
+                    f"{len(context.asset_partition_keys)} partitions in one run, so it must return "
+                    f"a mapping of partition key to rows — one file is written per partition. Got "
+                    f"{type(obj).__name__}."
+                )
+            missing = set(obj) - set(paths)
+            if missing:
+                raise dg.DagsterInvariantViolationError(
+                    f"{context.asset_key.to_user_string()} returned rows for partition(s) it was "
+                    f"not asked about: {sorted(missing)[:5]}. A partition is a claim about a "
+                    f"slice; writing one the run was not asked for makes that claim for it."
+                )
+            for key, path in paths.items():
+                self.make_directory(path.parent)
+                # A PARTITION IN THE RANGE THAT PRODUCED NOTHING STILL GETS A FILE. That is the
+                # difference between "collected, and there was nothing" and "never collected", and
+                # it is the whole reason the cross-section is partitioned by date.
+                self.dump_to_path(context=context, obj=obj.get(key, []), path=path)
+            context.add_output_metadata({"partitions_written": len(paths)})
+            return
+
+        super().handle_output(context, obj)
+
     def dump_to_path(self, context: dg.OutputContext, obj: Rows, path: UPath) -> None:
         import pyarrow as pa
         import pyarrow.parquet as pq

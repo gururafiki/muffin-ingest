@@ -195,3 +195,51 @@ def test_the_window_asked_for_is_half_open_and_never_degenerate(tmp_path: Path) 
     assert asked["end"] > asked["start"], (
         "start == end makes the provider ignore the range entirely and answer from start to today"
     )
+
+
+def test_a_single_run_covering_several_partitions_writes_one_file_each(tmp_path: Path) -> None:
+    """`BackfillPolicy.single_run()` IS DECORATIVE WITHOUT THIS, and that is how it reached
+    production: `UPathIOManager` refuses a multi-partition output outright —
+
+        does not support persisting an output associated with multiple partitions
+
+    — so the first 96-security history backfill fetched every security's full history, paid the
+    provider for all of it, and died at the WRITE. Nothing before the write could see it: the asset
+    ran, logged "full history for 96 of 96", and failed afterwards.
+
+    Its own suggested remedies are worse. A multi-run policy turns one backfill of 96 securities
+    into 96 runs, and because this provider is asked one batch at a time that is ten calls becoming
+    ninety-six.
+    """
+    keys = ["2026-09-08", "2026-09-09"]
+
+    def two_days(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(rows=list(CAPTURED["batch_mixed_venues"]["rows"]))
+
+    saved_fetch, saved_universe = openbb.price_history, list(fakes.UNIVERSE)
+    openbb.price_history = two_days
+    fakes.UNIVERSE[:] = BATCH_SUBJECTS
+    try:
+        dg.materialize(
+            [asset_prices.raw_price_bars],
+            tags={
+                "dagster/asset_partition_range_start": keys[0],
+                "dagster/asset_partition_range_end": keys[-1],
+            },
+            resources={
+                "postgres": fakes.FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        openbb.price_history = saved_fetch
+        fakes.UNIVERSE[:] = saved_universe
+
+    written = sorted(p.stem for p in (tmp_path / "raw_price_bars").glob("*.parquet"))
+    assert written == keys, "one file per partition, named for the partition it claims"
+
+    for key in keys:
+        rows = sql(
+            tmp_path / "raw_price_bars" / f"{key}.parquet", "select distinct trade_date from {f}"
+        )
+        assert rows == [(key,)], f"{key}'s file holds only {key}"
