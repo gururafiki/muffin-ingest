@@ -145,4 +145,8 @@ jobs:
             set -e
             python -c "import openbb; print(\"hub imported\")"
             pip install --quiet --disable-pip-version-check mypy
-            cd /src && mypy --strict src/muffin_ingest/providers/openbb.py'
+            # `python -m mypy`, NOT `mypy`. The image runs as a non-root user, so pip installs the
+            # console script into ~/.local/bin — which is not on PATH, and the step died with
+            # `sh: 5: mypy: not found` while pip had plainly just succeeded. The module form does
+            # not care where the script landed.
+            cd /src && python -m mypy --strict src/muffin_ingest/providers/openbb.py'
