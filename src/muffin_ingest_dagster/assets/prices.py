@@ -30,10 +30,12 @@ from typing import Any
 import dagster as dg
 from dagster import AssetExecutionContext
 
+from muffin_ingest import ledger
 from muffin_ingest.derive import returns
 from muffin_ingest.facets import prices
 from muffin_ingest.providers import openbb
 from muffin_ingest.providers.isolation import BatchVerdict, fetch_with_isolation
+from muffin_ingest.providers.outcome import Outcome
 from muffin_ingest.providers.yfinance import Yfinance
 from muffin_ingest_dagster.resources import Postgres
 
@@ -162,6 +164,122 @@ def _loaded_rows(loaded: Any) -> list[dict[str, Any]]:
     return list(loaded)
 
 
+def _ask(
+    context: AssetExecutionContext,
+    by_symbol: dict[str, prices.Subject],
+    *,
+    start: date,
+    end: date,
+    deadline: float,
+    postgres: Postgres | None = None,
+) -> BatchVerdict:
+    """One provider call, wrapped in the ledger attempt that can justify a mark.
+
+    THE ATTEMPT IS OPENED BEFORE THE CALL AND CLOSED IN A `finally`, because a worker killed
+    mid-call writes nothing at all — it goes silent rather than red — so the row saying "something
+    started here" has to exist before the thing that might kill us.
+
+    WITHOUT A CONNECTION THIS IS EXACTLY THE OLD BEHAVIOUR, deliberately: the offline tests drive
+    the real asset with no database, and a lane that could only run against Postgres would be a lane
+    nothing could replay.
+    """
+    fetch = _fetcher(start, end)
+    timeout = min(60.0, max(5.0, deadline - time.monotonic()))
+    if postgres is None:
+        return fetch_with_isolation(
+            fetch,
+            list(by_symbol),
+            timeout_s=timeout,
+            deadline=deadline,
+            control=PROVIDER.control_subject,
+        )
+
+    with postgres.connect() as conn:
+        started = time.monotonic()
+        with ledger.attempt(
+            conn, context.run_id, prices.FACET, PROVIDER.code, list(by_symbol)
+        ) as att:
+            verdict = fetch_with_isolation(
+                fetch,
+                list(by_symbol),
+                timeout_s=timeout,
+                deadline=deadline,
+                control=PROVIDER.control_subject,
+            )
+            # CLOSED WITH WHAT THE ISOLATION PASS ESTABLISHED, not with what we would like it to
+            # have established. `mark_absent` reads exactly these two fields and refuses without
+            # them, so passing `isolated=True` on a batch that was never isolated is the one lie
+            # that would let an outage negative-cache the universe.
+            att.close(
+                _outcome(verdict),
+                rows_written=len(verdict.rows),
+                error=verdict.error,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                isolated=verdict.isolated,
+                control_answered=verdict.control_answered,
+            )
+            tasks = [
+                ledger.Task(
+                    facet=prices.FACET,
+                    subject=subject.security_id,
+                    security_id=subject.security_id,
+                    asked_with=symbol,
+                    watermark=None,
+                    version=0,
+                )
+                for symbol, subject in by_symbol.items()
+            ]
+            # `verdict.dead` holds SYMBOLS; the ledger's subjects are security ids. Translating here
+            # rather than widening the verdict keeps the isolation layer ignorant of our keying.
+            dead_ids = {by_symbol[s].security_id for s in verdict.dead if s in by_symbol} | {
+                subject.security_id
+                for symbol, subject in by_symbol.items()
+                if symbol.upper() in {d.upper() for d in verdict.dead}
+            }
+            ledger.record(
+                conn,
+                prices.FACET,
+                tasks,
+                BatchVerdict(
+                    rows=verdict.rows,
+                    dead=sorted(dead_ids),
+                    error=verdict.error,
+                    isolated=verdict.isolated,
+                    control_answered=verdict.control_answered,
+                    throttled_out=verdict.throttled_out,
+                ),
+                att,
+                rows_per_subject=_rows_per_subject(verdict, by_symbol),
+            )
+        conn.commit()
+    return verdict
+
+
+def _outcome(verdict: BatchVerdict) -> Outcome:
+    """What the ATTEMPT established, which is a different question from what each subject did."""
+    if verdict.throttled_out:
+        return Outcome.THROTTLED
+    if verdict.error is not None:
+        return Outcome.TRANSPORT
+    return Outcome.ANSWERED if verdict.rows else Outcome.EMPTY
+
+
+def _rows_per_subject(
+    verdict: BatchVerdict, by_symbol: dict[str, prices.Subject]
+) -> dict[str, int]:
+    """How many rows each SUBJECT got, so `record` can tell answered from empty per security."""
+    upper = {s.upper(): subject for s, subject in by_symbol.items()}
+    counts: dict[str, int] = {}
+    for row in verdict.rows:
+        symbol = str(row.get("symbol") or "").upper()
+        subject = upper.get(symbol) or (
+            next(iter(by_symbol.values())) if len(by_symbol) == 1 else None
+        )
+        if subject is not None:
+            counts[subject.security_id] = counts.get(subject.security_id, 0) + 1
+    return counts
+
+
 def _collect(
     context: AssetExecutionContext,
     subjects: list[prices.Subject],
@@ -170,8 +288,17 @@ def _collect(
     end: date,
     batch_size: int,
     budget_seconds: int,
+    postgres: Postgres | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Ask for every subject in batches and return raw rows plus what the asking established."""
+    """Ask for every subject in batches and return raw rows plus what the asking established.
+
+    `postgres` IS WHAT TURNS AN OBSERVATION INTO A RECORD. Without it this counts `dead` and throws
+    the fact away, so a symbol yfinance will never serve costs a real vendor request every single
+    day — the vendor is asked once per SYMBOL whatever we batch. With it, each batch opens an
+    `ingest.attempt` before the call and offers its verdict to `ingest.mark_absent`, which refuses
+    unless the attempt says the subject was asked ALONE and a control answered. The rule lives in
+    SQL so an over-eager caller is stopped by the database rather than by review.
+    """
     deadline = time.monotonic() + budget_seconds
     rows: list[dict[str, Any]] = []
     stats = {
@@ -217,12 +344,8 @@ def _collect(
         by_symbol = {s.symbol: s for s in batch}
         stats["calls"] += 1
         since_last_call = time.monotonic()
-        verdict: BatchVerdict = fetch_with_isolation(
-            _fetcher(start, end),
-            list(by_symbol),
-            timeout_s=min(60.0, max(5.0, deadline - time.monotonic())),
-            deadline=deadline,
-            control=PROVIDER.control_subject,
+        verdict: BatchVerdict = _ask(
+            context, by_symbol, start=start, end=end, deadline=deadline, postgres=postgres
         )
         if verdict.throttled_out:
             stats["throttled"] += 1
@@ -316,9 +439,20 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
     start, end = window[0].date(), window[1].date()
 
     with postgres.connect() as conn:
+        # ENQUEUE WHAT THE FACET OWES BEFORE ASKING, so a security promoted since the last run has a
+        # ledger row to record its health against. `mark_absent` updates `ingest.task`; with no row
+        # there is nothing to update and the mark is silently lost — every count would still look
+        # right, because the marks would be written and never read.
+        #
+        # It is a SET operation, not an append: measured, the first call enqueues 12,016 equities
+        # and the second enqueues 0.
+        enqueued = ledger.sync_population(conn, prices.FACET)
+        conn.commit()
         subjects = prices.askable_subjects(conn, provider=PROVIDER.code, limit=config.limit)
 
-    context.log.info("asking %s subjects for %s..%s", len(subjects), start, end)
+    context.log.info(
+        "asking %s subjects for %s..%s (%s newly enqueued)", len(subjects), start, end, enqueued
+    )
     rows, stats = _collect(
         context,
         subjects,
@@ -326,10 +460,13 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
         end=end,
         batch_size=PROVIDER.batch_size,
         budget_seconds=config.budget_seconds,
+        postgres=postgres,
     )
     # `rows: 0` IS A LEGITIMATE VALUE and is reported rather than filtered — a chart that cannot
     # draw a zero cannot show a collection that stopped, which is the only thing it is for.
-    context.add_output_metadata({"subjects": len(subjects), "rows": len(rows), **stats})
+    context.add_output_metadata(
+        {"subjects": len(subjects), "rows": len(rows), "enqueued": enqueued, **stats}
+    )
     return _by_partition(context, rows, key=lambda r: str(r["trade_date"]))
 
 
@@ -408,6 +545,7 @@ def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres
         # clothes: twelve symbols at full history measured 11.6 MB of JSON in 8.1 s.
         batch_size=PROVIDER.history_batch_size,
         budget_seconds=config.budget_seconds,
+        postgres=postgres,
     )
     context.add_output_metadata({"requested": len(wanted), "rows": len(rows), **stats})
     return _by_partition(context, rows, key=lambda r: str(r["security_id"]))

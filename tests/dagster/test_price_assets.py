@@ -39,10 +39,18 @@ CURRENCIES = [
 ]
 
 
+#: Every ledger call the price lane makes, in order — `(function, params)`. A MODULE-LEVEL LIST for
+#: the same reason `UNIVERSE` is one, and the thing the absent-marking tests assert on: the question
+#: "which function does a dead subject reach, and which does an empty one reach" is the single most
+#: expensive confusion in this codebase's history, and it is now a unit test rather than a reading.
+LEDGER_CALLS: list[tuple[str, Any]] = []
+
+
 class FakeCursor:
     def __init__(self, subjects: list[tuple[str, str, float]]) -> None:
         self._subjects = subjects
         self.rows: list[tuple[Any, ...]] = []
+        self.one: tuple[Any, ...] | None = None
 
     def __enter__(self) -> FakeCursor:
         return self
@@ -53,13 +61,30 @@ class FakeCursor:
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         # Answered by SHAPE rather than by exact text, so reformatting a query does not silently
         # turn a test into one that asserts nothing.
-        if "market.listing" in sql:
+        text = " ".join(sql.split())
+        for fn in ("ingest.mark_absent", "ingest.complete", "ingest.sync_population"):
+            if fn in text:
+                LEDGER_CALLS.append((fn.split(".")[1], tuple(params)))
+                self.one = (0,)
+                return
+        if "insert into ingest.attempt" in text:
+            LEDGER_CALLS.append(("attempt", tuple(params)))
+            self.one = (1,)
+            return
+        if "update ingest.attempt" in text:
+            LEDGER_CALLS.append(("close", tuple(params)))
+            self.one = None
+            return
+        if "market.listing" in text:
             self.rows = [(sid, "USD") for sid, _, _ in self._subjects]
         else:
             self.rows = list(self._subjects)
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return self.rows
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self.one
 
 
 class FakeConn:
@@ -453,3 +478,120 @@ def test_a_snapshot_is_UNPARTITIONED_because_it_cannot_be_asked_about_a_past_day
 def meta_of(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
     events = result.asset_materializations_for_node(asset.op.name)
     return {k: v.value for k, v in events[0].metadata.items()}
+
+
+def test_a_dead_symbol_is_OFFERED_to_mark_absent_and_an_empty_one_is_not(tmp_path: Path) -> None:
+    """THE MOST EXPENSIVE CONFUSION IN THIS CODEBASE, AS A UNIT TEST.
+
+    A symbol yfinance will never serve costs a REAL vendor request every day, because the vendor is
+    asked once per symbol whatever we batch — ~425 dead symbols is ~155,000 wasted requests a year,
+    spent re-learning an answer we already had. So the marking has to happen.
+
+    And it has to happen for the right subjects. `dead` is populated only after the isolation pass
+    asked each subject ALONE and a control answered; `empty` means asked, answered nothing, and NOT
+    justified — that one must back off and be asked again. Recording the second as the first is how
+    ~8,300 securities were negative-cached in one afternoon.
+
+    The assertion is on which ledger FUNCTION each subject reaches, because `ingest.mark_absent`
+    refuses what `ingest.complete` accepts.
+    """
+    LEDGER_CALLS.clear()
+
+    # ONE DEAD SYMBOL POISONS ITS WHOLE BATCH, which is the realistic shape and the only one that
+    # can justify a mark. A PARTIAL answer must NOT: yfinance throttles by omitting symbols from a
+    # 200, so a symbol missing from a batch that answered for others is `empty`, never `dead` —
+    # deliberately, and the reason the first version of this fixture proved nothing.
+    #
+    # So: the batch raises, isolation re-asks each subject alone, AAPL answers alone (and is also
+    # the control, proving the provider healthy), and the Korean line fails alone.
+    def selective(symbols: Sequence[str], **kw: Any) -> Answer:
+        if any(s != "AAPL" for s in symbols):
+            raise RuntimeError("No data found for 005930.KS, symbol may be delisted")
+        return bars_for(list(symbols))
+
+    result = materialise(tmp_path, selective)
+    assert result.success
+
+    marked = [params for fn, params in LEDGER_CALLS if fn == "mark_absent"]
+    completed = [params for fn, params in LEDGER_CALLS if fn == "complete"]
+
+    korean = SUBJECTS[1][0]
+    apple = SUBJECTS[0][0]
+
+    assert any(korean in p for p in marked), (
+        f"the dead subject never reached mark_absent — ledger calls were "
+        f"{[fn for fn, _ in LEDGER_CALLS]}"
+    )
+    assert not any(apple in p for p in marked), "a security that ANSWERED must never be marked"
+    assert any(apple in p for p in completed), "an answering security is completed, not marked"
+
+
+def test_the_population_is_enqueued_before_anything_is_asked(tmp_path: Path) -> None:
+    """`mark_absent` UPDATES `ingest.task`; with no row there is nothing to update and the mark is
+    silently lost. Every count would still look right, because the marks would be written and never
+    read — which is this file's most repeated shape.
+
+    Ordering matters as much as presence: enqueue, then ask.
+    """
+    LEDGER_CALLS.clear()
+    result = materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
+    assert result.success
+
+    order = [fn for fn, _ in LEDGER_CALLS]
+    assert "sync_population" in order, "a security promoted since the last run needs a ledger row"
+    assert order.index("sync_population") < order.index("attempt"), (
+        f"the population must be enqueued before the provider is called, got {order[:4]}"
+    )
+
+
+def test_an_attempt_is_opened_BEFORE_the_call_and_closed_after(tmp_path: Path) -> None:
+    """A worker killed mid-call writes nothing at all — it goes silent rather than red — so the row
+    that says "something started here" has to exist before the thing that might kill us.
+
+    `ingest.reap()` is what closes whatever is left open; it can only find rows that exist.
+    """
+    LEDGER_CALLS.clear()
+    materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
+
+    order = [fn for fn, _ in LEDGER_CALLS]
+    assert order.count("attempt") == order.count("close") == 1
+    assert order.index("attempt") < order.index("close")
+
+
+def test_the_attempt_records_what_the_isolation_pass_ACTUALLY_established(tmp_path: Path) -> None:
+    """THE ONE LIE THAT WOULD LET AN OUTAGE NEGATIVE-CACHE THE UNIVERSE.
+
+    `ingest.mark_absent` reads exactly two fields off the attempt — `isolated` and
+    `control_answered` — and refuses without both. That refusal is the whole guard, and it is only
+    as good as what the caller writes there: passing `isolated=True` on a batch that was never
+    isolated walks straight around it, and the database has no way to know.
+
+    Mutation-proven, because hardcoding both to True passed every other test in this file.
+    """
+    LEDGER_CALLS.clear()
+
+    # A batch that ANSWERS never triggers the isolation pass, so the attempt must say so.
+    materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
+    closed = [params for fn, params in LEDGER_CALLS if fn == "close"]
+    assert closed, "the attempt must be closed"
+    # `Attempt.close` binds (outcome, rows_written, error, duration_ms, isolated, control_answered)
+    isolated, control = closed[0][4], closed[0][5]
+    assert isolated is False, (
+        "a batch that answered was never isolated, and claiming otherwise is what lets a run-wide "
+        "tally masquerade as evidence about one subject"
+    )
+    assert control is not True, "no control was probed, so `control_answered` cannot be true"
+
+    # And a batch that FAILED and was isolated must say THAT — or the guard refuses a real mark and
+    # the negative cache can never fill, which is the opposite failure and equally silent.
+    LEDGER_CALLS.clear()
+
+    def poisoned(symbols: Sequence[str], **kw: Any) -> Answer:
+        if any(s != "AAPL" for s in symbols):
+            raise RuntimeError("No data found, symbol may be delisted")
+        return bars_for(list(symbols))
+
+    materialise(tmp_path, poisoned)
+    closed = [params for fn, params in LEDGER_CALLS if fn == "close"]
+    assert closed[0][4] is True, "the isolation pass ran and the attempt must record it"
+    assert closed[0][5] is True, "the control answered and the attempt must record it"
