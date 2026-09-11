@@ -61,16 +61,20 @@ dependencies = [
   "edgartools>=4.14,<5",
   "pdfplumber>=0.11,<0.12",
   "lxml>=5.3,<6",
-  # Rate limiting that survives more than one process. Dagster pools serialise RUNS per provider;
-  # this enforces requests per second AND per day, which pools cannot express.
-  "pyrate-limiter[psycopg]>=3.7,<5",
+  # NO RATE-LIMITER LIBRARY, AND THAT IS A DESIGN DECISION RATHER THAN AN OMISSION. A Dagster pool
+  # at limit 1 means exactly ONE run touches a provider at a time, so there is only ever one process
+  # calling it — a distributed token bucket would be coordinating a contention that cannot occur.
+  # Rate is a minimum interval between calls inside the run; a daily quota is the shape of the work
+  # (one run a day with a page of N), not a counter. `pyrate-limiter` was declared here and imported
+  # nowhere.
   # Parquet for the raw layer. pyarrow ALONE, not polars: both acquisition lanes are chunked by
   # construction (a day of the cross-section, or a batch of ten securities' history), so the largest
   # frame either holds is ~73k rows — four orders of magnitude below the 88 M that justified a lazy
   # scan. `UPathIOManager` and `upath` come with dagster, so the whole raw path costs one wheel.
   "pyarrow>=18,<26",
   "pydantic>=2.10,<3",
-  "prometheus-client>=0.21,<1",
+  # `prometheus-client` returns WITH the worker exporter that needs it. It was declared here while
+  # the only code importing it was an HTTP client with no callers, which is the same shape.
   "structlog>=24.4,<26",
 ]
 

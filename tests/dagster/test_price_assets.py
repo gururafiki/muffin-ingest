@@ -74,8 +74,8 @@ class FakePostgres(Postgres):
 def materialise(
     tmp_path: Path, fetch: Any, assets: list[Any] | None = None, key: str = KEY
 ) -> dg.ExecuteInProcessResult:
-    openbb_fetch = openbb.fetch
-    openbb.fetch = fetch
+    saved = openbb.price_history
+    openbb.price_history = fetch
     try:
         return dg.materialize(
             assets or [asset_prices.raw_price_bars],
@@ -86,7 +86,7 @@ def materialise(
             },
         )
     finally:
-        openbb.fetch = openbb_fetch
+        openbb.price_history = saved
 
 
 def bars_for(symbols: Sequence[str]) -> Answer:
@@ -104,7 +104,7 @@ def meta(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
 
 
 def test_a_batched_answer_is_attributed_by_symbol(tmp_path: Path) -> None:
-    result = materialise(tmp_path, lambda route, **kw: bars_for(kw["symbol"].split(",")))
+    result = materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
     assert result.success
     m = meta(result, asset_prices.raw_price_bars)
     assert (m["subjects"], m["answered"], m["rows"]) == (2, 2, 2)
@@ -115,9 +115,8 @@ def test_a_symbol_the_batch_omitted_is_empty_and_not_dead(tmp_path: Path) -> Non
     shown to be unanswerable — only asking it alone with a healthy control can show that, and a run
     that blurs the two is how ~8,300 securities were negative-cached in an afternoon."""
 
-    def only_apple(route: str, **kw: Any) -> Answer:
-        asked = kw["symbol"].split(",")
-        return bars_for([s for s in asked if s == "AAPL"])
+    def only_apple(symbols: Sequence[str], **kw: Any) -> Answer:
+        return bars_for([s for s in symbols if s == "AAPL"])
 
     m = meta(materialise(tmp_path, only_apple), asset_prices.raw_price_bars)
     assert m["answered"] == 1
@@ -129,7 +128,7 @@ def test_a_throttle_stops_the_run_and_marks_nothing(tmp_path: Path) -> None:
     """`ProviderRefused` is the whole reason the hub is imported rather than called over HTTP: over
     the wire this is an empty 204, byte-identical to a symbol the provider does not carry."""
 
-    def refusing(route: str, **kw: Any) -> Answer:
+    def refusing(symbols: Sequence[str], **kw: Any) -> Answer:
         raise ProviderRefused("equity.price.historical: YFRateLimitError: Too Many Requests")
 
     m = meta(materialise(tmp_path, refusing), asset_prices.raw_price_bars)
@@ -140,7 +139,7 @@ def test_a_throttle_stops_the_run_and_marks_nothing(tmp_path: Path) -> None:
 
 def test_an_empty_day_still_materialises(tmp_path: Path) -> None:
     """A market holiday produces no bars, and the partition is still a fact we collected."""
-    result = materialise(tmp_path, lambda route, **kw: Answer(rows=[]))
+    result = materialise(tmp_path, lambda symbols, **kw: Answer(rows=[]))
     assert result.success
     assert meta(result, asset_prices.raw_price_bars)["rows"] == 0
 
@@ -173,14 +172,14 @@ def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_p
     """Lane B's partition IS the subject, so a run must not quietly widen to the whole universe."""
     asked: list[str] = []
 
-    def record(route: str, **kw: Any) -> Answer:
-        asked.extend(kw["symbol"].split(","))
-        return bars_for(kw["symbol"].split(","))
+    def record(symbols: Sequence[str], **kw: Any) -> Answer:
+        asked.extend(symbols)
+        return bars_for(list(symbols))
 
     with dg.instance_for_test() as instance:
         instance.add_dynamic_partitions(asset_prices.SECURITY_PARTITION, [SUBJECTS[1][0]])
-        openbb_fetch = openbb.fetch
-        openbb.fetch = record
+        saved = openbb.price_history
+        openbb.price_history = record
         try:
             result = dg.materialize(
                 [asset_prices.raw_price_history],
@@ -192,7 +191,7 @@ def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_p
                 },
             )
         finally:
-            openbb.fetch = openbb_fetch
+            openbb.price_history = saved
 
     assert result.success
     assert asked == ["005930.KS"], "the whole universe is askable; only this partition was asked"
@@ -210,7 +209,7 @@ def test_a_batch_that_never_answered_is_transport_and_never_empty(tmp_path: Path
     negative caching. The counter was still lying.
     """
 
-    def broken(route: str, **kw: Any) -> Answer:
+    def broken(symbols: Sequence[str], **kw: Any) -> Answer:
         raise PermissionError("[Errno 13] Permission denied: '.../openbb/.build.lock'")
 
     m = meta(materialise(tmp_path, broken), asset_prices.raw_price_bars)
@@ -227,7 +226,7 @@ def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything
     isolation pass has already re-asked each subject of each batch individually."""
     calls: list[int] = []
 
-    def broken(route: str, **kw: Any) -> Answer:
+    def broken(symbols: Sequence[str], **kw: Any) -> Answer:
         calls.append(1)
         raise ConnectionRefusedError("connection refused")
 
@@ -248,9 +247,9 @@ def test_a_partition_contains_only_its_own_window(tmp_path: Path) -> None:
     partition that had asked for one day.
     """
 
-    def spilling(route: str, **kw: Any) -> Answer:
+    def spilling(symbols: Sequence[str], **kw: Any) -> Answer:
         rows = []
-        for s in kw["symbol"].split(","):
+        for s in symbols:
             for d in (KEY, "2099-01-01"):  # the second is unambiguously outside any window
                 rows.append({"symbol": s, "date": d, "close": 100.0})
         return Answer(rows=rows)

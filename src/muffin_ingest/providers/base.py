@@ -24,7 +24,6 @@ refuses it and nothing is written.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -77,19 +76,3 @@ class Provider(Protocol):
         """What this provider's wording means. Shared vocabulary lives in `vocab.py`; a provider
         overrides only where it says something the others do not."""
         ...
-
-
-def spell_all(provider: Provider, securities: Sequence[SecurityRef]) -> dict[str, SecurityRef]:
-    """Map a provider's spelling back to the security it belongs to.
-
-    Returned as a MAP rather than a list because a batched response is matched back by symbol, and
-    a provider that adds a `symbol` column only when several are requested (yfinance does) makes the
-    single-symbol case a different shape. Silently addressing the wrong security is the failure this
-    prevents.
-    """
-    out: dict[str, SecurityRef] = {}
-    for security in securities:
-        spelled = provider.spell(security)
-        if spelled is not None:
-            out[spelled] = security
-    return out

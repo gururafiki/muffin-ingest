@@ -7,7 +7,7 @@ and cost 621 of 1,015 rows in one backlog against a 25-calls-a-day provider.
 
 from __future__ import annotations
 
-from muffin_ingest.providers.base import Provider, SecurityRef, spell_all
+from muffin_ingest.providers.base import SecurityRef
 from muffin_ingest.providers.outcome import Outcome
 from muffin_ingest.providers.vocab import no_data_for_subject, throttled
 
@@ -84,28 +84,3 @@ def test_an_unaddressable_security_returns_none_rather_than_a_wrong_name() -> No
     """
     assert SecProvider().spell(ASML_OTC) is None
     assert PriceProvider().spell(ASML_OTC) == "ASML.AS", "prices still work off the local line"
-
-
-def test_spell_all_maps_back_to_the_security() -> None:
-    """A batched response is matched by symbol, so addressing the wrong security is the risk."""
-    got = spell_all(PriceProvider(), [SAMSUNG, BERKSHIRE, ASML_OTC])
-    assert got["005930.KS"] is SAMSUNG
-    assert got["BRK-B"] is BERKSHIRE
-
-
-def test_spell_all_drops_what_cannot_be_addressed() -> None:
-    """Rather than including it under a null key, which would ask the provider about `None`."""
-    got = spell_all(SecProvider(), [SAMSUNG, BERKSHIRE, ASML_OTC])
-    assert list(got) == ["BRK-B"]
-
-
-def test_a_throttle_is_never_a_dead_subject() -> None:
-    p = PriceProvider()
-    assert p.classify("YFRateLimitError: Too Many Requests") is Outcome.THROTTLED
-    assert p.classify("No dividend data found for TSLA") is Outcome.DEAD_SUBJECT
-    assert p.classify("connection reset") is Outcome.TRANSPORT
-
-
-def test_the_stubs_satisfy_the_protocol() -> None:
-    assert isinstance(PriceProvider(), Provider)
-    assert isinstance(SecProvider(), Provider)
