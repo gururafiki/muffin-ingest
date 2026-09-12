@@ -38,10 +38,48 @@ def test_a_hyphenated_provider_maps_to_an_underscored_variable(
 def test_settings_are_read_at_call_time_not_import(monkeypatch: pytest.MonkeyPatch) -> None:
     """Read at import, a missing variable kills the process before argv is parsed — which is how a
     guard lost its offline mode and stopped running in CI entirely."""
-    monkeypatch.setenv("MUFFIN_USER_AGENT", "first")
-    assert settings.user_agent() == "first"
-    monkeypatch.setenv("MUFFIN_USER_AGENT", "second")
-    assert settings.user_agent() == "second"
+    # Both values have to satisfy the SEC shape below, or this test fails for a reason that has
+    # nothing to do with when the variable is read.
+    monkeypatch.setenv("MUFFIN_USER_AGENT", "muffin/1.0 (first@example.com)")
+    assert settings.user_agent() == "muffin/1.0 (first@example.com)"
+    monkeypatch.setenv("MUFFIN_USER_AGENT", "muffin/1.0 (second@example.com)")
+    assert settings.user_agent() == "muffin/1.0 (second@example.com)"
+
+
+def test_the_user_agent_sec_will_actually_accept(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DEFAULT GUARANTEED TO 403 IS WORSE THAN NO DEFAULT, and this function had one.
+
+    Measured against `www.sec.gov/files/company_tickers.json` on 2026-09-12, two paced rounds,
+    identical both times — the rows are the four cases asserted below:
+
+        403   1,924 B   muffin-market/1.0 (+https://github.com/…/muffin)   <- the deployed value
+        403   1,924 B   muffin-market/1.0 (+https://github.com/…; ops@example.com)
+        200 797,931 B   muffin-market/1.0 (ops@example.com)
+        403   1,924 B   muffin-market/1.0 (example.org)
+
+    THE SECOND CASE IS WHY THIS TEST HAS FOUR AND NOT TWO. "Must contain an email" is necessary
+    and NOT sufficient: a User-Agent carrying both an email and a URL is still refused, so a guard
+    checking only for the email would pass the exact string that was deployed and broken. My first
+    reading of an unpaced burst was that a URL was tolerated alongside an email; it did not
+    reproduce when the probes were spaced, and rate limiting was ruled out separately (the
+    known-good string returns 200 immediately and again after a 45-second wait).
+
+    Nothing called `settings.user_agent()` until the registry lane, so the mandated header was
+    configured, deployed, and had never once been used.
+    """
+    monkeypatch.setenv("MUFFIN_USER_AGENT", "muffin-market/1.0 (ops@example.com)")
+    assert settings.user_agent() == "muffin-market/1.0 (ops@example.com)"
+
+    for refused, why in [
+        ("muffin-market/1.0 (+https://github.com/gururafiki/muffin)", "a URL and no contact"),
+        ("muffin-market/1.0 (+https://github.com/x; ops@example.com)", "a URL DESPITE a contact"),
+        ("muffin-market/1.0 (example.org)", "a bare hostname"),
+        ("", "unset"),
+    ]:
+        monkeypatch.setenv("MUFFIN_USER_AGENT", refused)
+        with pytest.raises(RuntimeError, match="MUFFIN_USER_AGENT"):
+            settings.user_agent()
+            raise AssertionError(f"accepted a User-Agent SEC refuses ({why}): {refused!r}")
 
 
 def test_the_cache_url_the_stack_actually_sets_is_the_one_that_works(
