@@ -15,6 +15,7 @@ import dagster as dg
 import pytest
 
 from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager, _updatable
+from muffin_ingest_dagster.resources import Postgres
 
 DAY = dg.DailyPartitionsDefinition(start_date="2026-09-01")
 
@@ -89,8 +90,13 @@ def test_the_core_manager_refuses_an_asset_that_does_not_say_where_its_rows_go()
     def undeclared() -> list[dict[str, Any]]:
         return [{"a": 1}]
 
+    # A REAL `Postgres` IS SAFE HERE AND THE POINT OF THE TEST. The refusal must happen BEFORE a
+    # connection is opened — an asset that cannot say where its rows go should cost nothing — so
+    # if this ever starts needing a fake, the check has moved to the wrong side of the connect.
     with pytest.raises(Exception) as caught:
-        dg.materialize([undeclared], resources={"postgres_io": PostgresIOManager()})
+        dg.materialize(
+            [undeclared], resources={"postgres_io": PostgresIOManager(postgres=Postgres())}
+        )
     assert "declares no" in str(caught.value) or "declares no" in str(caught.value.__cause__)
 
 

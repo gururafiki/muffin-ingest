@@ -19,7 +19,7 @@ plausibility band, and subunits being DERIVED rather than fetched.
 # No `from __future__ import annotations` — Dagster resolves `context` by comparing the class.
 
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import dagster as dg
@@ -27,6 +27,7 @@ from dagster import AssetExecutionContext
 
 from muffin_ingest.facets import fx
 from muffin_ingest.providers import yahoo_chart
+from muffin_ingest_dagster import partitioned
 from muffin_ingest_dagster.resources import Postgres
 
 #: Same start as the price lane: a partition older than go-live claims a collection that never ran.
@@ -158,32 +159,11 @@ def _collect(
     return rows, stats
 
 
-def _by_partition(
-    context: AssetExecutionContext, rows: list[dict[str, Any]]
-) -> list[dict[str, Any]] | dict[str, list[dict[str, Any]]]:
-    """One object per partition when a run covers several; the rows themselves when it covers one.
-
-    THE SAME SHAPE RULE AS THE PRICE LANE, and it is not optional: `UPathIOManager` refuses a
-    multi-partition output outright, and its `load_input` hands a downstream step covering several
-    partitions a mapping rather than the object. Both ends, every lane.
-    """
-    if context.has_partition_key or not context.has_partition_key_range:
-        return rows
-    # A RANGE OF EXACTLY ONE IS NOT A RANGE — `UPathIOManager` takes its single-partition path and
-    # would be handed a mapping to write. See the note in `assets/prices.py`.
-    if len(list(context.partition_keys)) == 1:
-        return rows
-    out: dict[str, list[dict[str, Any]]] = {key: [] for key in context.partition_keys}
-    for row in rows:
-        out.setdefault(str(row["currency_code"]), []).append(row)
-    return out
-
-
-def _loaded_rows(loaded: Any) -> list[dict[str, Any]]:
-    """The mirror of `_by_partition` on the way back in."""
-    if isinstance(loaded, dict):
-        return [row for _, rows in sorted(loaded.items()) for row in rows]
-    return list(loaded)
+# Shared with every other lane — see `muffin_ingest_dagster.partitioned`. The local copy keyed
+# every lane on `currency_code`, which is right for the CURRENCY-partitioned history asset and
+# wrong for the DATE-partitioned spot one; passing the key per call site is what makes that
+# impossible to get wrong silently.
+_loaded_rows = partitioned.loaded_rows
 
 
 # ── Lane A: today's rate for every currency ────────────────────────────────────────────────────
@@ -196,6 +176,7 @@ def _loaded_rows(loaded: Any) -> list[dict[str, Any]]:
     io_manager_key="parquet_io",
     group_name="fx",
     kinds={"yahoo", "parquet"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Every tracked currency's latest close against USD, as the provider gave it.",
 )
 def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgres) -> Any:
@@ -235,7 +216,16 @@ def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgre
     )
 
     context.add_output_metadata({**stats, "rows": len(rows), "currencies": len(currencies)})
-    return rows
+    # KEYED BY THE BAR'S OWN DAY, because this asset is DATE-partitioned — a `single_run` backfill
+    # covering several days must write one file per day. This returned a flat list until
+    # 2026-09-12, so the first multi-day FX backfill would have fetched every rate and then died at
+    # the write with `does not support persisting an output associated with multiple partitions`.
+    # It had never been run, which is the only reason it was never seen: the daily schedule always
+    # covers exactly one partition, and that is the path a flat list happens to satisfy.
+    #
+    # `as_of` is already the ISO day the point belongs to, dated from the provider's `gmtoffset`
+    # rather than from UTC — so the partition key comes from the data, not from the clock.
+    return partitioned.by_partition(context, rows, key=lambda r: str(r["as_of"]))
 
 
 @dg.asset(
@@ -246,6 +236,10 @@ def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgre
     group_name="fx",
     kinds={"postgres"},
     metadata={"table": "market.fx_rate", "conflict": ["currency_code", "as_of"]},
+    # SAME WINDOW AS ITS SOURCE. A normalise stage stale while its raw is fresh means the
+    # TRANSFORM stopped — a different failure from the provider going quiet, and invisible
+    # otherwise, because the raw asset's own policy would still be green.
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Today's rates as core rows, with subunits derived from their parents.",
 )
 def fx_rate(
@@ -296,7 +290,9 @@ def raw_fx_history(context: AssetExecutionContext, config: FxRun, postgres: Post
         budget_seconds=config.budget_seconds,
     )
     context.add_output_metadata({**stats, "rows": len(rows)})
-    return _by_partition(context, rows)
+    # Keyed by CURRENCY here — this lane's partition is the currency, where the spot lane's is the
+    # day. Same helper, different key, which is the whole reason the key is a parameter.
+    return partitioned.by_partition(context, rows, key=lambda r: str(r["currency_code"]))
 
 
 @dg.asset(
@@ -307,6 +303,13 @@ def raw_fx_history(context: AssetExecutionContext, config: FxRun, postgres: Post
     group_name="fx",
     kinds={"postgres"},
     metadata={"table": "market.fx_rate", "conflict": ["currency_code", "as_of"]},
+    # NO FRESHNESS POLICY, AND THAT IS THE POINT OF THIS LANE. It idles at zero by design — the
+    # load is one backfill and then nothing until a new subject appears. A staleness window here
+    # would go red the day after the load and stay red for ever, against a lane behaving exactly
+    # as intended, and this codebase has twice paid for a gate left red for a reason nobody acts
+    # on: the cost is never the ignored check, it is the next true positive behind it.
+    #
+    # "Is this subject loaded?" is answered by the PARTITION GRID, not by a clock.
     description="The weekly history as core rows, into the same table Lane A writes.",
 )
 def fx_rate_history(

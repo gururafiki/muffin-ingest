@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING, Any
 
 import dagster as dg
 
-from muffin_ingest import settings
 from muffin_ingest.writers import WriteResult, replace_scope, upsert
+from muffin_ingest_dagster.resources import Postgres
 
 if TYPE_CHECKING:
     from upath import UPath
@@ -151,11 +151,17 @@ class PostgresIOManager(dg.ConfigurableIOManager):
     rows go beside the asset rather than in a connection it opened itself. That is what makes
     `dedupe_by` on the conflict key — the rule that has failed whole statements with SQLSTATE 21000
     four separate times — unavoidable rather than remembered.
+
+    IT TAKES THE `Postgres` RESOURCE RATHER THAN CALLING `psycopg.connect` ITSELF. It was the one
+    place in the orchestration layer that opened its own connection, which meant the resource was
+    the single place that decides HOW to connect for everything EXCEPT the writes — so a statement
+    timeout, a pool, or a read replica added there would have silently skipped every core write,
+    and nothing would have reported it.
     """
 
-    def handle_output(self, context: dg.OutputContext, obj: Rows) -> None:
-        import psycopg
+    postgres: Postgres
 
+    def handle_output(self, context: dg.OutputContext, obj: Rows) -> None:
         meta = context.definition_metadata or {}
         table = meta.get("table")
         conflict = meta.get("conflict")
@@ -174,7 +180,7 @@ class PostgresIOManager(dg.ConfigurableIOManager):
         # one. An asset declaring `replace_scope` gets delete-then-insert per scope value instead.
         scope_columns = [str(c) for c in (meta.get("replace_scope") or [])]
 
-        with psycopg.connect(settings.database_url()) as conn:
+        with self.postgres.connect() as conn:
             with conn.cursor() as cur:
                 if scope_columns:
                     result = _replace_scopes(cur, str(table), rows, scope_columns, list(conflict))

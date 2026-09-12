@@ -664,3 +664,106 @@ def test_every_collection_schedule_is_running() -> None:
         if s.default_status is dg.DefaultScheduleStatus.RUNNING
     }
     assert collecting <= running, f"not running: {sorted(collecting - running)}"
+
+
+def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
+    """A POOL NAME IS NEVER VALIDATED AGAINST ANYTHING, so a typo is silent and total.
+
+    `dagster.yaml` carries `concurrency.pools.default_limit: 1` and Dagster's config schema accepts
+    only `default_limit`, `granularity` and `op_granularity_run_buffer` — verified against the
+    installed package's own `dagster_instance_config_schema()`, because this file has crash-looped
+    the daemon once already on a key that did not exist. **There is no per-pool map to enumerate.**
+
+    Which means every pool is created on first use at limit 1, including one that does not exist:
+    `pool="yfinanc"` gets its own pool, serialises against nothing, and reports success for ever.
+    The failure is the one this pipeline is built around — a burst against a rate-limited provider,
+    with no counter able to show it.
+
+    So the declared set lives here, and the test is what makes it load-bearing. A new provider is a
+    line in this set; a typo is a red build.
+
+    `sql` is the exception and is deliberate: it is not a provider but a shared resource, and it
+    bounds concurrent writers against the one database the app also reads.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    known = {"yfinance", "yahoo", "finviz", "sql"}
+    # The pool is declared on the asset's underlying op, not on the AssetsDefinition.
+    used = {
+        pool
+        for asset in (d.defs.assets or [])
+        if (pool := getattr(getattr(asset, "op", None), "pool", None)) is not None
+    }
+    assert used, "no asset declares a pool — the concurrency guarantee is gone entirely"
+    assert used <= known, (
+        f"undeclared pool(s) {sorted(used - known)}. Dagster creates a pool on first use, so a "
+        f"misspelling is indistinguishable from a real provider and bounds nothing."
+    )
+
+
+def test_the_finviz_asset_does_not_sit_on_the_yfinance_pool() -> None:
+    """A POOL IS A PROVIDER, and `raw_sector_performance` calls finviz.
+
+    It sat on `yfinance` until 2026-09-12, which had the opposite of the intended effect twice
+    over: it serialised against the price lane, which it shares no rate limit with, and it did not
+    serialise against anything finviz-shaped. Asserted by name rather than by "every asset has some
+    pool", because the wrong pool and the right pool are equally present.
+    """
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    pool = asset_indices.raw_sector_performance.op.pool
+    assert pool == "finviz", f"raw_sector_performance is on the {pool!r} pool, not finviz"
+
+
+def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does() -> None:
+    """FRESHNESS IS HOW "THIS STOPPED RUNNING" BECOMES VISIBLE WITHOUT A GRAFANA RULE — and until
+    2026-09-12 exactly one asset of thirteen had a policy.
+
+    But the split matters more than the coverage, in both directions:
+
+    * A SCHEDULED asset with no policy goes quiet and nothing notices. That is the failure
+      `resource_health` and `muffin-resource-stalled` exist to catch in the old system, rebuilt in
+      the orchestrator that already knows when each asset last materialised.
+
+    * A BACKFILL-ONLY asset with a policy goes red the day after its load and stays red for ever,
+      against a lane behaving exactly as designed. This codebase has twice paid for a gate left
+      red for a reason nobody acts on, and the cost is never the ignored check — it is the next
+      true positive behind it.
+
+    So the assertion runs both ways. The tidying instinct that makes four assets "consistent" is
+    the same one that reintroduced the history lane's OOM by making its backfill policy match the
+    cross-section's, which is why that asymmetry is pinned by a test too.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    #: Idles at zero by design: the load is one backfill, then nothing until a new subject appears.
+    backfill_only = {
+        "raw_price_history",
+        "price_bar_history",
+        "raw_fx_history",
+        "fx_rate_history",
+    }
+
+    # READ OFF THE SPEC. `freshness_policies_by_key` exists and is the LEGACY one — it returns
+    # nothing for a policy declared via `@asset(freshness_policy=...)`, so a test using it reports
+    # every asset as unwatched and would have been "fixed" by adding policies that were already
+    # there. A guard whose accessor is wrong fails in the safe direction exactly once.
+    policies = {
+        spec.key.to_user_string(): spec.freshness_policy
+        for asset in d.defs.assets or []
+        for spec in getattr(asset, "specs", [])
+    }
+
+    assert policies, "no assets resolved — the accessor moved and this test now proves nothing"
+
+    missing = sorted(n for n, p in policies.items() if p is None and n not in backfill_only)
+    assert not missing, (
+        f"scheduled asset(s) with no freshness policy: {missing}. A lane that stops running is "
+        f"invisible without one — that is the whole failure mode `resource_health` was built for."
+    )
+
+    wrongly_watched = sorted(n for n in backfill_only if policies.get(n) is not None)
+    assert not wrongly_watched, (
+        f"backfill-only lane(s) carrying a freshness policy: {wrongly_watched}. These idle at zero "
+        f"on purpose, so a staleness window goes red the day after the load and never recovers."
+    )

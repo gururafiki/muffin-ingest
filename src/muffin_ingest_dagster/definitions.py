@@ -27,6 +27,8 @@ TWO CONVENTIONS THAT ARE LOAD-BEARING AND EASY TO LOSE:
 # Caught by the `definitions` CI job on its first run, which is what that job exists for: this
 # module is loaded by the gRPC server at startup, so the failure would otherwise have been a
 # restart loop with the reason only in `docker service logs`.
+from datetime import timedelta
+
 import dagster as dg
 from dagster import AssetExecutionContext
 
@@ -43,6 +45,11 @@ from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_stora
     "database, which is the one thing a smoke asset should establish.",
     pool="sql",
     kinds={"postgres"},
+    # HOURLY SCHEDULE, SO THREE HOURS IS TWO MISSED TICKS. This is the canary for the whole code
+    # location — if it stops, the daemon or the database connection has gone, and every other
+    # asset's own policy will follow it red a day later. Tighter than the daily lanes on purpose:
+    # it is the cheapest asset here and the first thing that should say something is wrong.
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=3)),
 )
 def ledger_health(
     context: AssetExecutionContext, postgres: Postgres
@@ -265,6 +272,8 @@ defs = dg.Definitions(
         # ONE MANAGER PER STORAGE CLASS, never one per asset — which is what makes the writers'
         # rules apply to every facet without any of them remembering.
         "parquet_io": ParquetIOManager(settings.raw_root()),
-        "postgres_io": PostgresIOManager(),
+        # The writer takes the SAME resource every reader uses, rather than opening its own
+        # connection — see `PostgresIOManager`'s docstring for what that silently skipped.
+        "postgres_io": PostgresIOManager(postgres=Postgres()),
     },
 )

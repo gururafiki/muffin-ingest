@@ -28,6 +28,7 @@ from dagster import AssetExecutionContext
 from muffin_ingest.derive import returns
 from muffin_ingest.facets import indices, prices
 from muffin_ingest.providers import openbb
+from muffin_ingest_dagster import partitioned
 from muffin_ingest_dagster.resources import Postgres
 
 index_day = dg.DailyPartitionsDefinition(start_date="2026-09-01", timezone="UTC")
@@ -54,6 +55,7 @@ class IndexRun(dg.Config):
     io_manager_key="parquet_io",
     group_name="indices",
     kinds={"yfinance", "parquet"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Proxy-ETF bars for every country and group scope, as the provider gave them.",
 )
 def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: Postgres) -> Any:
@@ -151,7 +153,11 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
         stats["empty"] += sum(1 for s in batch if s.upper() not in {k.upper() for k in parsed})
 
     context.add_output_metadata({**stats, "rows": len(rows), "scopes": len(scopes)})
-    return rows
+    # KEYED BY THE BAR'S OWN DAY — this asset is DATE-partitioned, so a `single_run` backfill over
+    # several days must write one file per day. It returned a flat list until 2026-09-12, which
+    # works for the one-partition path the daily schedule always takes and dies at the write on
+    # the first multi-day backfill, after every provider call has been paid for.
+    return partitioned.by_partition(context, rows, key=lambda r: str(r["trade_date"]))
 
 
 @dg.asset(
@@ -171,10 +177,14 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
     # past day, and the materialisation event is already the record of when it was taken — so the
     # honest model has no date partition at all, and `as_of` comes from the DATA rather than from
     # a partition key. That is the same rule the returns gate forced onto `security_return`.
-    pool="yfinance",
+    # FINVIZ, NOT YFINANCE — a pool is a PROVIDER, and this asset sat on the yfinance pool while
+    # calling finviz. The effect was the opposite of the one intended: it serialised against the
+    # price lane it shares nothing with, and did not serialise against anything finviz-shaped.
+    pool="finviz",
     io_manager_key="parquet_io",
     group_name="indices",
     kinds={"finviz", "parquet"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Sector performance as finviz publishes it — a current snapshot, not a series.",
 )
 def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -> Any:
@@ -227,6 +237,7 @@ def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -
         # generating it. Scoped per index so a bounded run retracts only what it covered.
         "replace_scope": ["index_code"],
     },
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Country and group returns computed from proxy bars, plus finviz's sector figures.",
 )
 def index_return(
@@ -295,8 +306,5 @@ def index_return(
     return out
 
 
-def _rows(loaded: Any) -> list[dict[str, Any]]:
-    """The multi-partition load shape, flattened — the mirror every lane needs."""
-    if isinstance(loaded, dict):
-        return [row for _, rows in sorted(loaded.items()) for row in rows]
-    return list(loaded)
+# The mirror every lane needs — shared, see `muffin_ingest_dagster.partitioned`.
+_rows = partitioned.loaded_rows

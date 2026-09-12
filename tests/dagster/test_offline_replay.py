@@ -566,3 +566,107 @@ def test_a_range_of_exactly_one_partition_is_written_as_one_partition(tmp_path: 
     assert written == [key]
     got = sql(tmp_path / "raw_price_bars" / f"{key}.parquet", "select count(*) from {f}")
     assert got[0][0] > 0, "and it must hold rows rather than a serialised mapping"
+
+
+def test_a_multi_day_fx_backfill_writes_one_file_per_day(tmp_path: Path) -> None:
+    """`single_run` + a flat return is a WRITE failure, and it had never been run.
+
+    `raw_fx_spot` declares `BackfillPolicy.single_run()`, so a backfill hands it every day at once
+    and `UPathIOManager` needs one object per partition. It returned a flat list until 2026-09-12,
+    which dies with
+
+        does not support persisting an output associated with multiple partitions
+
+    — after every provider call has been paid for. The daily schedule always covers exactly one
+    partition, and a flat list is correct for that path, so the defect was invisible in production
+    and in every existing test. Only a range reaches it.
+
+    The two days must carry DIFFERENT values, or a mis-keyed split writes the same rows to both
+    files and the assertion passes under either rule.
+    """
+    from muffin_ingest.providers import yahoo_chart
+    from muffin_ingest_dagster.assets import fx as asset_fx
+
+    keys = ["2026-09-08", "2026-09-09"]
+
+    def two_days(symbol: str, **kwargs: Any) -> yahoo_chart.Series:
+        return yahoo_chart.Series(
+            points=[
+                yahoo_chart.Point(as_of=date(2026, 9, 8), close=1.11),
+                yahoo_chart.Point(as_of=date(2026, 9, 9), close=2.22),
+            ]
+        )
+
+    saved = yahoo_chart.chart
+    yahoo_chart.chart = two_days
+    try:
+        result = dg.materialize(
+            [asset_fx.raw_fx_spot],
+            tags={
+                "dagster/asset_partition_range_start": keys[0],
+                "dagster/asset_partition_range_end": keys[-1],
+            },
+            resources={
+                "postgres": FxPostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        yahoo_chart.chart = saved
+
+    assert result.success, "a multi-day FX backfill must not die at the write"
+
+    for key, close in zip(keys, [1.11, 2.22], strict=True):
+        path = tmp_path / "raw_fx_spot" / f"{key}.parquet"
+        assert path.exists(), f"no file for {key} — the range was not split per partition"
+        got = sql(path, "select distinct as_of, close from {f} order by 1")
+        assert got == [(key, close)], (
+            f"{key} holds {got} — each partition must carry its OWN day's rate and no other's"
+        )
+
+
+def test_a_multi_day_index_backfill_writes_one_file_per_day(tmp_path: Path) -> None:
+    """The same defect in the index lane, found by the same means.
+
+    Both lanes declared `single_run()` and returned a flat list; neither had ever been backfilled.
+    Fixing one and not the other is how this family has repeatedly lost a week — the helper is
+    shared now so there is one place to get it right.
+    """
+    from muffin_ingest.facets import indices as facet_indices
+    from muffin_ingest.providers import openbb as hub
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    keys = ["2026-09-08", "2026-09-09"]
+
+    def two_days(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(
+            rows=[
+                {"symbol": "EWZ", "date": "2026-09-08", "close": 100.0, "volume": 1},
+                {"symbol": "EWZ", "date": "2026-09-09", "close": 200.0, "volume": 1},
+            ]
+        )
+
+    saved_fetch = hub.price_history
+    saved_scopes = facet_indices.proxied_scopes
+    hub.price_history = two_days
+    facet_indices.proxied_scopes = lambda conn: [("country:BR", "EWZ")]
+    try:
+        result = dg.materialize(
+            [asset_indices.raw_index_bars],
+            tags={
+                "dagster/asset_partition_range_start": keys[0],
+                "dagster/asset_partition_range_end": keys[-1],
+            },
+            resources={
+                "postgres": FxPostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+            },
+        )
+    finally:
+        hub.price_history = saved_fetch
+        facet_indices.proxied_scopes = saved_scopes
+
+    assert result.success, "a multi-day index backfill must not die at the write"
+    for key in keys:
+        path = tmp_path / "raw_index_bars" / f"{key}.parquet"
+        assert path.exists(), f"no file for {key} — the range was not split per partition"
