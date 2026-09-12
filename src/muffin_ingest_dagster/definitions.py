@@ -167,12 +167,21 @@ daily_prices = dg.build_schedule_from_partitioned_job(
     default_status=dg.DefaultScheduleStatus.RUNNING,
 )
 
-#: The FX cross-section, stopped for the same reason and on the same terms: 43 requests a day is
-#: cheap, but a schedule started before anyone has compared its output against `market.fx_rate` is
-#: still spending a budget on numbers nobody has checked.
-#: Stopped, on the same terms as the other two: 62 ETF symbols plus one finviz call is cheap, and
-#: a schedule started before anyone has compared its output against `market.performance` is still
-#: spending a budget on numbers nobody has checked.
+#: RUNNING, AND THE COMPARISON THAT GATED IT WAS ADJUDICATED AGAINST THE PROVIDER RATHER THAN
+#: AGAINST `market.performance`.
+#:
+#: Compared naively the two tables disagree enormously — 453 of 626 (scope, period) pairs by more
+#: than half a point, `country:KR 1d` at **-4.1933 against +3.2498**, a sign flip. That comparison
+#: measures nothing: `index_return` is anchored on a TRADE DATE and `performance.as_of` is the
+#: RUN's timestamp, so with this schedule stopped the new table sat at 2026-09-10 while the old
+#: resource had run on 09-12. Two different days, and `performance` upserts in place, so there is
+#: no history to pin them to a common one.
+#:
+#: Yahoo settles it. EWY closed 190.78 / 182.78 / 188.72 on 09-09 / 09-10 / 09-11, so the 1d return
+#: ending 09-10 is **-4.1933%** and the one ending 09-11 is **+3.2498%** — each side matches the
+#: provider EXACTLY, to four decimal places, for its own anchor. Both are right; only the anchors
+#: differed. The match also confirms the live-quote drop: the new value is the completed bar, never
+#: `regularMarketTime`.
 daily_indices = dg.build_schedule_from_partitioned_job(
     dg.define_asset_job(
         "daily_indices",
@@ -183,6 +192,18 @@ daily_indices = dg.build_schedule_from_partitioned_job(
     default_status=dg.DefaultScheduleStatus.RUNNING,
 )
 
+#: RUNNING. 43 requests a day is cheap; what gated it was comparing the output against
+#: `market.fx_rate` — and that comparison CANNOT attribute a row, which is worth stating rather
+#: than leaving as an implied clean bill of health.
+#:
+#: Both writers target the same table with the same key and the same `source_code`, and the old
+#: edge function populates `derived_from` and the subunit rule too, so nothing on a stored row
+#: says which produced it. What IS measurable: the stored 2026-09-11 rates sit 0.03%-0.57% above
+#: the provider's completed 09-11 close for all six of EUR/GBP/JPY/KRW/ILS/TWD — the same
+#: direction every time, which is one common USD move, i.e. the signature of a value snapshotted
+#: mid-session rather than at the close. That is the OLD resource's shape and precisely what this
+#: lane's `regularMarketTime` drop exists to prevent. Suggestive, not proof — but it argues for
+#: the cutover rather than against it, and after it this lane is the only writer.
 daily_fx = dg.build_schedule_from_partitioned_job(
     dg.define_asset_job(
         "daily_fx",
