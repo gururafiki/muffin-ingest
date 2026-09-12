@@ -664,3 +664,52 @@ def test_every_collection_schedule_is_running() -> None:
         if s.default_status is dg.DefaultScheduleStatus.RUNNING
     }
     assert collecting <= running, f"not running: {sorted(collecting - running)}"
+
+
+def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
+    """A POOL NAME IS NEVER VALIDATED AGAINST ANYTHING, so a typo is silent and total.
+
+    `dagster.yaml` carries `concurrency.pools.default_limit: 1` and Dagster's config schema accepts
+    only `default_limit`, `granularity` and `op_granularity_run_buffer` — verified against the
+    installed package's own `dagster_instance_config_schema()`, because this file has crash-looped
+    the daemon once already on a key that did not exist. **There is no per-pool map to enumerate.**
+
+    Which means every pool is created on first use at limit 1, including one that does not exist:
+    `pool="yfinanc"` gets its own pool, serialises against nothing, and reports success for ever.
+    The failure is the one this pipeline is built around — a burst against a rate-limited provider,
+    with no counter able to show it.
+
+    So the declared set lives here, and the test is what makes it load-bearing. A new provider is a
+    line in this set; a typo is a red build.
+
+    `sql` is the exception and is deliberate: it is not a provider but a shared resource, and it
+    bounds concurrent writers against the one database the app also reads.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    known = {"yfinance", "yahoo", "finviz", "sql"}
+    # The pool is declared on the asset's underlying op, not on the AssetsDefinition.
+    used = {
+        pool
+        for asset in (d.defs.assets or [])
+        if (pool := getattr(getattr(asset, "op", None), "pool", None)) is not None
+    }
+    assert used, "no asset declares a pool — the concurrency guarantee is gone entirely"
+    assert used <= known, (
+        f"undeclared pool(s) {sorted(used - known)}. Dagster creates a pool on first use, so a "
+        f"misspelling is indistinguishable from a real provider and bounds nothing."
+    )
+
+
+def test_the_finviz_asset_does_not_sit_on_the_yfinance_pool() -> None:
+    """A POOL IS A PROVIDER, and `raw_sector_performance` calls finviz.
+
+    It sat on `yfinance` until 2026-09-12, which had the opposite of the intended effect twice
+    over: it serialised against the price lane, which it shares no rate limit with, and it did not
+    serialise against anything finviz-shaped. Asserted by name rather than by "every asset has some
+    pool", because the wrong pool and the right pool are equally present.
+    """
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    pool = asset_indices.raw_sector_performance.op.pool
+    assert pool == "finviz", f"raw_sector_performance is on the {pool!r} pool, not finviz"

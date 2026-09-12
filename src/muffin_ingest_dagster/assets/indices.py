@@ -176,7 +176,10 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
     # past day, and the materialisation event is already the record of when it was taken — so the
     # honest model has no date partition at all, and `as_of` comes from the DATA rather than from
     # a partition key. That is the same rule the returns gate forced onto `security_return`.
-    pool="yfinance",
+    # FINVIZ, NOT YFINANCE — a pool is a PROVIDER, and this asset sat on the yfinance pool while
+    # calling finviz. The effect was the opposite of the one intended: it serialised against the
+    # price lane it shares nothing with, and did not serialise against anything finviz-shaped.
+    pool="finviz",
     io_manager_key="parquet_io",
     group_name="indices",
     kinds={"finviz", "parquet"},

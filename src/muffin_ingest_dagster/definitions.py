@@ -265,6 +265,8 @@ defs = dg.Definitions(
         # ONE MANAGER PER STORAGE CLASS, never one per asset — which is what makes the writers'
         # rules apply to every facet without any of them remembering.
         "parquet_io": ParquetIOManager(settings.raw_root()),
-        "postgres_io": PostgresIOManager(),
+        # The writer takes the SAME resource every reader uses, rather than opening its own
+        # connection — see `PostgresIOManager`'s docstring for what that silently skipped.
+        "postgres_io": PostgresIOManager(postgres=Postgres()),
     },
 )
