@@ -1,0 +1,5043 @@
+<?xml version="1.0" encoding="UTF-8"?><edgarSubmission xmlns="http://www.sec.gov/edgar/nport" xmlns:com="http://www.sec.gov/edgar/common" xmlns:ncom="http://www.sec.gov/edgar/nportcommon" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sec.gov/edgar/nport eis_NPORT_Filer.xsd">
+  <headerData>
+    <submissionType>NPORT-P</submissionType>
+    <isConfidential>false</isConfidential>
+    <filerInfo>
+
+      <filer>
+        <issuerCredentials>
+          <cik>0000930667</cik>
+          <ccc>XXXXXXXX</ccc>
+        </issuerCredentials>
+      </filer>
+
+
+      <seriesClassInfo>
+        <seriesId>S000004249</seriesId>
+        <classId>C000011953</classId>
+      </seriesClassInfo>
+
+    </filerInfo>
+  </headerData>
+  <formData>
+    <genInfo>
+      <regName>iShares, Inc.</regName>
+      <regFileNumber>811-09102</regFileNumber>
+      <regCik>0000930667</regCik>
+      <regLei>549300MGJZCNMJLBAJ67</regLei>
+      <regStreet1>400 Howard Street</regStreet1>
+      <regCity>San Francisco</regCity>
+      <regStateConditional regCountry="US" regState="US-CA"/>
+      <regZipOrPostalCode>94105</regZipOrPostalCode>
+      <regPhone>800-474-2737</regPhone>
+      <seriesName>iShares MSCI Japan ETF</seriesName>
+      <seriesId>S000004249</seriesId>
+      <seriesLei>5493008I6YRUC6I0S051</seriesLei>
+      <repPdEnd>2026-08-31</repPdEnd>
+      <repPdDate>2026-05-31</repPdDate>
+      <isFinalFiling>N</isFinalFiling>
+    </genInfo>
+    <fundInfo>
+      <totAssets>21323080103.17</totAssets>
+      <totLiabs>24906854.33</totLiabs>
+      <netAssets>21298173248.84</netAssets>
+      <assetsAttrMiscSec>0.00000000</assetsAttrMiscSec>
+      <assetsInvested>0.00000000</assetsInvested>
+      <amtPayOneYrBanksBorr>0.00000000</amtPayOneYrBanksBorr>
+      <amtPayOneYrCtrldComp>0.00000000</amtPayOneYrCtrldComp>
+      <amtPayOneYrOthAffil>0.00000000</amtPayOneYrOthAffil>
+      <amtPayOneYrOther>0.00000000</amtPayOneYrOther>
+      <amtPayAftOneYrBanksBorr>0.00000000</amtPayAftOneYrBanksBorr>
+      <amtPayAftOneYrCtrldComp>0.00000000</amtPayAftOneYrCtrldComp>
+      <amtPayAftOneYrOthAffil>0.00000000</amtPayAftOneYrOthAffil>
+      <amtPayAftOneYrOther>0.00000000</amtPayAftOneYrOther>
+      <delayDeliv>0.00000000</delayDeliv>
+      <standByCommit>0.00000000</standByCommit>
+      <liquidPref>0.00000000</liquidPref>
+      <cshNotRptdInCorD>0.00000000</cshNotRptdInCorD>
+      <borrowers>
+        <borrower aggrVal="2316277.65302800" lei="MP6I5ZYZBEU3UXPYFY54" name="HSBC BANK PLC"/>
+        <borrower aggrVal="10668564.34083400" lei="9R7GPTSO7KV3UQJZQ078" name="MORGAN STANLEY &amp; CO LLC"/>
+      </borrowers>
+      <isNonCashCollateral>N</isNonCashCollateral>
+      <returnInfo>
+        <monthlyTotReturns>
+          <monthlyTotReturn classId="C000011953" rtn1="-8.77000000" rtn2="6.02000000" rtn3="4.14000000"/>
+        </monthlyTotReturns>
+        <monthlyReturnCats>
+          <equityContracts>
+            <mon1 netRealizedGain="-233652.45000000" netUnrealizedAppr="463258.67000000"/>
+            <mon2 netRealizedGain="2030877.64000000" netUnrealizedAppr="6480066.56000000"/>
+            <mon3 netRealizedGain="0.00000000" netUnrealizedAppr="9586846.91000000"/>
+            <futureCategory>
+              <instrMon1 netRealizedGain="-233652.45000000" netUnrealizedAppr="463258.67000000"/>
+              <instrMon2 netRealizedGain="2030877.64000000" netUnrealizedAppr="6480066.56000000"/>
+              <instrMon3 netRealizedGain="0.00000000" netUnrealizedAppr="9586846.91000000"/>
+            </futureCategory>
+          </equityContracts>
+        </monthlyReturnCats>
+        <othMon1 netRealizedGain="542521643.77000000" netUnrealizedAppr="-2497818938.21000000"/>
+        <othMon2 netRealizedGain="29169174.98000000" netUnrealizedAppr="1092303693.90000000"/>
+        <othMon3 netRealizedGain="446233359.99000000" netUnrealizedAppr="381101417.25000000"/>
+      </returnInfo>
+      <mon1Flow redemption="1661328379.05000000" reinvestment="0.00000000" sales="1496374507.80000000"/>
+      <mon2Flow redemption="79406100.00000000" reinvestment="0.00000000" sales="1600489493.47000000"/>
+      <mon3Flow redemption="1205457185.55000000" reinvestment="0.00000000" sales="692366679.00000000"/>
+
+
+
+    </fundInfo>
+    <invstOrSecs>
+      <invstOrSec>
+        <name>BlackRock Funds III: BlackRock Cash Funds: Treasury; SL Agency Shares</name>
+        <lei>N/A</lei>
+        <title>BLACKROCK CASH FUNDS TREASURY</title>
+        <cusip>066922477</cusip>
+        <identifiers>
+          <isin value="US0669224778"/>
+          <other otherDesc="Internal" value="066922477"/>
+        </identifiers>
+        <balance>7653348.02000000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>7653348.02000000</valUSD>
+        <pctVal>0.035934293193</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>STIV</assetCat>
+        <issuerCat>RF</issuerCat>
+        <invCountry>US</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>BlackRock Funds III: BlackRock Cash Funds: Institutional; SL Agency Shares</name>
+        <lei>N/A</lei>
+        <title>BLACKROCK CASH FUNDS INSTITUTIONAL FUND SL AGENCY</title>
+        <cusip>066922519</cusip>
+        <identifiers>
+          <isin value="US0669225197"/>
+          <other otherDesc="Internal" value="066922519            00001"/>
+        </identifiers>
+        <balance>13433460.02300000</balance>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>13437490.06000000</valUSD>
+        <pctVal>0.063092218769</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>STIV</assetCat>
+        <issuerCat>RF</issuerCat>
+        <invCountry>US</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <cashCollateralCondition cashCollateralVal="13437490.06000000" isCashCollateral="Y"/>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JAPANESE YEN</name>
+        <lei>N/A</lei>
+        <title>JAPANESE YEN</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="N/A"/>
+          <other otherDesc="Internal" value="JPY"/>
+        </identifiers>
+        <balance>9179801322.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>57638535.28000000</valUSD>
+        <pctVal>0.270626661763</pctVal>
+        <payoffProfile>N/A</payoffProfile>
+        <assetConditional assetCat="OTHER" desc="currency"/>
+        <issuerConditional desc="currency" issuerCat="OTHER"/>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>N/A</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>AISIN CORPORATION</name>
+        <lei>3538004IOK08PDY6I723</lei>
+        <title>AISIN CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3102000001"/>
+          <other otherDesc="Internal" value="6010702"/>
+        </identifiers>
+        <balance>2014200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>30528963.31000000</valUSD>
+        <pctVal>0.143340759572</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Ajinomoto Co., Inc.</name>
+        <lei>353800UT0TLROREPIC92</lei>
+        <title>AJINOMOTO CO INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3119600009"/>
+          <other otherDesc="Internal" value="6010906"/>
+        </identifiers>
+        <balance>3686000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>119098391.39000000</valUSD>
+        <pctVal>0.559195335667</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ANA HOLDINGS INC.</name>
+        <lei>5493008IRKIY0G3TE305</lei>
+        <title>ANA HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3429800000"/>
+          <other otherDesc="Internal" value="6014908"/>
+        </identifiers>
+        <balance>649400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>12162801.33000000</valUSD>
+        <pctVal>0.057107251349</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ZENSHO HOLDINGS CO.,LTD.</name>
+        <lei>353800DYF3UDM49ITT03</lei>
+        <title>ZENSHO HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3429300001"/>
+          <other otherDesc="Internal" value="6042608"/>
+        </identifiers>
+        <balance>395200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>19980224.15000000</valUSD>
+        <pctVal>0.093811914836</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Asahi Group Holdings, Ltd.</name>
+        <lei>353800KAJ02XNHLCJW79</lei>
+        <title>ASAHI GROUP HOLDINGS LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3116000005"/>
+          <other otherDesc="Internal" value="6054409"/>
+        </identifiers>
+        <balance>6201500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>59178563.31000000</valUSD>
+        <pctVal>0.277857460443</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ASAHI KASEI CORPORATION</name>
+        <lei>353800GPI4Z3MGDGN142</lei>
+        <title>ASAHI KASEI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3111200006"/>
+          <other otherDesc="Internal" value="6054603"/>
+        </identifiers>
+        <balance>5295700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>59402312.89000000</valUSD>
+        <pctVal>0.278908018053</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>AGC Inc.</name>
+        <lei>JE4WFFEELMVPFZ0G1E77</lei>
+        <title>AGC INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3112000009"/>
+          <other otherDesc="Internal" value="6055208"/>
+        </identifiers>
+        <balance>795700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>34656776.71000000</valUSD>
+        <pctVal>0.162721827384</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ASICS Corporation</name>
+        <lei>3538002LJMRZ83SU0B85</lei>
+        <title>ASICS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3118000003"/>
+          <other otherDesc="Internal" value="6057378"/>
+        </identifiers>
+        <balance>2842100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>86337227.14000000</valUSD>
+        <pctVal>0.405373860618</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>LY Corporation</name>
+        <lei>N/A</lei>
+        <title>LY CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3933800009"/>
+          <other otherDesc="Internal" value="6084848"/>
+        </identifiers>
+        <balance>11246700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>29205725.33000000</valUSD>
+        <pctVal>0.137127841851</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>BRIDGESTONE CORPORATION</name>
+        <lei>549300DHPOF90OYYD780</lei>
+        <title>BRIDGESTONE CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3830800003"/>
+          <other otherDesc="Internal" value="6132101"/>
+        </identifiers>
+        <balance>4648300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>100048692.56000000</valUSD>
+        <pctVal>0.469752459007</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>OBIC Co.,Ltd.</name>
+        <lei>N/A</lei>
+        <title>OBIC CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3173400007"/>
+          <other otherDesc="Internal" value="6136749"/>
+        </identifiers>
+        <balance>1319200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>33238805.36000000</valUSD>
+        <pctVal>0.156064113910</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ORACLE CORPORATION JAPAN</name>
+        <lei>N/A</lei>
+        <title>ORACLE CORP JAPAN</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3689500001"/>
+          <other otherDesc="Internal" value="6141680"/>
+        </identifiers>
+        <balance>157200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>8505273.60000000</valUSD>
+        <pctVal>0.039934286854</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>CANON INC.</name>
+        <lei>N/A</lei>
+        <title>CANON INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3242800005"/>
+          <other otherDesc="Internal" value="6172323"/>
+        </identifiers>
+        <balance>3530750.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>93898234.29000000</valUSD>
+        <pctVal>0.440874591416</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>CAPCOM CO., LTD.</name>
+        <lei>N/A</lei>
+        <title>CAPCOM CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3218900003"/>
+          <other otherDesc="Internal" value="6173694"/>
+        </identifiers>
+        <balance>1412300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>26744713.53000000</valUSD>
+        <pctVal>0.125572804848</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Central Japan Railway Company</name>
+        <lei>353800YAR3OVUITHTG64</lei>
+        <title>CENTRAL JAPAN RAILWAY CO</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3566800003"/>
+          <other otherDesc="Internal" value="6183552"/>
+        </identifiers>
+        <balance>3144700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>68782636.84000000</valUSD>
+        <pctVal>0.322950874877</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>The Chiba Bank, Ltd.</name>
+        <lei>FGJPAKKCTZVSKZXNBS63</lei>
+        <title>CHIBA BANK LTD THE</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3511800009"/>
+          <other otherDesc="Internal" value="6190563"/>
+        </identifiers>
+        <balance>2301300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>33645975.33000000</valUSD>
+        <pctVal>0.157975873972</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Chubu Electric Power Company, Incorporated</name>
+        <lei>529900A76GOP0PGNHT63</lei>
+        <title>CHUBU ELECTRIC POWER CO INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3526600006"/>
+          <other otherDesc="Internal" value="6195609"/>
+        </identifiers>
+        <balance>2780000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>51041302.71000000</valUSD>
+        <pctVal>0.239651082342</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>CHUGAI PHARMACEUTICAL CO., LTD.</name>
+        <lei>N/A</lei>
+        <title>CHUGAI PHARMACEUTICAL CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3519400000"/>
+          <other otherDesc="Internal" value="6196408"/>
+        </identifiers>
+        <balance>2735700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>135297876.75000000</valUSD>
+        <pctVal>0.635255780715</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Rakuten Group, Inc.</name>
+        <lei>529900IMXUCQKUL1H943</lei>
+        <title>RAKUTEN GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3967200001"/>
+          <other otherDesc="Internal" value="6229597"/>
+        </identifiers>
+        <balance>6184100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>28907619.89000000</valUSD>
+        <pctVal>0.135728165755</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KDDI CORPORATION</name>
+        <lei>5299003FU7V4I45FU310</lei>
+        <title>KDDI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3496400007"/>
+          <other otherDesc="Internal" value="6248990"/>
+        </identifiers>
+        <balance>11940300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>205258944.60000000</valUSD>
+        <pctVal>0.963739670073</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DAIFUKU CO., LTD.</name>
+        <lei>3538006FG1W4X3MYHL36</lei>
+        <title>DAIFUKU CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3497400006"/>
+          <other otherDesc="Internal" value="6250025"/>
+        </identifiers>
+        <balance>1313700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>60053252.67000000</valUSD>
+        <pctVal>0.281964335477</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DAITO TRUST CONSTRUCTION CO.,LTD.</name>
+        <lei>353800QQ4DRI3KXS3038</lei>
+        <title>DAITO TRUST CONSTRUCTION CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3486800000"/>
+          <other otherDesc="Internal" value="6250508"/>
+        </identifiers>
+        <balance>1197800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>23793065.17000000</valUSD>
+        <pctVal>0.111714112248</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DAIKIN INDUSTRIES,LTD.</name>
+        <lei>549300Y7FWSTSHMW5Y57</lei>
+        <title>DAIKIN INDUSTRIES LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3481800005"/>
+          <other otherDesc="Internal" value="6250724"/>
+        </identifiers>
+        <balance>1074100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>154633529.50000000</valUSD>
+        <pctVal>0.726041279190</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Dai Nippon Printing Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>DAI NIPPON PRINTING CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3493800001"/>
+          <other otherDesc="Internal" value="6250906"/>
+        </identifiers>
+        <balance>1611700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>28023908.76000000</valUSD>
+        <pctVal>0.131578931359</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SCREEN Holdings Co.,Ltd.</name>
+        <lei>353800ND89FTQ9XQ0R07</lei>
+        <title>SCREEN HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3494600004"/>
+          <other otherDesc="Internal" value="6251028"/>
+        </identifiers>
+        <balance>658500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>45934933.71000000</valUSD>
+        <pctVal>0.215675462741</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DAIWA HOUSE INDUSTRY CO., LTD.</name>
+        <lei>353800K9WXR9XRZJZI46</lei>
+        <title>DAIWA HOUSE INDUSTRY CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3505000004"/>
+          <other otherDesc="Internal" value="6251363"/>
+        </identifiers>
+        <balance>2286400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>62218677.05000000</valUSD>
+        <pctVal>0.292131519088</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Daiwa Securities Group Inc.</name>
+        <lei>353800WRC7Y23PWFJG38</lei>
+        <title>DAIWA SECURITIES GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3502200003"/>
+          <other otherDesc="Internal" value="6251448"/>
+        </identifiers>
+        <balance>5432900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>51140863.94000000</valUSD>
+        <pctVal>0.240118546048</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>OTSUKA CORPORATION</name>
+        <lei>N/A</lei>
+        <title>OTSUKA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3188200004"/>
+          <other otherDesc="Internal" value="6267058"/>
+        </identifiers>
+        <balance>932600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>16950788.11000000</valUSD>
+        <pctVal>0.079587990537</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi HC Capital Inc.</name>
+        <lei>353800MZ3QX9RLMH7B09</lei>
+        <title>MITSUBISHI HC CAPITAL INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3499800005"/>
+          <other otherDesc="Internal" value="6268976"/>
+        </identifiers>
+        <balance>3588200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>29339060.96000000</valUSD>
+        <pctVal>0.137753884416</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Pan Pacific International Holdings Corporation</name>
+        <lei>N/A</lei>
+        <title>PAN PACIFIC INTERNATIONAL HOLDINGS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3639650005"/>
+          <other otherDesc="Internal" value="6269861"/>
+        </identifiers>
+        <balance>7776000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>42722186.20000000</valUSD>
+        <pctVal>0.200590847397</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DISCO CORPORATION</name>
+        <lei>529900X0YGDYM51H4Q86</lei>
+        <title>DISCO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3548600000"/>
+          <other otherDesc="Internal" value="6270948"/>
+        </identifiers>
+        <balance>376600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>153665901.68000000</valUSD>
+        <pctVal>0.721498035933</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>East Japan Railway Company</name>
+        <lei>353800SENYJ2DSM6PS44</lei>
+        <title>EAST JAPAN RAILWAY CO</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3783600004"/>
+          <other otherDesc="Internal" value="6298542"/>
+        </identifiers>
+        <balance>3928400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>83672117.28000000</valUSD>
+        <pctVal>0.392860534574</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>EBARA CORPORATION</name>
+        <lei>353800UV8U3SOMCDTI49</lei>
+        <title>EBARA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3166000004"/>
+          <other otherDesc="Internal" value="6302700"/>
+        </identifiers>
+        <balance>1883700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>66981127.28000000</valUSD>
+        <pctVal>0.314492358088</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Eisai Co., Ltd.</name>
+        <lei>353800HDEE0ZYEX4QV91</lei>
+        <title>EISAI CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3160400002"/>
+          <other otherDesc="Internal" value="6307200"/>
+        </identifiers>
+        <balance>1065400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>26488956.72000000</valUSD>
+        <pctVal>0.124371965663</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SBI Holdings, Inc.</name>
+        <lei>353800L6LMHYIPSMRQ17</lei>
+        <title>SBI HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3436120004"/>
+          <other otherDesc="Internal" value="6309466"/>
+        </identifiers>
+        <balance>2293120.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>41952389.45000000</valUSD>
+        <pctVal>0.196976468168</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>FAST RETAILING CO., LTD.</name>
+        <lei>353800ZCXKHDPY0N5218</lei>
+        <title>FAST RETAILING CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3802300008"/>
+          <other otherDesc="Internal" value="6332439"/>
+        </identifiers>
+        <balance>777100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>402721384.67000000</valUSD>
+        <pctVal>1.890872893016</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi UFJ Financial Group, Inc.</name>
+        <lei>353800V2V8PUY9TK3E06</lei>
+        <title>MITSUBISHI UFJ FINANCIAL GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3902900004"/>
+          <other otherDesc="Internal" value="6335171"/>
+        </identifiers>
+        <balance>45922380.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>863058440.37000000</valUSD>
+        <pctVal>4.052265094693</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>FUJI ELECTRIC CO., LTD.</name>
+        <lei>N/A</lei>
+        <title>FUJI ELECTRIC CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3820000002"/>
+          <other otherDesc="Internal" value="6356365"/>
+        </identifiers>
+        <balance>578100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>56103789.56000000</valUSD>
+        <pctVal>0.263420664788</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SUBARU CORPORATION</name>
+        <lei>549300N244BVAEE6HH86</lei>
+        <title>SUBARU CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3814800003"/>
+          <other otherDesc="Internal" value="6356406"/>
+        </identifiers>
+        <balance>2390000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>36271526.85000000</valUSD>
+        <pctVal>0.170303464180</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>FUJIFILM Holdings Corporation</name>
+        <lei>N/A</lei>
+        <title>FUJIFILM HOLDINGS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3814000000"/>
+          <other otherDesc="Internal" value="6356525"/>
+        </identifiers>
+        <balance>4563400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>94870547.53000000</valUSD>
+        <pctVal>0.445439833837</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Fujikura Ltd.</name>
+        <lei>N/A</lei>
+        <title>FUJIKURA LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3811000003"/>
+          <other otherDesc="Internal" value="6356707"/>
+        </identifiers>
+        <balance>6144900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>183121086.84000000</valUSD>
+        <pctVal>0.859797151147</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>FANUC CORPORATION</name>
+        <lei>N/A</lei>
+        <title>FANUC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3802400006"/>
+          <other otherDesc="Internal" value="6356934"/>
+        </identifiers>
+        <balance>3801400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>186768990.60000000</valUSD>
+        <pctVal>0.876924928808</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Fujitsu Limited</name>
+        <lei>3538000246DHJLRTUZ24</lei>
+        <title>FUJITSU LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3818000006"/>
+          <other otherDesc="Internal" value="6356945"/>
+        </identifiers>
+        <balance>7174000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>152806779.99000000</valUSD>
+        <pctVal>0.717464254819</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nomura Research Institute, Ltd.</name>
+        <lei>5299005F1HCVF4M4QN79</lei>
+        <title>NOMURA RESEARCH INSTITUTE LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3762800005"/>
+          <other otherDesc="Internal" value="6390921"/>
+        </identifiers>
+        <balance>1538012.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>49269015.77000000</valUSD>
+        <pctVal>0.231329772719</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nippon Building Fund Inc.</name>
+        <lei>N/A</lei>
+        <title>NIPPON BUILDING FUND INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3027670003"/>
+          <other otherDesc="Internal" value="6396800"/>
+        </identifiers>
+        <balance>31754.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>25398826.20000000</valUSD>
+        <pctVal>0.119253543030</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Hankyu Hanshin Holdings, Inc.</name>
+        <lei>N/A</lei>
+        <title>HANKYU HANSHIN HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3774200004"/>
+          <other otherDesc="Internal" value="6408664"/>
+        </identifiers>
+        <balance>974800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>28662847.46000000</valUSD>
+        <pctVal>0.134578900852</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>HIKARI TSUSHIN, INC.</name>
+        <lei>3538001SOIIV8U3OXH94</lei>
+        <title>HIKARI TSUSHIN INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3783420007"/>
+          <other otherDesc="Internal" value="6416322"/>
+        </identifiers>
+        <balance>72700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>16673254.02000000</valUSD>
+        <pctVal>0.078284901832</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Resona Holdings, Inc.</name>
+        <lei>N/A</lei>
+        <title>RESONA HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3500610005"/>
+          <other otherDesc="Internal" value="6421553"/>
+        </identifiers>
+        <balance>8460800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>108005185.23000000</valUSD>
+        <pctVal>0.507110088588</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Hitachi, Ltd.</name>
+        <lei>549300T6IPOCDWLKC615</lei>
+        <title>HITACHI LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3788600009"/>
+          <other otherDesc="Internal" value="6429104"/>
+        </identifiers>
+        <balance>18663100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>604115659.86000000</valUSD>
+        <pctVal>2.836467019033</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sumitomo Mitsui Trust Group, Inc.</name>
+        <lei>353800P843RLCDBLNT17</lei>
+        <title>SUMITOMO MITSUI TRUST GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3892100003"/>
+          <other otherDesc="Internal" value="6431897"/>
+        </identifiers>
+        <balance>2584364.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>89024298.79000000</valUSD>
+        <pctVal>0.417990302500</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>HONDA MOTOR CO., LTD.</name>
+        <lei>549300P7ZYCQJ36CCS16</lei>
+        <title>HONDA MOTOR CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3854600008"/>
+          <other otherDesc="Internal" value="6435145"/>
+        </identifiers>
+        <balance>15066000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>135382684.84000000</valUSD>
+        <pctVal>0.635653974912</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>HOYA CORPORATION</name>
+        <lei>353800X4VR3BHEUCJB42</lei>
+        <title>HOYA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3837800006"/>
+          <other otherDesc="Internal" value="6441506"/>
+        </identifiers>
+        <balance>1378100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>234038647.93000000</valUSD>
+        <pctVal>1.098867237089</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>IBIDEN CO.,LTD.</name>
+        <lei>52990051DBFIQEY37C91</lei>
+        <title>IBIDEN CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3148800000"/>
+          <other otherDesc="Internal" value="6456102"/>
+        </identifiers>
+        <balance>973100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>139900796.48000000</valUSD>
+        <pctVal>0.656867585991</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>IHI Corporation</name>
+        <lei>549300ETQIESIUQ2OE26</lei>
+        <title>IHI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3134800006"/>
+          <other otherDesc="Internal" value="6466985"/>
+        </identifiers>
+        <balance>4188900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>72787838.81000000</valUSD>
+        <pctVal>0.341756252799</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ISUZU MOTORS LIMITED</name>
+        <lei>529900C0QSXVCC7AR494</lei>
+        <title>ISUZU MOTORS LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3137200006"/>
+          <other otherDesc="Internal" value="6467104"/>
+        </identifiers>
+        <balance>2182900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>32070227.15000000</valUSD>
+        <pctVal>0.150577360674</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ITOCHU Corporation</name>
+        <lei>J48DJYXDTLHM30UMYI18</lei>
+        <title>ITOCHU CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3143600009"/>
+          <other otherDesc="Internal" value="6467803"/>
+        </identifiers>
+        <balance>24213500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>292734290.44000000</valUSD>
+        <pctVal>1.374457269268</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JAPAN TOBACCO INC.</name>
+        <lei>353800Z0ENYBQO0XRJ31</lei>
+        <title>JAPAN TOBACCO INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3726800000"/>
+          <other otherDesc="Internal" value="6474535"/>
+        </identifiers>
+        <balance>4887000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>188256153.29000000</valUSD>
+        <pctVal>0.883907512116</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>AEON CO.,LTD.</name>
+        <lei>N/A</lei>
+        <title>AEON CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3388200002"/>
+          <other otherDesc="Internal" value="6480048"/>
+        </identifiers>
+        <balance>9074100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>79280508.27000000</valUSD>
+        <pctVal>0.372240883496</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KAJIMA CORPORATION</name>
+        <lei>N/A</lei>
+        <title>KAJIMA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3210200006"/>
+          <other otherDesc="Internal" value="6481320"/>
+        </identifiers>
+        <balance>1720800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>63551724.15000000</valUSD>
+        <pctVal>0.298390492966</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>The Kansai Electric Power Company, Incorporated</name>
+        <lei>353800PFUKP5ONPJNZ86</lei>
+        <title>KANSAI ELECTRIC POWER CO INC THE</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3228600007"/>
+          <other otherDesc="Internal" value="6483489"/>
+        </identifiers>
+        <balance>3861400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>56587742.59000000</valUSD>
+        <pctVal>0.265692939619</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Kao Corporation</name>
+        <lei>353800HM38HFCB8RGL63</lei>
+        <title>KAO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3205800000"/>
+          <other otherDesc="Internal" value="6483809"/>
+        </identifiers>
+        <balance>1846800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>70727164.16000000</valUSD>
+        <pctVal>0.332080894138</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Kawasaki Heavy Industries, Ltd.</name>
+        <lei>5493008FFSI8SQ74AT93</lei>
+        <title>KAWASAKI HEAVY INDUSTRIES LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3224200000"/>
+          <other otherDesc="Internal" value="6484620"/>
+        </identifiers>
+        <balance>3082100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>60278278.80000000</valUSD>
+        <pctVal>0.283020886794</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Kawasaki Kisen Kaisha, Ltd.</name>
+        <lei>353800FL04R73DS5P870</lei>
+        <title>KAWASAKI KISEN KAISHA LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3223800008"/>
+          <other otherDesc="Internal" value="6484686"/>
+        </identifiers>
+        <balance>1431900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>22656503.31000000</valUSD>
+        <pctVal>0.106377683406</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KIKKOMAN CORPORATION</name>
+        <lei>N/A</lei>
+        <title>KIKKOMAN CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3240400006"/>
+          <other otherDesc="Internal" value="6490809"/>
+        </identifiers>
+        <balance>2773300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>24256471.29000000</valUSD>
+        <pctVal>0.113889914438</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KEYENCE CORPORATION</name>
+        <lei>529900M7PQBS7A89DZ11</lei>
+        <title>KEYENCE CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3236200006"/>
+          <other otherDesc="Internal" value="6490995"/>
+        </identifiers>
+        <balance>791304.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>397657865.78000000</valUSD>
+        <pctVal>1.867098464896</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Kirin Holdings Company, Limited</name>
+        <lei>353800GBVL72LLMTYM96</lei>
+        <title>KIRIN HOLDINGS CO LTD</title>
+        <cusip>497350108</cusip>
+        <identifiers>
+          <isin value="JP3258000003"/>
+          <other otherDesc="Internal" value="6493745"/>
+        </identifiers>
+        <balance>3169400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>53939985.23000000</valUSD>
+        <pctVal>0.253261087698</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KOMATSU LTD.</name>
+        <lei>5493004LQ0B4T7QPQV17</lei>
+        <title>KOMATSU LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3304200003"/>
+          <other otherDesc="Internal" value="6496584"/>
+        </identifiers>
+        <balance>3870800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>158074538.55000000</valUSD>
+        <pctVal>0.742197636872</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KONAMI GROUP CORPORATION</name>
+        <lei>353800FC4A5QCMIZFV94</lei>
+        <title>KONAMI GROUP CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3300200007"/>
+          <other otherDesc="Internal" value="6496681"/>
+        </identifiers>
+        <balance>410700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>48785606.52000000</valUSD>
+        <pctVal>0.229060051066</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KUBOTA CORPORATION</name>
+        <lei>549300CSY4INHEHQQT13</lei>
+        <title>KUBOTA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3266400005"/>
+          <other otherDesc="Internal" value="6497509"/>
+        </identifiers>
+        <balance>3948500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>70154871.67000000</valUSD>
+        <pctVal>0.329393844487</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>KYOCERA CORPORATION</name>
+        <lei>N/A</lei>
+        <title>KYOCERA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3249600002"/>
+          <other otherDesc="Internal" value="6499260"/>
+        </identifiers>
+        <balance>5235900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>114483135.04000000</valUSD>
+        <pctVal>0.537525607020</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Kyowa Kirin Co., Ltd.</name>
+        <lei>529900TBXKVTQGYA3582</lei>
+        <title>KYOWA KIRIN CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3256000005"/>
+          <other otherDesc="Internal" value="6499550"/>
+        </identifiers>
+        <balance>965500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>15172278.11000000</valUSD>
+        <pctVal>0.071237462165</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Lasertec Corporation</name>
+        <lei>5299008UY0JUHZ3SAQ87</lei>
+        <title>LASERTEC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3979200007"/>
+          <other otherDesc="Internal" value="6506267"/>
+        </identifiers>
+        <balance>325600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>82326029.52000000</valUSD>
+        <pctVal>0.386540331690</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Tokio Marine Holdings, Inc.</name>
+        <lei>5299009QN2NZ191KLS29</lei>
+        <title>TOKIO MARINE HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3910660004"/>
+          <other otherDesc="Internal" value="6513126"/>
+        </identifiers>
+        <balance>7482400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>332266206.02000000</valUSD>
+        <pctVal>1.560069035677</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JX Advanced Metals Corporation</name>
+        <lei>353800NC6NPNKC4JEC58</lei>
+        <title>JX ADVANCED METALS CORP</title>
+        <cusip>J2969E104</cusip>
+        <identifiers>
+          <isin value="JP3379550001"/>
+          <other otherDesc="Internal" value="6543770"/>
+        </identifiers>
+        <balance>2231400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>55076866.86000000</valUSD>
+        <pctVal>0.258599017936</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JFE Holdings, Inc.</name>
+        <lei>3538002Y11Y03NA9B530</lei>
+        <title>JFE HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3386030005"/>
+          <other otherDesc="Internal" value="6543792"/>
+        </identifiers>
+        <balance>2350850.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>25137681.81000000</valUSD>
+        <pctVal>0.118027407873</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Makita Corporation</name>
+        <lei>N/A</lei>
+        <title>MAKITA CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3862400003"/>
+          <other otherDesc="Internal" value="6555805"/>
+        </identifiers>
+        <balance>909400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>31562470.47000000</valUSD>
+        <pctVal>0.148193322033</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sumitomo Mitsui Financial Group, Inc.</name>
+        <lei>35380028MYWPB6AUO129</lei>
+        <title>SUMITOMO MITSUI FINANCIAL GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3890350006"/>
+          <other otherDesc="Internal" value="6563024"/>
+        </identifiers>
+        <balance>14925400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>544372176.10000000</valUSD>
+        <pctVal>2.555957122424</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Marubeni Corporation</name>
+        <lei>4P4N3ORD02UGQT1T1W12</lei>
+        <title>MARUBENI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3877600001"/>
+          <other otherDesc="Internal" value="6569464"/>
+        </identifiers>
+        <balance>5749200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>187932098.24000000</valUSD>
+        <pctVal>0.882385996415</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Panasonic Holdings Corporation</name>
+        <lei>254900GE1G59KGWPHX32</lei>
+        <title>PANASONIC HOLDINGS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3866800000"/>
+          <other otherDesc="Internal" value="6572707"/>
+        </identifiers>
+        <balance>9500815.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>219506539.84000000</valUSD>
+        <pctVal>1.030635525757</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mizuho Financial Group, Inc.</name>
+        <lei>353800CI5L6DDAN5XZ33</lei>
+        <title>MIZUHO FINANCIAL GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3885780001"/>
+          <other otherDesc="Internal" value="6591014"/>
+        </identifiers>
+        <balance>10143358.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>455903062.96000000</valUSD>
+        <pctVal>2.140573548883</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi Estate Company, Limited</name>
+        <lei>353800KOFMRGOXSJ5Z65</lei>
+        <title>MITSUBISHI ESTATE CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3899600005"/>
+          <other otherDesc="Internal" value="6596729"/>
+        </identifiers>
+        <balance>4333600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>109500257.52000000</valUSD>
+        <pctVal>0.514129809353</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi Corporation</name>
+        <lei>KVIPTY4PULAPGC1VVD26</lei>
+        <title>MITSUBISHI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3898400001"/>
+          <other otherDesc="Internal" value="6596785"/>
+        </identifiers>
+        <balance>13120500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>414875468.83000000</valUSD>
+        <pctVal>1.947939215174</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi Electric Corporation</name>
+        <lei>549300TRXM9Y6561AX39</lei>
+        <title>MITSUBISHI ELECTRIC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3902400005"/>
+          <other otherDesc="Internal" value="6597045"/>
+        </identifiers>
+        <balance>7747000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>314939200.91000000</valUSD>
+        <pctVal>1.478714616649</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi Heavy Industries, Ltd.</name>
+        <lei>353800TJ98PCAZROVE69</lei>
+        <title>MITSUBISHI HEAVY INDUSTRIES LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3900000005"/>
+          <other otherDesc="Internal" value="6597067"/>
+        </identifiers>
+        <balance>13053500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>308568519.29000000</valUSD>
+        <pctVal>1.448802747938</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>MITSUI &amp; CO., LTD.</name>
+        <lei>2NRSB4GOU9DD6CNW5R48</lei>
+        <title>MITSUI CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3893600001"/>
+          <other otherDesc="Internal" value="6597302"/>
+        </identifiers>
+        <balance>10057700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>334274783.85000000</valUSD>
+        <pctVal>1.569499787350</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsui O.S.K. Lines, Ltd.</name>
+        <lei>353800P8O843TMAZ6S09</lei>
+        <title>MITSUI OSK LINES LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3362700001"/>
+          <other otherDesc="Internal" value="6597584"/>
+        </identifiers>
+        <balance>1401100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>48158338.21000000</valUSD>
+        <pctVal>0.226114876836</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsui Fudosan Co., Ltd.</name>
+        <lei>353800ND4ZKNZDYKMF33</lei>
+        <title>MITSUI FUDOSAN CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3893200000"/>
+          <other otherDesc="Internal" value="6597603"/>
+        </identifiers>
+        <balance>10771600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>103109622.70000000</valUSD>
+        <pctVal>0.484124255612</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Murata Manufacturing Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>MURATA MANUFACTURING CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3914400001"/>
+          <other otherDesc="Internal" value="6610403"/>
+        </identifiers>
+        <balance>6798000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>428169724.02000000</valUSD>
+        <pctVal>2.010358912088</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Renesas Electronics Corporation</name>
+        <lei>N/A</lei>
+        <title>RENESAS ELECTRONICS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3164720009"/>
+          <other otherDesc="Internal" value="6635677"/>
+        </identifiers>
+        <balance>7237100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>201464205.47000000</valUSD>
+        <pctVal>0.945922465350</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nintendo Co., Ltd.</name>
+        <lei>353800FEEXU6I9M0ZF27</lei>
+        <title>NINTENDO CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3756600007"/>
+          <other otherDesc="Internal" value="6639550"/>
+        </identifiers>
+        <balance>4498700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>201311710.83000000</valUSD>
+        <pctVal>0.945206466667</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DENSO CORPORATION</name>
+        <lei>N/A</lei>
+        <title>DENSO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3551500006"/>
+          <other otherDesc="Internal" value="6640381"/>
+        </identifiers>
+        <balance>7121800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>84730953.09000000</valUSD>
+        <pctVal>0.397832021084</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NEC Corporation</name>
+        <lei>5493000QYMPFRTEY4K28</lei>
+        <title>NEC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3733000008"/>
+          <other otherDesc="Internal" value="6640400"/>
+        </identifiers>
+        <balance>5357100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>138855429.06000000</valUSD>
+        <pctVal>0.651959336782</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NIPPON PAINT HOLDINGS CO., LTD.</name>
+        <lei>529900RYRJUN78A7PL87</lei>
+        <title>NIPPON PAINT HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3749400002"/>
+          <other otherDesc="Internal" value="6640507"/>
+        </identifiers>
+        <balance>3878000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>25710430.09000000</valUSD>
+        <pctVal>0.120716597567</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NIPPON SANSO HOLDINGS CORPORATION</name>
+        <lei>353800F1K6653B4VPY57</lei>
+        <title>NIPPON SANSO HOLDINGS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3711600001"/>
+          <other otherDesc="Internal" value="6640541"/>
+        </identifiers>
+        <balance>706200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>27366163.48000000</valUSD>
+        <pctVal>0.128490660491</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NIDEC CORPORATION</name>
+        <lei>353800IF171MZTNL6Y31</lei>
+        <title>NIDEC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3734800000"/>
+          <other otherDesc="Internal" value="6640682"/>
+        </identifiers>
+        <balance>3405800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>59724766.93000000</valUSD>
+        <pctVal>0.280422016631</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NTT, Inc.</name>
+        <lei>353800VHQU5VIXVUA841</lei>
+        <title>NTT INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3735400008"/>
+          <other otherDesc="Internal" value="6641373"/>
+        </identifiers>
+        <balance>121810700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>114286218.68000000</valUSD>
+        <pctVal>0.536601037773</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NITTO DENKO CORPORATION</name>
+        <lei>3538009GX5P09USH2J25</lei>
+        <title>NITTO DENKO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3684000007"/>
+          <other otherDesc="Internal" value="6641801"/>
+        </identifiers>
+        <balance>2768200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>51875557.92000000</valUSD>
+        <pctVal>0.243568109404</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>MinebeaMitsumi Inc.</name>
+        <lei>353800CCB0CZ75YZ4010</lei>
+        <title>MINEBEA MITSUMI INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3906000009"/>
+          <other otherDesc="Internal" value="6642406"/>
+        </identifiers>
+        <balance>1482300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>42455006.83000000</valUSD>
+        <pctVal>0.199336376570</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NIPPON STEEL CORPORATION</name>
+        <lei>35380065QWQ4U2V3PA33</lei>
+        <title>NIPPON STEEL CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3381000003"/>
+          <other otherDesc="Internal" value="6642569"/>
+        </identifiers>
+        <balance>19723350.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>70182451.19000000</valUSD>
+        <pctVal>0.329523336907</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NISSAN MOTOR CO., LTD.</name>
+        <lei>353800DRBDH1LUTNAY26</lei>
+        <title>NISSAN MOTOR CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3672400003"/>
+          <other otherDesc="Internal" value="6642860"/>
+        </identifiers>
+        <balance>9108200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>22666211.26000000</valUSD>
+        <pctVal>0.106423264545</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <loanByFundCondition isLoanByFund="Y" loanVal="2316277.65302800"/>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nomura Holdings, Inc.</name>
+        <lei>549300B3CEAHYG7K8164</lei>
+        <title>NOMURA HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3762600009"/>
+          <other otherDesc="Internal" value="6643108"/>
+        </identifiers>
+        <balance>12242800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>98666342.17000000</valUSD>
+        <pctVal>0.463261994431</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nippon Yusen Kabushiki Kaisha</name>
+        <lei>353800YPW4XM0ZN5I149</lei>
+        <title>NIPPON YUSEN KK</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3753000003"/>
+          <other otherDesc="Internal" value="6643960"/>
+        </identifiers>
+        <balance>1677800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>55904907.54000000</valUSD>
+        <pctVal>0.262486866299</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nitori Holdings Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>NITORI HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3756100008"/>
+          <other otherDesc="Internal" value="6644800"/>
+        </identifiers>
+        <balance>1636000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>26867410.18000000</valUSD>
+        <pctVal>0.126148894865</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ORIENTAL LAND CO., LTD.</name>
+        <lei>353800PIFKBZ6KTU5994</lei>
+        <title>ORIENTAL LAND CO LTD JAPAN</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3198900007"/>
+          <other otherDesc="Internal" value="6648891"/>
+        </identifiers>
+        <balance>4404100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>63333782.15000000</valUSD>
+        <pctVal>0.297367203327</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>OBAYASHI CORPORATION</name>
+        <lei>N/A</lei>
+        <title>OBAYASHI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3190000004"/>
+          <other otherDesc="Internal" value="6656407"/>
+        </identifiers>
+        <balance>2596200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>52690825.77000000</valUSD>
+        <pctVal>0.247395986286</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>OLYMPUS CORPORATION</name>
+        <lei>N/A</lei>
+        <title>OLYMPUS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3201200007"/>
+          <other otherDesc="Internal" value="6658801"/>
+        </identifiers>
+        <balance>4547200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>50978090.60000000</valUSD>
+        <pctVal>0.239354286418</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ORIX CORPORATION</name>
+        <lei>35380016EMHNBOVYE123</lei>
+        <title>ORIX CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3200450009"/>
+          <other otherDesc="Internal" value="6661144"/>
+        </identifiers>
+        <balance>4743800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>185003919.63000000</valUSD>
+        <pctVal>0.868637499885</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>OSAKA GAS CO., LTD.</name>
+        <lei>353800024KMNOPQRWZ02</lei>
+        <title>OSAKA GAS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3180400008"/>
+          <other otherDesc="Internal" value="6661768"/>
+        </identifiers>
+        <balance>1459200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>49035879.50000000</valUSD>
+        <pctVal>0.230235142362</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Japan Exchange Group, Inc.</name>
+        <lei>353800578ADEGIJTVW07</lei>
+        <title>JAPAN EXCHANGE GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3183200009"/>
+          <other otherDesc="Internal" value="6743882"/>
+        </identifiers>
+        <balance>3997500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>48834460.30000000</valUSD>
+        <pctVal>0.229289431208</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>T&amp;D Holdings, Inc.</name>
+        <lei>3538008ARJ1MACEWA242</lei>
+        <title>T D HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3539220008"/>
+          <other otherDesc="Internal" value="6744294"/>
+        </identifiers>
+        <balance>1886900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>49632276.46000000</valUSD>
+        <pctVal>0.233035368245</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>RYOHIN KEIKAKU CO., LTD.</name>
+        <lei>N/A</lei>
+        <title>RYOHIN KEIKAKU CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3976300008"/>
+          <other otherDesc="Internal" value="6758455"/>
+        </identifiers>
+        <balance>2059500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>50212152.70000000</valUSD>
+        <pctVal>0.235758025410</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SMC CORPORATION</name>
+        <lei>353800O40V08DOZ70X62</lei>
+        <title>SMC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3162600005"/>
+          <other otherDesc="Internal" value="6763965"/>
+        </identifiers>
+        <balance>237200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>103164417.17000000</valUSD>
+        <pctVal>0.484381528709</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SoftBank Group Corp.</name>
+        <lei>5493003BZYYYCDIO0R13</lei>
+        <title>SOFTBANK GROUP CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3436100006"/>
+          <other otherDesc="Internal" value="6770620"/>
+        </identifiers>
+        <balance>15123200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>711426474.96000000</valUSD>
+        <pctVal>3.340316874353</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sanrio Company, Ltd.</name>
+        <lei>3538002Q5JQLOMSPH125</lei>
+        <title>SANRIO CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3343200006"/>
+          <other otherDesc="Internal" value="6776349"/>
+        </identifiers>
+        <balance>3674100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>19751762.28000000</valUSD>
+        <pctVal>0.092739231901</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <loanByFundCondition isLoanByFund="Y" loanVal="10668564.34083400"/>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SECOM CO., LTD.</name>
+        <lei>529900TYCL9N3E9PGE47</lei>
+        <title>SECOM CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3421800008"/>
+          <other otherDesc="Internal" value="6791591"/>
+        </identifiers>
+        <balance>1617600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>64494772.86000000</valUSD>
+        <pctVal>0.302818331443</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sekisui Chemical Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>SEKISUI CHEMICAL CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3419400001"/>
+          <other otherDesc="Internal" value="6793821"/>
+        </identifiers>
+        <balance>1515900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>21799640.54000000</valUSD>
+        <pctVal>0.102354508460</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sekisui House, Ltd.</name>
+        <lei>529900GMNDOYQSAJAE76</lei>
+        <title>SEKISUI HOUSE LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3420600003"/>
+          <other otherDesc="Internal" value="6793906"/>
+        </identifiers>
+        <balance>2432500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>51071472.03000000</valUSD>
+        <pctVal>0.239792734490</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Shimadzu Corporation</name>
+        <lei>353800Y64Z08WEH8PH97</lei>
+        <title>SHIMADZU CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3357200009"/>
+          <other otherDesc="Internal" value="6804369"/>
+        </identifiers>
+        <balance>978700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>23186470.56000000</valUSD>
+        <pctVal>0.108866005967</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SHIMIZU CORPORATION</name>
+        <lei>353800BRAE0QFP3ZLY22</lei>
+        <title>SHIMIZU CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3358800005"/>
+          <other otherDesc="Internal" value="6804400"/>
+        </identifiers>
+        <balance>2044900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>34351939.85000000</valUSD>
+        <pctVal>0.161290545666</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Shin-Etsu Chemical Co., Ltd.</name>
+        <lei>353800PX8Q64N86H5W41</lei>
+        <title>SHIN ETSU CHEMICAL CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3371200001"/>
+          <other otherDesc="Internal" value="6804585"/>
+        </identifiers>
+        <balance>6871400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>333556155.46000000</valUSD>
+        <pctVal>1.566125655767</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Shionogi &amp; Co., Ltd.</name>
+        <lei>35380049VXDTHZI3DY35</lei>
+        <title>SHIONOGI CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3347200002"/>
+          <other otherDesc="Internal" value="6804682"/>
+        </identifiers>
+        <balance>3084300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>58008969.83000000</valUSD>
+        <pctVal>0.272365940272</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SHIMANO INC.</name>
+        <lei>N/A</lei>
+        <title>SHIMANO INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3358000002"/>
+          <other otherDesc="Internal" value="6804820"/>
+        </identifiers>
+        <balance>299900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>31039206.63000000</valUSD>
+        <pctVal>0.145736473580</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Shiseido Company, Limited</name>
+        <lei>N/A</lei>
+        <title>SHISEIDO CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3351600006"/>
+          <other otherDesc="Internal" value="6805265"/>
+        </identifiers>
+        <balance>1626100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>28669972.52000000</valUSD>
+        <pctVal>0.134612354707</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Hulic Co.,Ltd.</name>
+        <lei>3538002E12E7IHAKTB10</lei>
+        <title>HULIC CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3360800001"/>
+          <other otherDesc="Internal" value="6805317"/>
+        </identifiers>
+        <balance>1886100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>20120452.70000000</valUSD>
+        <pctVal>0.094470321303</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sony Group Corporation</name>
+        <lei>529900R5WX9N2OI2N910</lei>
+        <title>SONY GROUP CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3435000009"/>
+          <other otherDesc="Internal" value="6821506"/>
+        </identifiers>
+        <balance>25050800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>540350502.07000000</valUSD>
+        <pctVal>2.537074404254</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sumitomo Electric Industries, Ltd.</name>
+        <lei>5493005SP87FL5TOS202</lei>
+        <title>SUMITOMO ELECTRIC INDUSTRIES LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3407400005"/>
+          <other otherDesc="Internal" value="6858708"/>
+        </identifiers>
+        <balance>2909700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>224427153.29000000</valUSD>
+        <pctVal>1.053738978774</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sumitomo Metal Mining Co., Ltd.</name>
+        <lei>353800CF81IXL9974H84</lei>
+        <title>SUMITOMO METAL MINING CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3402600005"/>
+          <other otherDesc="Internal" value="6858849"/>
+        </identifiers>
+        <balance>1008700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>57184801.76000000</valUSD>
+        <pctVal>0.268496274736</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sumitomo Realty &amp; Development Co., Ltd.</name>
+        <lei>353800SO2DCLOI3LNZ64</lei>
+        <title>SUMITOMO REALTY DEVELOPMENT CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3409000001"/>
+          <other otherDesc="Internal" value="6858902"/>
+        </identifiers>
+        <balance>2477300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>57778788.93000000</valUSD>
+        <pctVal>0.271285186081</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SUMITOMO CORPORATION</name>
+        <lei>V82KK8NH1P0JS71FJC05</lei>
+        <title>SUMITOMO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3404600003"/>
+          <other otherDesc="Internal" value="6858946"/>
+        </identifiers>
+        <balance>4439800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>195783526.99000000</valUSD>
+        <pctVal>0.919250325849</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SUZUKI MOTOR CORPORATION</name>
+        <lei>353800D83H0V3ZV1SV24</lei>
+        <title>SUZUKI MOTOR CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3397200001"/>
+          <other otherDesc="Internal" value="6865504"/>
+        </identifiers>
+        <balance>6407500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>79350870.89000000</valUSD>
+        <pctVal>0.372571252768</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TDK CORPORATION</name>
+        <lei>3538005O8WNU39U8NX03</lei>
+        <title>TDK CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3538800008"/>
+          <other otherDesc="Internal" value="6869302"/>
+        </identifiers>
+        <balance>7925800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>205296541.03000000</valUSD>
+        <pctVal>0.963916194273</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TAISEI CORPORATION</name>
+        <lei>529900TF7XJKIOWMLQ79</lei>
+        <title>TAISEI CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3443600006"/>
+          <other otherDesc="Internal" value="6870100"/>
+        </identifiers>
+        <balance>597300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>52343259.70000000</valUSD>
+        <pctVal>0.245764080742</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Takeda Pharmaceutical Company Limited</name>
+        <lei>549300ZLMVP4X0OGR454</lei>
+        <title>TAKEDA PHARMACEUTICAL CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3463000004"/>
+          <other otherDesc="Internal" value="6870445"/>
+        </identifiers>
+        <balance>6480800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>206874061.85000000</valUSD>
+        <pctVal>0.971323030538</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ADVANTEST CORPORATION</name>
+        <lei>353800EMK32PDKS9XR54</lei>
+        <title>ADVANTEST CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3122400009"/>
+          <other otherDesc="Internal" value="6870490"/>
+        </identifiers>
+        <balance>3117700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>509729662.98000000</valUSD>
+        <pctVal>2.393302265994</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SYSMEX CORPORATION</name>
+        <lei>N/A</lei>
+        <title>SYSMEX CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3351100007"/>
+          <other otherDesc="Internal" value="6883807"/>
+        </identifiers>
+        <balance>2077400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>18165372.10000000</valUSD>
+        <pctVal>0.085290751876</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TERUMO CORPORATION</name>
+        <lei>N/A</lei>
+        <title>TERUMO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3546800008"/>
+          <other otherDesc="Internal" value="6885074"/>
+        </identifiers>
+        <balance>5431400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>81671471.91000000</valUSD>
+        <pctVal>0.383467027691</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOHO CO., LTD.</name>
+        <lei>N/A</lei>
+        <title>TOHO CO LTD TOKYO</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3598600009"/>
+          <other otherDesc="Internal" value="6895200"/>
+        </identifiers>
+        <balance>2172700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>16766071.01000000</valUSD>
+        <pctVal>0.078720699724</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOKYO GAS CO.,LTD.</name>
+        <lei>353800678EIJLOQSWZ83</lei>
+        <title>TOKYO GAS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3573000001"/>
+          <other otherDesc="Internal" value="6895448"/>
+        </identifiers>
+        <balance>1282300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>51265512.47000000</valUSD>
+        <pctVal>0.240703800607</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Tokyo Electron Limited</name>
+        <lei>549300H5LSF8DP3RIJ34</lei>
+        <title>TOKYO ELECTRON LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3571400005"/>
+          <other otherDesc="Internal" value="6895675"/>
+        </identifiers>
+        <balance>1824956.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>612043610.66000000</valUSD>
+        <pctVal>2.873690637732</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOKYU CORPORATION</name>
+        <lei>3538005PGNIBTZYXAE45</lei>
+        <title>TOKYU CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3574200006"/>
+          <other otherDesc="Internal" value="6896548"/>
+        </identifiers>
+        <balance>2071900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>20775589.74000000</valUSD>
+        <pctVal>0.097546345863</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOPPAN Holdings Inc.</name>
+        <lei>3538003H9W4KIDODQY20</lei>
+        <title>TOPPAN HOLDINGS INC</title>
+        <cusip>890747108</cusip>
+        <identifiers>
+          <isin value="JP3629000005"/>
+          <other otherDesc="Internal" value="6897024"/>
+        </identifiers>
+        <balance>964100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>27615761.15000000</valUSD>
+        <pctVal>0.129662581045</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TORAY INDUSTRIES, INC.</name>
+        <lei>35380099TCYR5FHT0A11</lei>
+        <title>TORAY INDUSTRIES INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3621000003"/>
+          <other otherDesc="Internal" value="6897143"/>
+        </identifiers>
+        <balance>5667400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>42368245.90000000</valUSD>
+        <pctVal>0.198929013324</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOYOTA TSUSHO CORPORATION</name>
+        <lei>549300CEE2ENIUJNXB84</lei>
+        <title>TOYOTA TSUSHO CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3635000007"/>
+          <other otherDesc="Internal" value="6900580"/>
+        </identifiers>
+        <balance>2809400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>122402978.01000000</valUSD>
+        <pctVal>0.574711157524</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOYOTA MOTOR CORPORATION</name>
+        <lei>5493006W3QUS5LMH6R84</lei>
+        <title>TOYOTA MOTOR CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3633400001"/>
+          <other otherDesc="Internal" value="6900643"/>
+        </identifiers>
+        <balance>38602300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>730266758.70000000</valUSD>
+        <pctVal>3.428776497250</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>UNICHARM CORPORATION</name>
+        <lei>353800UQ4BZIJTAQEG85</lei>
+        <title>UNICHARM CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3951600000"/>
+          <other otherDesc="Internal" value="6911485"/>
+        </identifiers>
+        <balance>4568900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>27201400.06000000</valUSD>
+        <pctVal>0.127717056961</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>West Japan Railway Company</name>
+        <lei>353800QGUXHZ7EBCR121</lei>
+        <title>WEST JAPAN RAILWAY CO</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3659000008"/>
+          <other otherDesc="Internal" value="6957995"/>
+        </identifiers>
+        <balance>1674000.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>27610632.17000000</valUSD>
+        <pctVal>0.129638499261</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Yamaha Motor Co., Ltd.</name>
+        <lei>3538004LR5NXILJDHY88</lei>
+        <title>YAMAHA MOTOR CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3942800008"/>
+          <other otherDesc="Internal" value="6985264"/>
+        </identifiers>
+        <balance>3741700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>30791264.06000000</valUSD>
+        <pctVal>0.144572324115</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Astellas Pharma Inc.</name>
+        <lei>529900IB708DY2HBBB35</lei>
+        <title>ASTELLAS PHARMA INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3942400007"/>
+          <other otherDesc="Internal" value="6985383"/>
+        </identifiers>
+        <balance>7371450.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>104998018.90000000</valUSD>
+        <pctVal>0.492990725886</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Yokogawa Electric Corporation</name>
+        <lei>N/A</lei>
+        <title>YOKOGAWA ELECTRIC CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3955000009"/>
+          <other otherDesc="Internal" value="6986427"/>
+        </identifiers>
+        <balance>932800.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>29279369.51000000</valUSD>
+        <pctVal>0.137473618830</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>M3, Inc.</name>
+        <lei>N/A</lei>
+        <title>M3 INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3435750009"/>
+          <other otherDesc="Internal" value="B02K2M3"/>
+        </identifiers>
+        <balance>1832100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>16348702.25000000</valUSD>
+        <pctVal>0.076761053912</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Seven &amp; i Holdings Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>SEVEN I HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3422950000"/>
+          <other otherDesc="Internal" value="B0FS5D6"/>
+        </identifiers>
+        <balance>8491640.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>99144222.40000000</valUSD>
+        <pctVal>0.465505756017</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>DAIICHI SANKYO COMPANY, LIMITED</name>
+        <lei>353800XGIU2IHQGC9504</lei>
+        <title>DAIICHI SANKYO CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3475350009"/>
+          <other otherDesc="Internal" value="B0J7D91"/>
+        </identifiers>
+        <balance>7335107.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>123453827.75000000</valUSD>
+        <pctVal>0.579645147532</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Bandai Namco Holdings Inc.</name>
+        <lei>3538008EFEM34VRJDQ95</lei>
+        <title>BANDAI NAMCO HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3778630008"/>
+          <other otherDesc="Internal" value="B0JDQD4"/>
+        </identifiers>
+        <balance>2382994.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>54363481.04000000</valUSD>
+        <pctVal>0.255249501470</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Mitsubishi Chemical Group Corporation</name>
+        <lei>353800YNKX4RQUGAR072</lei>
+        <title>MITSUBISHI CHEMICAL GROUP CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3897700005"/>
+          <other otherDesc="Internal" value="B0JQTJ0"/>
+        </identifiers>
+        <balance>4993100.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>35879824.22000000</valUSD>
+        <pctVal>0.168464326967</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TSURUHA HOLDINGS INC.</name>
+        <lei>N/A</lei>
+        <title>TSURUHA HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3536150000"/>
+          <other otherDesc="Internal" value="B0MKZN5"/>
+        </identifiers>
+        <balance>940900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>11647156.31000000</valUSD>
+        <pctVal>0.054686175072</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>INPEX CORPORATION</name>
+        <lei>353800VHYYADPR6MXQ47</lei>
+        <title>INPEX CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3294460005"/>
+          <other otherDesc="Internal" value="B10RB15"/>
+        </identifiers>
+        <balance>3590600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>80739954.61000000</valUSD>
+        <pctVal>0.379093331933</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Idemitsu Kosan Co.,Ltd.</name>
+        <lei>549300P0R46FF6DUA630</lei>
+        <title>IDEMITSU KOSAN CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3142500002"/>
+          <other otherDesc="Internal" value="B1FF8P7"/>
+        </identifiers>
+        <balance>3151045.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>27666109.18000000</valUSD>
+        <pctVal>0.129898977047</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>MonotaRO Co Ltd</name>
+        <lei>5299005JUER5ANXWTC33</lei>
+        <title>MONOTARO CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3922950005"/>
+          <other otherDesc="Internal" value="B1GHR88"/>
+        </identifiers>
+        <balance>1041300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>12307158.97000000</valUSD>
+        <pctVal>0.057785044877</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>MatsukiyoCocokara &amp; Co.</name>
+        <lei>N/A</lei>
+        <title>MATSUKIYOCOCOKARA CO</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3869010003"/>
+          <other otherDesc="Internal" value="B249GC0"/>
+        </identifiers>
+        <balance>1356400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>19336993.06000000</valUSD>
+        <pctVal>0.090791791549</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sony Financial Group Inc.</name>
+        <lei>353800O7BDSU41WOZA60</lei>
+        <title>SONY FINANCIAL GROUP INC</title>
+        <cusip>J76337104</cusip>
+        <identifiers>
+          <isin value="JP3435350008"/>
+          <other otherDesc="Internal" value="B249SN5"/>
+        </identifiers>
+        <balance>25178900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>22133211.94000000</valUSD>
+        <pctVal>0.103920705693</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ZOZO, Inc.</name>
+        <lei>N/A</lei>
+        <title>ZOZO INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3399310006"/>
+          <other otherDesc="Internal" value="B292RC1"/>
+        </identifiers>
+        <balance>1846300.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>11479020.88000000</valUSD>
+        <pctVal>0.053896739151</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TIS Inc.</name>
+        <lei>35380064HYEZXBQHDF07</lei>
+        <title>TIS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3104890003"/>
+          <other otherDesc="Internal" value="B2Q4CR0"/>
+        </identifiers>
+        <balance>877700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>18704952.89000000</valUSD>
+        <pctVal>0.087824212299</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>MS&amp;AD Insurance Group Holdings, Inc.</name>
+        <lei>N/A</lei>
+        <title>MS AD INSURANCE GROUP HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3890310000"/>
+          <other otherDesc="Internal" value="B2Q4CS1"/>
+        </identifiers>
+        <balance>5244020.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>140334857.16000000</valUSD>
+        <pctVal>0.658905604346</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Otsuka Holdings Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>OTSUKA HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3188220002"/>
+          <other otherDesc="Internal" value="B5LTM93"/>
+        </identifiers>
+        <balance>1771400.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>130144760.00000000</valUSD>
+        <pctVal>0.611060669285</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Daiichi Life Group, Inc.</name>
+        <lei>549300ZUFXI7JXZVTZ25</lei>
+        <title>DAIICHI LIFE GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3476480003"/>
+          <other otherDesc="Internal" value="B601QS4"/>
+        </identifiers>
+        <balance>14329900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>146428983.07000000</valUSD>
+        <pctVal>0.687518978079</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>ENEOS Holdings, Inc.</name>
+        <lei>3538001KQ5SAOZSQTT44</lei>
+        <title>ENEOS HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3386450005"/>
+          <other otherDesc="Internal" value="B627LW9"/>
+        </identifiers>
+        <balance>11034195.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>90410002.41000000</valUSD>
+        <pctVal>0.424496511290</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Sompo Holdings, Inc.</name>
+        <lei>353800CWW4SRGEYEB512</lei>
+        <title>SOMPO HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3165000005"/>
+          <other otherDesc="Internal" value="B62G7K6"/>
+        </identifiers>
+        <balance>3616250.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>133628283.11000000</valUSD>
+        <pctVal>0.627416640613</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>NEXON Co., Ltd.</name>
+        <lei>N/A</lei>
+        <title>NEXON CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3758190007"/>
+          <other otherDesc="Internal" value="B63QM77"/>
+        </identifiers>
+        <balance>1515900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>21309859.64000000</valUSD>
+        <pctVal>0.100054870392</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Japan Airlines Co., Ltd.</name>
+        <lei>3538002MH5L1QZZ93477</lei>
+        <title>JAPAN AIRLINES CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3705200008"/>
+          <other otherDesc="Internal" value="B8BRV46"/>
+        </identifiers>
+        <balance>595900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>10194579.24000000</valUSD>
+        <pctVal>0.047865979494</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Suntory Beverage &amp; Food Limited</name>
+        <lei>549300FONLMVK7YYYH41</lei>
+        <title>SUNTORY BEVERAGE FOOD LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3336560002"/>
+          <other otherDesc="Internal" value="BBD7Q84"/>
+        </identifiers>
+        <balance>566700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>15307649.85000000</valUSD>
+        <pctVal>0.071873064751</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Yokohama Financial Group, Inc.</name>
+        <lei>N/A</lei>
+        <title>YOKOHAMA FINANCIAL GROUP INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3305990008"/>
+          <other otherDesc="Internal" value="BD97JW7"/>
+        </identifiers>
+        <balance>4207700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>42879988.59000000</valUSD>
+        <pctVal>0.201331767231</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SoftBank Corp.</name>
+        <lei>353800M1YCTS9JRBJ535</lei>
+        <title>SOFTBANK CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3732000009"/>
+          <other otherDesc="Internal" value="BF5M0K5"/>
+        </identifiers>
+        <balance>117191500.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>158333269.03000000</valUSD>
+        <pctVal>0.743412438147</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>SEIBU HOLDINGS INC.</name>
+        <lei>353800JY9TYV9WTCN620</lei>
+        <title>SEIBU HOLDINGS INC</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3417200007"/>
+          <other otherDesc="Internal" value="BKY6H35"/>
+        </identifiers>
+        <balance>854900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>15148570.21000000</valUSD>
+        <pctVal>0.071126147923</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Kioxia Holdings Corporation</name>
+        <lei>35380080RTKRARNH4R73</lei>
+        <title>KIOXIA HOLDINGS CORP</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3236330001"/>
+          <other otherDesc="Internal" value="BMGYJ02"/>
+        </identifiers>
+        <balance>771600.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>317735734.07000000</valUSD>
+        <pctVal>1.491845006412</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Recruit Holdings Co.,Ltd.</name>
+        <lei>353800R2LRSMVVC4I806</lei>
+        <title>RECRUIT HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3970300004"/>
+          <other otherDesc="Internal" value="BQRRZ00"/>
+        </identifiers>
+        <balance>5734700.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>383483053.10000000</valUSD>
+        <pctVal>1.800544340679</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JAPAN POST HOLDINGS Co.,Ltd.</name>
+        <lei>5299003D9N4JBS256X18</lei>
+        <title>JAPAN POST HOLDINGS CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3752900005"/>
+          <other otherDesc="Internal" value="BYT8143"/>
+        </identifiers>
+        <balance>7273200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>94327654.40000000</valUSD>
+        <pctVal>0.442890821188</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JAPAN POST INSURANCE Co.,Ltd.</name>
+        <lei>54930042SK2Z708BA841</lei>
+        <title>JAPAN POST INSURANCE CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3233250004"/>
+          <other otherDesc="Internal" value="BYT8154"/>
+        </identifiers>
+        <balance>2285900.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>20501212.71000000</valUSD>
+        <pctVal>0.096258080307</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>JAPAN POST BANK Co.,Ltd.</name>
+        <lei>5493006JVO6N2HC2XZ76</lei>
+        <title>JAPAN POST BANK CO LTD</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="JP3946750001"/>
+          <other otherDesc="Internal" value="BYT8165"/>
+        </identifiers>
+        <balance>7287200.00000000</balance>
+        <units>NS</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>140433062.93000000</valUSD>
+        <pctVal>0.659366703844</pctVal>
+        <payoffProfile>Long</payoffProfile>
+        <assetCat>EC</assetCat>
+        <issuerCat>CORP</issuerCat>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>2</fairValLevel>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+      <invstOrSec>
+        <name>TOPIX INDX FUTR JUN26</name>
+        <lei>N/A</lei>
+        <title>TOPIX INDX FUTR JUN26</title>
+        <cusip>N/A</cusip>
+        <identifiers>
+          <isin value="N/A"/>
+          <ticker value="TPXM26"/>
+          <other otherDesc="INTERNAL" value="TPM620260"/>
+        </identifiers>
+        <balance>774.00000000</balance>
+        <units>NC</units>
+        <currencyConditional curCd="JPY" exchangeRt="159.26500000"/>
+        <valUSD>19456253.76000000</valUSD>
+        <pctVal>0.091351748963</pctVal>
+        <payoffProfile>N/A</payoffProfile>
+        <assetCat>DE</assetCat>
+        <issuerConditional desc="Index Future" issuerCat="OTHER"/>
+        <invCountry>JP</invCountry>
+        <isRestrictedSec>N</isRestrictedSec>
+
+        <fairValLevel>1</fairValLevel>
+        <derivativeInfo>
+          <futrDeriv derivCat="FUT">
+            <counterparties>
+              <counterpartyName>OSAKA EXCHANGE,INC</counterpartyName>
+              <counterpartyLei>3538001249AILNPRUX57</counterpartyLei>
+            </counterparties>
+            <payOffProf>Long</payOffProf>
+            <descRefInstrmnt>
+              <indexBasketInfo>
+                <indexName>TOPIX INDX FUTR Jun 2026</indexName>
+                <indexIdentifier>TPXM26</indexIdentifier>
+              </indexBasketInfo>
+            </descRefInstrmnt>
+            <expDate>2026-06-12</expDate>
+            <notionalAmt>172758691.26000000</notionalAmt>
+            <curCd>JPY</curCd>
+            <unrealizedAppr>19456253.76000000</unrealizedAppr>
+          </futrDeriv>
+        </derivativeInfo>
+        <securityLending>
+          <isCashCollateral>N</isCashCollateral>
+          <isNonCashCollateral>N</isNonCashCollateral>
+          <isLoanByFund>N</isLoanByFund>
+        </securityLending>
+      </invstOrSec>
+    </invstOrSecs>
+    <explntrNotes>
+
+
+
+      <explntrNote note="Monthly returns presented in Item B.5(a) have been calculated without deducting any applicable sales loads or redemption fees." noteItem="B.5.a"/>
+
+
+    </explntrNotes>
+    <signature>
+      <ncom:dateSigned>2026-06-30</ncom:dateSigned>
+      <ncom:nameOfApplicant>iShares, Inc.</ncom:nameOfApplicant>
+      <ncom:signature>Chuck Pulsfort </ncom:signature>
+      <ncom:signerName>Chuck Pulsfort </ncom:signerName>
+      <ncom:title>Assistant Treasurer</ncom:title>
+    </signature>
+  </formData>
+  <documents>XXXX</documents>
+</edgarSubmission>
