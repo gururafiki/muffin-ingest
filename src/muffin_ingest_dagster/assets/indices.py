@@ -28,6 +28,7 @@ from dagster import AssetExecutionContext
 from muffin_ingest.derive import returns
 from muffin_ingest.facets import indices, prices
 from muffin_ingest.providers import openbb
+from muffin_ingest_dagster import partitioned
 from muffin_ingest_dagster.resources import Postgres
 
 index_day = dg.DailyPartitionsDefinition(start_date="2026-09-01", timezone="UTC")
@@ -151,7 +152,11 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
         stats["empty"] += sum(1 for s in batch if s.upper() not in {k.upper() for k in parsed})
 
     context.add_output_metadata({**stats, "rows": len(rows), "scopes": len(scopes)})
-    return rows
+    # KEYED BY THE BAR'S OWN DAY — this asset is DATE-partitioned, so a `single_run` backfill over
+    # several days must write one file per day. It returned a flat list until 2026-09-12, which
+    # works for the one-partition path the daily schedule always takes and dies at the write on
+    # the first multi-day backfill, after every provider call has been paid for.
+    return partitioned.by_partition(context, rows, key=lambda r: str(r["trade_date"]))
 
 
 @dg.asset(
@@ -295,8 +300,5 @@ def index_return(
     return out
 
 
-def _rows(loaded: Any) -> list[dict[str, Any]]:
-    """The multi-partition load shape, flattened — the mirror every lane needs."""
-    if isinstance(loaded, dict):
-        return [row for _, rows in sorted(loaded.items()) for row in rows]
-    return list(loaded)
+# The mirror every lane needs — shared, see `muffin_ingest_dagster.partitioned`.
+_rows = partitioned.loaded_rows
