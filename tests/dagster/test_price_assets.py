@@ -687,7 +687,7 @@ def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
     """
     from muffin_ingest_dagster import definitions as d
 
-    known = {"yfinance", "yahoo", "finviz", "sql"}
+    known = {"yfinance", "yahoo", "finviz", "sec", "nse", "sql"}
     # The pool is declared on the asset's underlying op, not on the AssetsDefinition.
     used = {
         pool

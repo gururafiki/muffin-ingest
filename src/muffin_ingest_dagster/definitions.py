@@ -33,7 +33,7 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest import settings
-from muffin_ingest_dagster.assets import fx, indices, prices
+from muffin_ingest_dagster.assets import fx, indices, prices, registries
 from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager
 from muffin_ingest_dagster.resources import Postgres
 from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
@@ -262,10 +262,21 @@ defs = dg.Definitions(
         indices.raw_index_bars,
         indices.raw_sector_performance,
         indices.index_return,
+        registries.raw_sec_cik_map,
+        registries.security_cik,
+        registries.raw_nse_equity_list,
+        registries.security_nse_filer,
     ],
     asset_checks=[every_symbol_keyed_facet_retracts, every_askable_security_was_asked],
     jobs=[prune_dagster_storage],
-    schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx, daily_indices],
+    schedules=[
+        ledger_heartbeat,
+        nightly_pruning,
+        daily_prices,
+        daily_fx,
+        daily_indices,
+        registries.weekly_registries,
+    ],
     sensors=[prices.new_securities_need_history, fx.new_currencies_need_history, automation],
     resources={
         "postgres": Postgres(),
