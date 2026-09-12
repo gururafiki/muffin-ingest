@@ -71,10 +71,15 @@ NSE_UA = (
 )
 
 
-def _get(url: str, *, headers: dict[str, str], timeout_s: float) -> Document:
+def _get(url: str, *, provider: str, headers: dict[str, str], timeout_s: float) -> Document:
     import httpx
 
-    provider = url.split("/")[2] if "//" in url else "unknown"
+    # THE PROVIDER IS NAMED, NEVER READ OFF THE URL. This took the label from the URL's host, which
+    # is the provider's host only when nothing sits in front of it. In production every base URL is
+    # `http://http-cache:8080/<location>`, so the first SEC request driven after the roll counted as
+    # `provider="http-cache:8080"` — and NSE would have joined it, one series for every document
+    # provider. It is the nginx lesson reproduced one layer up: `$provider` is an explicit variable
+    # per location, never `$proxy_host`. `yahoo_chart` and the openbb routes already named theirs.
     with metrics.request(provider) as outcome:
         try:
             response = httpx.get(url, headers=headers, timeout=timeout_s, follow_redirects=True)
@@ -104,6 +109,7 @@ def sec_company_tickers(timeout_s: float = 30.0) -> Document:
     base = settings.provider_base("sec", "https://www.sec.gov")
     return _get(
         f"{base}/files/company_tickers.json",
+        provider="sec",
         headers={"User-Agent": settings.user_agent(), "Accept": "application/json"},
         timeout_s=timeout_s,
     )
@@ -115,6 +121,7 @@ def nse_equity_list(timeout_s: float = 30.0) -> Document:
     site = settings.provider_base("nse", "https://www.nseindia.com")
     return _get(
         f"{archives}/content/equities/EQUITY_L.csv",
+        provider="nse",
         headers={"User-Agent": NSE_UA, "Referer": f"{site}/"},
         timeout_s=timeout_s,
     )
