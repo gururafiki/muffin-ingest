@@ -89,10 +89,11 @@ def nse_equities(body: bytes) -> list[dict[str, Any]]:
     text = body.decode("utf-8-sig", errors="replace")
     rows = list(csv.reader(io.StringIO(text)))
     rows = [r for r in rows if any(cell.strip() for cell in r)]
-    if len(rows) < 2:
-        raise RegistryUnreadable(
-            f"nse equity list has {len(rows)} non-empty line(s); the published file is ~2,570"
-        )
+    # A file with no header at all is unreadable; a header with no rows beneath it is an empty
+    # LIST, which falls through to the check at the bottom so it is reported as the provider
+    # event it is rather than as a parse failure.
+    if not rows:
+        raise RegistryUnreadable("nse equity list is empty; the published file is ~2,570 rows")
 
     header = [cell.strip().upper() for cell in rows[0]]
     try:

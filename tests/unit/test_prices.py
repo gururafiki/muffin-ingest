@@ -14,6 +14,7 @@ from muffin_ingest.derive.returns import (
     price_returns,
     total_returns,
 )
+from muffin_ingest.facets import prices
 from muffin_ingest.facets.prices import Bar, bar_from, bars_by_symbol
 from muffin_ingest.providers.base import Provider, SecurityRef
 from muffin_ingest.providers.outcome import Outcome
@@ -324,3 +325,92 @@ def test_staleness_still_reads_the_CLOCK_and_not_the_data() -> None:
     assert returns.price_returns(series, long_after) == {}, (
         "a series whose newest bar is weeks old must yield nothing, however well-formed it is"
     )
+
+
+def test_raw_keeps_every_field_the_provider_sent() -> None:
+    """RAW IS THE VENDOR'S ANSWER WITH NOTHING DROPPED, and it was not.
+
+    Audited 2026-09-12: `raw_rows` took a `Bar` — six fields — while the provider sends ten.
+    `open`, `high`, `low` and `vwap` were discarded at stage 1 and unrecoverable without
+    re-fetching every bar held, which is exactly what the two-stage split exists to prevent:
+    adopting a field we do not use today must cost a re-parse of files already on disk.
+
+    ALL 181 TESTS PASSED WHILE THAT WAS TRUE, which is why this one exists. Nothing asserted the
+    shape of raw — only that the values it did keep were right — so the loss was invisible.
+
+    The assertion is a SUPERSET rather than an equality: context columns are added on purpose,
+    and pinning the exact set would fail the day a provider adds a field, which is the one event
+    this rule exists to make free.
+    """
+    provider_row = {
+        "date": "2026-09-10",
+        "symbol": "AAPL",
+        "open": 226.5,
+        "high": 229.1,
+        "low": 225.8,
+        "close": 228.0,
+        "volume": 41_000_000,
+        "vwap": 227.4,
+        "dividend": 0.0,
+        "split_ratio": 0.0,
+    }
+    subject = prices.Subject(security_id="s-1", symbol="AAPL", weight=1.0)
+
+    rows = prices.raw_rows(
+        subject, [provider_row], provider="yfinance", run_id="r-1", observed="AAPL"
+    )
+
+    assert len(rows) == 1
+    missing = set(provider_row) - set(rows[0])
+    assert not missing, (
+        f"raw dropped {sorted(missing)} — a field discarded at stage 1 can only be recovered by "
+        f"re-fetching, which is the whole thing the acquire/normalise split prevents"
+    )
+    for key, value in provider_row.items():
+        assert rows[0][key] == value, f"raw altered the provider's {key}"
+
+    # And the context is present, because "what did we actually ask" is unanswerable without it.
+    assert rows[0]["security_id"] == "s-1"
+    assert rows[0]["asked_symbol"] == "AAPL"
+    assert rows[0]["observed_symbol"] == "AAPL"
+    # NOTHING IS DERIVED INTO THE ROW. An earlier version wrote a parsed `trade_date` here because
+    # the I/O manager needs a key to place the file — but placement is not storage, and a parsed
+    # date is an interpretation of the vendor's own field. The asset reads `row_date` to place the
+    # row; the row itself is the provider's fields plus declared context, and nothing else.
+    added = set(rows[0]) - set(provider_row)
+    assert added <= prices.CONTEXT_COLUMNS, (
+        f"raw grew {sorted(added - prices.CONTEXT_COLUMNS)} — stage 1 adds declared context and "
+        f"nothing computed from the vendor's fields"
+    )
+    assert "trade_date" not in rows[0]
+    assert prices.row_date(rows[0]) == date(2026, 9, 10), "and the placement key is still readable"
+
+
+def test_a_row_whose_date_will_not_parse_is_kept_in_raw_and_refused_in_stage_2() -> None:
+    """A ROW DELETED AT FETCH IS A ROW NO RE-PARSE CAN RECOVER.
+
+    `provider_rows_by_symbol` dropped any row whose `date` would not parse until 2026-09-12, which
+    made stage 1 the judge of what a usable row is. It is kept now, and `normalise` — the stage a
+    rule change costs nothing to re-run — is where it is refused.
+    """
+    sent = [
+        {"symbol": "AAPL", "date": "not a date", "close": 1.0},
+        {"symbol": "AAPL", "date": "2026-09-10", "close": 2.0},
+    ]
+    assert len(prices.provider_rows_by_symbol(sent, "AAPL")["AAPL"]) == 2, "stage 1 kept both"
+
+    out = prices.normalise([dict(r, security_id="s-1") for r in sent], {}, source_code="yfinance")
+    assert [r["trade_date"] for r in out] == ["2026-09-10"]
+
+
+def test_the_window_is_applied_in_stage_2_and_is_half_open() -> None:
+    """The provider widens a degenerate range and returns a session still in progress; both used to
+    be cut at fetch. The window is a stage-2 rule now, half-open like Dagster's own: the
+    partition's day is in, the day its window ends on is out."""
+    raw = [
+        {"security_id": "s-1", "date": d, "close": 1.0}
+        for d in ("2026-09-09", "2026-09-10", "2026-09-11")
+    ]
+    window = (date(2026, 9, 10), date(2026, 9, 11))
+    out = prices.normalise(raw, {}, source_code="yfinance", window=window)
+    assert [r["trade_date"] for r in out] == ["2026-09-10"]

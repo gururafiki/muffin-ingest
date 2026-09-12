@@ -73,8 +73,12 @@ dependencies = [
   # scan. `UPathIOManager` and `upath` come with dagster, so the whole raw path costs one wheel.
   "pyarrow>=18,<26",
   "pydantic>=2.10,<3",
-  # `prometheus-client` returns WITH the worker exporter that needs it. It was declared here while
-  # the only code importing it was an HTTP client with no callers, which is the same shape.
+  # BACK, WITH THE EXPORTER THAT NEEDS IT — `muffin_ingest.metrics`. It was declared here once
+  # while the only importer was an HTTP client with no callers, which is the shape this comment
+  # was written to prevent; the difference now is that openbb's egress is invisible to http-cache
+  # (yfinance fetches through `curl_cffi`), so in-process is the ONLY place those requests can be
+  # counted, and `prometheus.yml`'s parked scrape job has been waiting for exactly this.
+  "prometheus-client>=0.21,<1",
   "structlog>=24.4,<26",
 ]
 

@@ -13,10 +13,13 @@ rates uses the most recent one rather than interpolating — A RATE WE DID NOT O
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
+
+from muffin_ingest.providers import yahoo_chart
+from muffin_ingest.providers.documents import Document
 
 #: Subunits are NOT currencies, and pretending otherwise is what made Tel Aviv look like a 100x
 #: crash. Yahoo has no pair for agorot, cents or fils; each is a fixed fraction of its parent.
@@ -96,25 +99,41 @@ def askable_currencies(conn: Any, *, include_absent: bool = False) -> list[str]:
 
 
 def raw_rows(
-    currency: str, points: Sequence[Any], *, interval: str, run_id: str
+    currency: str,
+    document: Document,
+    *,
+    interval: str,
+    range_: str,
+    run_id: str,
 ) -> list[dict[str, Any]]:
-    """What the provider said, plus who asked and how — the artifact, not the answer.
+    """THE PROVIDER'S ANSWER, UNOPENED, plus who asked and how — the artifact, not the answer.
 
-    THE ASKED CURRENCY IS RECORDED SEPARATELY from anything derived later, for the same reason the
-    price lane records `asked_symbol` beside `observed_symbol`: when a value turns out wrong, the
-    first question is always what was actually requested.
+    ONE ROW PER CALL, CARRYING THE WHOLE BODY. Until 2026-09-12 this took the pivoted `Point`
+    objects `yahoo_chart.chart()` had already built, so what reached disk was our reshaping of
+    Yahoo's nested parallel arrays rather than Yahoo's bytes. Every field we knew to look for
+    survived; a field we did not — a second quote block, an array whose length does not match
+    `timestamp`, anything Yahoo adds beside it — did not, and could only be recovered by re-asking
+    for ten years of history per currency. The two-stage split exists precisely so that adopting a
+    field costs a re-parse of files already on disk.
+
+    THE ASKED CURRENCY AND THE REQUEST PARAMETERS ARE RECORDED, for the same reason the price lane
+    records `asked_symbol` beside `observed_symbol`: when a value turns out wrong the first
+    question is always what was actually requested, and `range`/`interval` are the two parameters
+    that decide what a chart body even contains. `currency_code` is ours and is written anyway —
+    without it stage 2 would re-derive the pair from a symbol, so a mapping changed between fetch
+    and transform would silently re-attribute a whole series.
     """
-    return [
+    row = document.as_row(run_id)
+    row.update(
         {
             "currency_code": currency,
-            "as_of": point.as_of.isoformat(),
-            "close": float(point.close),
+            "asked_symbol": yahoo_chart.pair(currency),
             "interval": interval,
+            "range": range_,
             "provider": "yahoo",
-            "run_id": run_id,
         }
-        for point in points
-    ]
+    )
+    return [row]
 
 
 #: THE SOURCE IS `yfinance`, NOT `yahoo`, AND THAT IS DELIBERATE DESPITE THE CALL BEING DIRECT.
@@ -135,32 +154,103 @@ def raw_rows(
 SOURCE_CODE = "yfinance"
 
 
-def normalise(rows: Sequence[dict[str, Any]], *, source_code: str = SOURCE_CODE) -> list[Rate]:
-    """Raw points to typed rates, dropping anything the band refuses.
+@dataclass(frozen=True)
+class Normalised:
+    """Typed rates, and what reading the bodies established about them.
 
-    DROPPED, NOT CORRECTED, AND COUNTED BY THE CALLER. An implausible rate is most likely an
-    inverted pair, and inverting it back would be repairing a value whose provenance is already in
-    doubt.
+    THE COUNTS MOVED HERE WITH THE RULES. They used to be collected at fetch — `live_points`,
+    `null_closes`, `outside_window` — which is what made stage 1 the place that decided what a bar
+    is. They are observations about a PARSE now, so every one of them can be recomputed from files
+    on disk, and `refused_by_band` in particular is a statement about the provider rather than a
+    repair to be pleased about.
+    """
+
+    rates: list[Rate]
+    stats: dict[str, int]
+
+
+def normalise(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    source_code: str = SOURCE_CODE,
+    window: tuple[date, date] | None = None,
+) -> Normalised:
+    """Raw bodies to typed rates. No provider call, so a fix here is free to re-run.
+
+    EVERY RULE THAT NARROWS IS HERE, and that is the whole reason this function grew a parser.
+    A live quote is not a close; a null close is a padded session; an implausible rate is most
+    likely an inverted pair; a point outside the partition's window belongs to another partition.
+    Each of those was applied before anything was stored until 2026-09-12, so correcting any one
+    of them meant re-fetching ten years of history per currency.
+
+    DROPPED, NOT CORRECTED. Inverting an implausible rate back would repair a value whose
+    provenance is already in doubt, and the band cannot tell an inversion from a genuinely odd
+    quote.
     """
     out: list[Rate] = []
+    stats = {
+        "documents": 0,
+        "points": 0,
+        "live_points": 0,
+        "null_closes": 0,
+        "undatable": 0,
+        "outside_window": 0,
+        "refused_by_band": 0,
+        # A BODY ON DISK THAT WILL NOT PARSE IS OUR PROBLEM, and it must not blank the other
+        # forty-two currencies. Counted so the asset can report it; non-zero is never normal.
+        "unreadable": 0,
+        # A ROW WITH NO BODY WAS WRITTEN BEFORE 2026-09-12, when raw held a per-point pivot rather
+        # than the response. Nothing in it can be re-read under today's rules — the pivot IS the
+        # loss this format replaced — so it yields nothing, and it is COUNTED rather than skipped:
+        # a stage-2 re-run over an old partition would otherwise publish no rates and read exactly
+        # like a day the provider had nothing for. The remedy is re-materialising that raw
+        # partition, which is one call per currency.
+        "legacy_rows": 0,
+    }
     for row in rows:
-        close = row.get("close")
-        if not isinstance(close, int | float) or isinstance(close, bool):
+        body = row.get("body")
+        if body is None:
+            stats["legacy_rows"] += 1
             continue
-        if not is_plausible(float(close)):
+        stats["documents"] += 1
+        try:
+            series = yahoo_chart.parse(bytes(body))
+        except yahoo_chart.YahooRefused:
+            stats["unreadable"] += 1
             continue
-        as_of = row.get("as_of")
-        if not isinstance(as_of, str):
-            continue
-        out.append(
-            Rate(
-                currency_code=str(row["currency_code"]),
-                as_of=date.fromisoformat(as_of[:10]),
-                usd_per_unit=float(close),
-                derived_from=None,
+        stats["points"] += len(series.points)
+        stats["live_points"] += series.live_points
+        stats["null_closes"] += series.null_closes
+        stats["undatable"] += series.undatable
+        currency = str(row.get("currency_code") or "")
+        for point in series.points:
+            # A LIVE QUOTE IS NOT A CLOSE. Raw keeps the mid-session point because it is what the
+            # provider said; publishing it is the intraday-capture defect this pipeline replaces
+            # a resource for, so it is refused here — where changing the rule costs a re-parse.
+            if point.is_live:
+                continue
+            # A NULL CLOSE IS A PADDED SESSION, also kept in the body and refused here.
+            if point.close is None or point.close <= 0:
+                continue
+            # THE PARTITION'S OWN WINDOW, APPLIED TO A FILE. The spot lane asks a five-day range
+            # so a weekend or holiday still yields a close; it does not ask for five days in
+            # order to store them. Filtering at fetch threw those points away — and a point
+            # deleted at fetch is one no re-parse can recover.
+            if window is not None and not (window[0] <= point.as_of < window[1]):
+                stats["outside_window"] += 1
+                continue
+            if not is_plausible(point.close):
+                stats["refused_by_band"] += 1
+                continue
+            out.append(
+                Rate(
+                    currency_code=currency,
+                    as_of=point.as_of,
+                    usd_per_unit=point.close,
+                    derived_from=None,
+                )
             )
-        )
-    return out
+    return Normalised(rates=out, stats=stats)
 
 
 def with_subunits(rates: Sequence[Rate]) -> list[Rate]:

@@ -43,6 +43,16 @@ LOOKBACK = timedelta(days=1900)
 BATCH = 20
 
 
+def _partition_day(row: dict[str, Any]) -> str:
+    """Which daily partition a raw row belongs to, read off the provider's own date field.
+
+    FOR PLACEMENT ONLY. Raw stores no derived `trade_date`; a key is needed to decide which file
+    a row is written to, which is not the same as storing an interpretation beside it.
+    """
+    parsed = prices.row_date(row)
+    return parsed.isoformat() if parsed is not None else ""
+
+
 class IndexRun(dg.Config):
     limit: int | None = None
     budget_seconds: int = 900
@@ -119,13 +129,20 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
             context.log.warning("batch failed: %s", exc)
             continue
 
-        parsed = prices.bars_by_symbol(answer.rows, batch[0] if len(batch) == 1 else "")
-        # ONLY THE TOP IS CUT. Everything before `end` is the lookback the long periods need; what
-        # must go is anything the partition does not cover, which for a daily partition is today.
-        for symbol, series in parsed.items():
-            kept = [bar for bar in series if bar.trade_date < end]
-            stats["outside_window"] += len(series) - len(kept)
-            parsed[symbol] = kept
+        sole = batch[0] if len(batch) == 1 else ""
+        parsed = prices.bars_by_symbol(answer.rows, sole)
+        # GROUPED, NOT NARROWED — the `Bar` drives the window filter and the counters, while the
+        # provider's own row is what reaches raw. This lane kept five fields of the ten yfinance
+        # sends, discarding `open`/`high`/`low`/`volume`/`vwap` at stage 1.
+        raw_by_symbol = prices.provider_rows_by_symbol(answer.rows, sole)
+        # COUNTED HERE, REFUSED IN `index_return`. A lookback series still has a top: asking for
+        # 1,900 days up to `end` brings back TODAY's bar, a session in progress, and stamping a
+        # country with a mid-session price is the defect this counter exists for. It used to be
+        # CUT here, which made stage 1 the judge of what a partition covers — and a row deleted
+        # at fetch is one no re-parse can recover.
+        stats["outside_window"] += sum(
+            1 for series in parsed.values() for bar in series if bar.trade_date >= end
+        )
 
         for symbol, series in parsed.items():
             codes = by_symbol.get(symbol) or by_symbol.get(symbol.upper())
@@ -139,16 +156,18 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
             stats["bars"] += len(series) * len(codes)
             rows.extend(
                 {
+                    # THE PROVIDER'S ROW FIRST, our context over the top — AND NOTHING DERIVED.
+                    # A parsed `trade_date` used to be written in here, which is an
+                    # interpretation of the vendor's own `date` made before anything was stored.
+                    # `index_return` parses it, so a corrected date rule costs a re-parse.
+                    **dict(row),
                     "index_code": code,
                     "asked_symbol": symbol,
-                    "trade_date": bar.trade_date.isoformat(),
-                    "close": bar.close,
-                    "dividend": bar.dividend,
                     "provider": "yfinance",
-                    "run_id": context.run_id,
+                    "run_id": context.run.run_id,
                 }
                 for code in codes
-                for bar in series
+                for row in raw_by_symbol.get(symbol, [])
             )
         stats["empty"] += sum(1 for s in batch if s.upper() not in {k.upper() for k in parsed})
 
@@ -157,7 +176,7 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
     # several days must write one file per day. It returned a flat list until 2026-09-12, which
     # works for the one-partition path the daily schedule always takes and dies at the write on
     # the first multi-day backfill, after every provider call has been paid for.
-    return partitioned.by_partition(context, rows, key=lambda r: str(r["trade_date"]))
+    return partitioned.by_partition(context, rows, key=_partition_day)
 
 
 @dg.asset(
@@ -250,16 +269,33 @@ def index_return(
     window: tuple[datetime, datetime] = context.partition_time_window
     as_of = window[1].date() - timedelta(days=1)
 
-    series: dict[str, list[prices.Bar]] = {}
-    for row in _rows(raw_index_bars):
-        trade_date = date.fromisoformat(str(row["trade_date"])[:10])
-        series.setdefault(str(row["index_code"]), []).append(
-            prices.Bar(
-                trade_date=trade_date,
-                close=float(row["close"]),
-                dividend=row.get("dividend"),
-            )
+    # ONE BAR PER (SCOPE, DAY), THE NEWEST FILE'S. Every daily run stores its whole 1,900-day
+    # lookback in its own partition's file, so a range re-parse — the thing stage 2 exists to make
+    # free — loads each bar once per file. Appended as they come, a day would sit beside its own
+    # duplicate in a series every return rule reads POSITIONALLY, so `1d` would compare a session
+    # with itself. Partitions are visited oldest first, so the newest fetch of a day is kept.
+    latest: dict[str, dict[date, prices.Bar]] = {}
+    outside_window = 0
+    for row in (
+        r for part in partitioned.rows_per_partition(context, raw_index_bars).values() for r in part
+    ):
+        # THE PROVIDER'S OWN DATE, PARSED HERE. Raw carries the vendor's `date` untouched.
+        trade_date = prices.row_date(row)
+        close = row.get("close")
+        if trade_date is None or not isinstance(close, int | float) or isinstance(close, bool):
+            continue
+        # ONLY THE TOP IS CUT. Everything before the window's end is the lookback the long periods
+        # need; what must go is the bar for a day the partition does not cover, which for a daily
+        # partition is today — a session still trading, whose "close" is not one.
+        if trade_date >= window[1].date():
+            outside_window += 1
+            continue
+        latest.setdefault(str(row["index_code"]), {})[trade_date] = prices.Bar(
+            trade_date=trade_date, close=float(close), dividend=row.get("dividend")
         )
+    series = {
+        code: sorted(days.values(), key=lambda b: b.trade_date) for code, days in latest.items()
+    }
 
     out: list[dict[str, Any]] = []
     stats = {"scopes": 0, "with_returns": 0, "periods": 0, "with_total_return": 0}
@@ -301,7 +337,13 @@ def index_return(
         context.log.error("unmapped provider sector labels: %s", ", ".join(unmapped))
 
     context.add_output_metadata(
-        {**stats, "rows": len(out), "sector_rows": len(sectors), "unmapped_labels": len(unmapped)}
+        {
+            **stats,
+            "rows": len(out),
+            "sector_rows": len(sectors),
+            "unmapped_labels": len(unmapped),
+            "outside_window": outside_window,
+        }
     )
     return out
 

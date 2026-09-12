@@ -1,16 +1,23 @@
 """The FX rules, driven over CAPTURED Yahoo bytes rather than invented ones.
 
-Every shape asserted here came out of `fx_chart.json`, and two of them are shapes nobody would have
-written: a 5-day window carrying a null among its six closes, and an unknown pair answering **404**
-with a body that names the absence. The second was a live defect in the provider when the capture
-was taken — it raised on any non-200, so an unquoted currency read as a transport failure, and a
-transport failure must never mark a subject absent.
+TWO KINDS OF CAPTURE, FOR TWO DIFFERENT CLAIMS.
+
+  `yahoo_chart_eurusd_5d.body` and `yahoo_chart_zzzusd_404.body` are RESPONSE BODIES, byte for
+  byte, taken 2026-09-12. The "raw is exactly what the provider sent" assertions run against them,
+  because a body re-assembled from parts cannot prove that nothing was lost.
+
+  `fx_chart.json` is an older capture of selected FIELDS — timestamps, closes and six meta keys per
+  case. It still carries the shapes nobody would have written: a five-day window with a null among
+  its closes, the lari's single live quote, an inverted pair returning 31.6, and an unknown pair
+  answering **404** with a body that names the absence. `rebuilt()` puts it back into Yahoo's wire
+  shape for `parse`.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -19,42 +26,138 @@ import pytest
 
 from muffin_ingest.facets import fx
 from muffin_ingest.providers import yahoo_chart
+from muffin_ingest.providers.documents import Document
 
-CAPTURED: dict[str, Any] = json.loads(
-    (Path(__file__).parents[1] / "fixtures" / "fx_chart.json").read_text()
-)
+FIXTURES = Path(__file__).parents[1] / "fixtures"
+CAPTURED: dict[str, Any] = json.loads((FIXTURES / "fx_chart.json").read_text())
+EUR_BODY = (FIXTURES / "yahoo_chart_eurusd_5d.body").read_bytes()
+ABSENT_BODY = (FIXTURES / "yahoo_chart_zzzusd_404.body").read_bytes()
 
 
-def replay(case: str) -> httpx.Response:
-    """The captured wire response, rebuilt exactly — status AND body, because the two disagree."""
+def rebuilt(case: str) -> bytes:
+    """A field capture put back into Yahoo's wire shape. The meta is PART of that shape, not an
+    extra: without `gmtoffset` every bar is dated a day early, and without `regularMarketTime` the
+    live quote is stored as a close."""
     payload = CAPTURED[case]
     if payload.get("chart_error"):
-        body = {"chart": {"result": None, "error": payload["chart_error"]}}
-    else:
-        body = {
-            "chart": {
-                "error": None,
-                "result": [
-                    {
-                        "timestamp": payload["timestamp"],
-                        "indicators": {"quote": [{"close": payload["close"]}]},
-                        # THE META IS PART OF THE WIRE SHAPE, not an extra. Without `gmtoffset`
-                        # every bar is dated a day early, and without `regularMarketTime` the live
-                        # quote is stored as a close.
-                        "meta": payload["meta"],
-                    }
-                ],
-            }
-        }
-    return httpx.Response(payload["status"], json=body)
+        return json.dumps({"chart": {"result": None, "error": payload["chart_error"]}}).encode()
+    result = {
+        "timestamp": payload["timestamp"],
+        "indicators": {"quote": [{"close": payload["close"]}]},
+        "meta": payload["meta"],
+    }
+    return json.dumps({"chart": {"error": None, "result": [result]}}).encode()
+
+
+def chart_body(points: list[tuple[date, float]]) -> bytes:
+    """A minimal body in Yahoo's shape: one daily bar per point, stamped at the London session open
+    with `gmtoffset` saying so, and no live quote."""
+    tz = timezone(timedelta(hours=1))
+    stamps = [int(datetime(d.year, d.month, d.day, tzinfo=tz).timestamp()) for d, _ in points]
+    meta = {"gmtoffset": 3600, "exchangeTimezoneName": "Europe/London", "regularMarketTime": 0}
+    result = {
+        "meta": meta,
+        "timestamp": stamps,
+        "indicators": {"quote": [{"close": [close for _, close in points]}]},
+    }
+    return json.dumps({"chart": {"error": None, "result": [result]}}).encode()
+
+
+def document(body: bytes) -> Document:
+    return Document(
+        url="https://query2.finance.yahoo.com/v8/finance/chart/X?range=5d&interval=1d",
+        body=body,
+        content_type="application/json",
+        fetched_at=datetime(2026, 9, 12, tzinfo=UTC),
+    )
+
+
+def rates_from(currency: str, body: bytes, **kwargs: Any) -> fx.Normalised:
+    """Stage 1 then stage 2, the way the assets run them — through the stored row."""
+    rows = fx.raw_rows(currency, document(body), interval="1d", range_="5d", run_id="r")
+    return fx.normalise(rows, **kwargs)
 
 
 @pytest.fixture
-def replaying(monkeypatch: pytest.MonkeyPatch) -> Any:
-    def install(case: str) -> None:
-        monkeypatch.setattr(httpx, "get", lambda *a, **k: replay(case))
+def serving(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """Yahoo answering with a given status and body — as BYTES, so what `fetch` returns can be
+    compared with what was served rather than with a re-serialisation of it."""
+
+    def install(status: int, body: bytes) -> None:
+        monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(status, content=body))
 
     return install
+
+
+def test_raw_is_the_response_body_byte_for_byte(serving: Any) -> None:
+    """THE RULE THIS LANE BROKE, answered on real bytes.
+
+    Until 2026-09-12 `chart()` pivoted Yahoo's nested parallel arrays into one object per timestamp
+    before anything was stored. Every field it knew to look for survived; anything else — a second
+    quote block, an array whose length did not match `timestamp`, a key Yahoo adds beside it — was
+    gone at the moment of fetching, recoverable only by re-asking for ten years per currency.
+
+    BYTES, NOT A ROUND TRIP. `json.loads(stored) == json.loads(served)` would pass a stage 1 that
+    re-serialised the body, and re-serialising is already an interpretation: key order, number
+    formatting, whitespace. The sha256 is the identity of the provider's answer.
+    """
+    serving(200, EUR_BODY)
+    doc = yahoo_chart.fetch("EURUSD=X", range_="5d", interval="1d")
+    (row,) = fx.raw_rows("EUR", doc, interval="1d", range_="5d", run_id="r")
+
+    assert row["body"] == EUR_BODY
+    assert row["sha256"] == hashlib.sha256(EUR_BODY).hexdigest()
+    # WHAT IS IN IT, measured rather than assumed: OHLCV, adjclose and a meta block of 29 keys — of
+    # which the FX rules read the close, the timestamp and three meta keys.
+    result = json.loads(row["body"])["chart"]["result"][0]
+    assert set(result["indicators"]["quote"][0]) == {"open", "high", "low", "close", "volume"}
+    assert "adjclose" in result["indicators"]
+    assert len(result["meta"]) == 29
+
+
+def test_a_field_yahoo_adds_tomorrow_is_on_disk_without_a_code_change() -> None:
+    """The property the rule exists for, stated directly: a key this parser has never heard of is
+    stored, and the parser still reads what it does know beside it."""
+    served = json.loads(EUR_BODY)
+    served["chart"]["result"][0]["events"] = {"splits": {"1789000000": {"numerator": 2}}}
+    body = json.dumps(served).encode()
+
+    (row,) = fx.raw_rows("EUR", document(body), interval="1d", range_="5d", run_id="r")
+    assert json.loads(row["body"])["chart"]["result"][0]["events"]["splits"]
+    assert yahoo_chart.parse(row["body"]).points, "and the known fields still parse beside it"
+
+
+def test_the_stored_url_is_the_request_including_its_parameters(serving: Any) -> None:
+    """`range` and `interval` decide what a chart body even contains, so they are provenance."""
+    serving(200, EUR_BODY)
+    doc = yahoo_chart.fetch("EURUSD=X", range_="5d", interval="1d")
+    assert doc.url.endswith("/v8/finance/chart/EURUSD=X?range=5d&interval=1d"), doc.url
+
+
+def test_the_real_capture_ends_in_a_live_quote_and_stage_2_refuses_it() -> None:
+    """Measured on the captured body: its last timestamp EQUALS `meta.regularMarketTime`, to the
+    second — Friday's last tick at 21:29:58Z, a price wearing a close's clothes. Raw keeps it;
+    `normalise` refuses it.
+
+    AND IT SHARES ITS DATE WITH A REAL BAR. The body carries 2026-09-11's daily bar, stamped at the
+    London session open with a close of 1.16099524, AND the live quote dated the same London day at
+    1.16009283. A rule keyed on the DATE — "keep the last point per day" — would publish the live
+    price as that day's rate: wrong in the fourth decimal and entirely plausible. The first version
+    of this test asserted the live quote's date was absent from the output, which is that same
+    mistake made in a test, and the capture refuted it. Only `regularMarketTime` identifies it.
+    """
+    series = yahoo_chart.parse(EUR_BODY)
+    live = series.points[-1]
+    assert live.is_live and series.live_points == 1
+    bars = [p for p in series.points if not p.is_live]
+    assert live.as_of in {p.as_of for p in bars}, "the capture must exhibit the shared date"
+
+    got = rates_from("EUR", EUR_BODY)
+    assert got.stats["live_points"] == 1
+    assert [(r.as_of, r.usd_per_unit) for r in got.rates] == [(p.as_of, p.close) for p in bars], (
+        "every completed bar is published with its own close, and the live quote is not — not "
+        "even for the day it shares with a bar"
+    )
 
 
 def test_the_pair_is_built_in_one_place_and_is_never_inverted() -> None:
@@ -65,21 +168,30 @@ def test_the_pair_is_built_in_one_place_and_is_never_inverted() -> None:
     assert yahoo_chart.pair("EUR") == "EURUSD=X"
 
 
-def test_an_unknown_pair_answers_404_and_that_is_an_ABSENCE_not_a_fault(replaying: Any) -> None:
-    """THE CAPTURE'S MOST VALUABLE CASE. `ZZZUSD=X` returns HTTP **404** carrying
+def test_an_unknown_pair_answers_404_and_that_is_an_ABSENCE_not_a_fault(serving: Any) -> None:
+    """THE CAPTURE'S MOST VALUABLE CASE. `ZZZUSD=X` returns HTTP **404** whose whole body is
 
-        {"code": "Not Found", "description": "No data found, symbol may be delisted"}
+        {"chart":{"result":null,"error":{"code":"Not Found",
+                  "description":"No data found, symbol may be delisted"}}}
 
-    Raising on it — which the provider did when this fixture was taken — reports every unquoted
-    currency as a transport failure. And because a transport failure must never mark a subject
-    absent, the negative cache could never fill and those pairs would be re-asked for ever, eight
-    times a day. Same shape as a SEC 400 that names a company with no Form 4.
+    Raising on it — which the provider did when the field capture was taken — reports every
+    unquoted currency as a transport failure. And because a transport failure must never mark a
+    subject absent, the negative cache could never fill and those pairs would be re-asked for ever.
+    Same shape as a SEC 400 that names a company with no Form 4.
+
+    AND THE ABSENCE IS NOW PROVABLE FROM DISK: the 404's own body is stored like any other answer,
+    so "Yahoo said it does not carry this pair" is a file rather than a counter.
     """
-    replaying("unknown_pair")
-    assert yahoo_chart.chart("ZZZUSD=X", range_="5d", interval="1d").points == []
+    serving(404, ABSENT_BODY)
+    doc = yahoo_chart.fetch("ZZZUSD=X", range_="5d", interval="1d")
+    assert doc.body == ABSENT_BODY
+    assert yahoo_chart.parse(doc.body).points == []
+    assert rates_from("ZZZ", doc.body).rates == []
 
 
-def test_a_transport_failure_is_still_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_transport_failure_is_still_a_failure(
+    monkeypatch: pytest.MonkeyPatch, serving: Any
+) -> None:
     """The other half, and deleting it makes the test above pass for the wrong reason: an absence
     and a refusal must not collapse into each other in EITHER direction."""
 
@@ -88,56 +200,72 @@ def test_a_transport_failure_is_still_a_failure(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(httpx, "get", boom)
     with pytest.raises(yahoo_chart.YahooRefused):
-        yahoo_chart.chart("EURUSD=X", range_="5d", interval="1d")
+        yahoo_chart.fetch("EURUSD=X", range_="5d", interval="1d")
 
-    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(500, json={}))
+    serving(500, b"{}")
     with pytest.raises(yahoo_chart.YahooRefused):
-        yahoo_chart.chart("EURUSD=X", range_="5d", interval="1d")
+        yahoo_chart.fetch("EURUSD=X", range_="5d", interval="1d")
 
 
-def test_a_null_among_the_closes_is_dropped_not_carried(replaying: Any) -> None:
-    """The captured EUR window has SIX timestamps and a null among the closes. Yahoo returns two
+def test_a_404_that_does_not_name_an_absence_is_a_refusal(serving: Any) -> None:
+    """THE TWO 404s MUST NOT COLLAPSE. Yahoo's absence names itself in `chart.error`; a 404 from
+    anything else — a moved endpoint, a proxy, an HTML error page — says nothing about the pair, and
+    storing it as an answer would let the negative cache fill from our own misconfiguration."""
+    serving(404, b"<html><body>Not Found</body></html>")
+    with pytest.raises(yahoo_chart.YahooRefused):
+        yahoo_chart.fetch("EURUSD=X", range_="5d", interval="1d")
+
+
+def test_a_null_among_the_closes_is_dropped_not_carried() -> None:
+    """The captured EUR window has SIX timestamps and a null among the closes. Yahoo returns
     parallel arrays, so dropping a close without dropping its timestamp shifts every later point
     onto the wrong date — a whole series off by one, with every value individually plausible."""
-    replaying("eur_spot")
-    series = yahoo_chart.chart("EURUSD=X", range_="5d", interval="1d")
+    body = rebuilt("eur_spot")
+    series = yahoo_chart.parse(body)
     points = series.points
 
-    assert series.live_dropped == 1, "the final point is a live quote, not a bar"
-    assert series.nulls_dropped == 1, "a padded row for a session with no close yet"
-    assert len(points) == 4, "six points, one live quote, one null close"
-    assert all(p.close > 0 for p in points)
+    assert series.live_points == 1, "the final point is a live quote, not a bar"
+    assert series.null_closes == 1, "a padded row for a session with no close yet"
+    # EVERY POINT IS READ. The live quote and the null are OBSERVED by the parse and REFUSED by the
+    # rules — and since 2026-09-12 both run against the stored body, so correcting either is a
+    # re-parse rather than a refetch of every series held.
+    assert len(points) == 6
+    assert sum(1 for p in points if p.is_live) == 1
+    assert sum(1 for p in points if p.close is None) == 1
+    assert len(rates_from("EUR", body).rates) == 4, (
+        "normalise must refuse the live quote and the null close — a mid-session price wearing "
+        "a close's clothes is the defect this pipeline replaces a resource for"
+    )
 
-    # THE PAIRING IS THE ASSERTION, AND THE FIRST VERSION OF THIS TEST MISSED IT. Checking only
-    # that the dates come out ascending and distinct passes under BOTH rules: filtering the nulls
-    # out of `close` before zipping still yields five ascending dates, just the wrong five. The
-    # mutation went green. What separates them is which DATE the last close lands on — with the
-    # null at index 4 of 6, a filter-then-zip puts the final close a day early.
+    # THE PAIRING IS THE ASSERTION. Checking only that the dates come out ascending and distinct
+    # passes under BOTH rules: filtering the nulls out of `close` before zipping still yields
+    # ascending dates, just the wrong ones. With the null at index 4 of 6, a filter-then-zip puts
+    # the final close a day early — and every pair is checked, the live quote's own date included.
     captured = CAPTURED["eur_spot"]
     offset = timedelta(seconds=captured["meta"]["gmtoffset"])
-    live_at = captured["meta"]["regularMarketTime"]
-    completed = [
-        (s, c)
+    expected = [
+        (datetime.fromtimestamp(s, tz=timezone(offset)).date(), c)
         for s, c in zip(captured["timestamp"], captured["close"], strict=True)
-        if s != live_at and c is not None
     ]
-    expected = [(datetime.fromtimestamp(s, tz=timezone(offset)).date(), c) for s, c in completed]
-
     shifted = (
         "the arrays are parallel, so dropping a close without its timestamp shifts every later "
         "point onto the wrong date — with every value individually plausible"
     )
-    # Field by field rather than as tuples: `pytest.approx` inside a tuple makes mypy --strict
-    # reject the comparison as non-overlapping, and a date wants exact equality anyway.
     assert [p.as_of for p in points] == [d for d, _ in expected], shifted
-    assert [p.close for p in points] == pytest.approx([c for _, c in expected]), shifted
+    assert [p.close for p in points] == [
+        c if c is None else pytest.approx(c) for _, c in expected
+    ], shifted
 
 
-def test_ten_years_of_weekly_rates_is_what_the_history_lane_gets(replaying: Any) -> None:
-    replaying("ils_history")
-    series = yahoo_chart.chart("ILSUSD=X", range_="10y", interval="1wk")
-    assert len(series.points) == 523, "ten years of weekly closes, less the live quote"
-    assert series.live_dropped == 1
+def test_ten_years_of_weekly_rates_is_what_the_history_lane_gets() -> None:
+    body = rebuilt("ils_history")
+    series = yahoo_chart.parse(body)
+    assert len(series.points) == 524, "every weekly point, the live quote included"
+    assert series.live_points == 1
+    rows = fx.raw_rows("ILS", document(body), interval="1wk", range_="10y", run_id="r")
+    assert len(fx.normalise(rows).rates) == 523, (
+        "stage 2 refuses the live quote, leaving ten years of completed weekly closes"
+    )
     assert series.points[0].as_of < date(2017, 1, 1) < series.points[-1].as_of
     assert series.timezone_name == "Europe/London", (
         "recorded from the response, so a future date-shift argument is settled by what was "
@@ -145,21 +273,22 @@ def test_ten_years_of_weekly_rates_is_what_the_history_lane_gets(replaying: Any)
     )
 
 
-def test_a_currency_the_provider_barely_carries_SUCCEEDS_and_loads_almost_nothing(
-    replaying: Any,
-) -> None:
+def test_a_currency_the_provider_barely_carries_SUCCEEDS_and_loads_almost_nothing() -> None:
     """THE LARI, AND IT IS WHY THE NEGATIVE CACHE EXISTS. Yahoo carries exactly ONE bar for
     `GELUSD=X`, so a ten-year history fetch returns 200 with a single recent point. Nothing errors,
     a row is written, and "has a rate older than 90 days" stays false — so it was re-fetched eight
     times a day for ever with no count anywhere able to report it."""
-    replaying("gel_history")
-    series = yahoo_chart.chart("GELUSD=X", range_="10y", interval="1wk")
-    assert series.points == [], (
-        "the lari's ONLY point is the live quote, so Yahoo has no completed weekly bar for it at "
-        "all — a far more precise statement than 'it returned one row', and the one the negative "
-        "cache needs"
+    body = rebuilt("gel_history")
+    series = yahoo_chart.parse(body)
+    # "The provider answered, with a live quote and no completed bar" and "the provider returned
+    # nothing" are different facts, and only the first is true here — the body on disk says so.
+    assert len(series.points) == 1
+    assert series.points[0].is_live
+    assert series.live_points == 1
+    assert rates_from("GEL", body).rates == [], (
+        "no COMPLETED weekly bar exists for the lari — which is what the negative cache needs, "
+        "and it is derived from the stored body rather than from a counter"
     )
-    assert series.live_dropped == 1
 
 
 def test_the_band_refuses_the_inverted_pair_it_was_built_for() -> None:
@@ -179,13 +308,45 @@ def test_the_band_refuses_the_inverted_pair_it_was_built_for() -> None:
 
 def test_an_implausible_rate_is_DROPPED_rather_than_corrected() -> None:
     """Inverting it back would repair a value whose provenance is already in doubt, and the band
-    cannot tell an inversion from a genuinely odd quote."""
-    rows = [
-        {"currency_code": "TWD", "as_of": "2026-09-10", "close": 31.6},
-        {"currency_code": "EUR", "as_of": "2026-09-10", "close": 1.16},
-    ]
-    rates = fx.normalise(rows)
-    assert [r.currency_code for r in rates] == ["EUR"]
+    cannot tell an inversion from a genuinely odd quote. COUNTED, because a rising count is a
+    statement about the provider rather than a repair to be pleased about."""
+    day = date(2026, 9, 10)
+    twd = rates_from("TWD", chart_body([(day, 31.6)]))
+    eur = rates_from("EUR", chart_body([(day, 1.16)]))
+    assert twd.rates == []
+    assert twd.stats["refused_by_band"] == 1
+    assert [r.usd_per_unit for r in eur.rates] == [1.16]
+
+
+def test_the_spot_window_is_applied_in_stage_2_against_the_stored_body() -> None:
+    """The spot lane asks five days so a weekend still yields a close, and publishes one. The cut
+    used to happen before anything was stored — beside a date rule that once dated every FX bar a
+    day early — so a fix to either cost ten years of refetching. Now it is a re-parse.
+
+    It also pins the `gmtoffset` rule: the 09-10 bar is stamped 2026-09-09T23:00Z, so reading the
+    stamp in UTC would file it under 09-09 and let the 09-11 bar into the 09-10 window instead."""
+    days = [(date(2026, 9, 9), 1.15), (date(2026, 9, 10), 1.16), (date(2026, 9, 11), 1.17)]
+    got = rates_from("EUR", chart_body(days), window=(date(2026, 9, 10), date(2026, 9, 11)))
+    assert [(r.as_of, r.usd_per_unit) for r in got.rates] == [(date(2026, 9, 10), 1.16)]
+    assert got.stats["outside_window"] == 2
+
+
+def test_a_row_from_before_the_body_format_is_counted_not_silently_skipped() -> None:
+    """RAW FX HELD A PER-POINT PIVOT UNTIL 2026-09-12, and those files are still on disk. Nothing in
+    them can be re-read under today's rules, so they yield no rate — but a re-run of stage 2 over an
+    old partition must SAY so, or it publishes nothing and reads exactly like a day the provider had
+    nothing for. The current-format row beside it is what proves the pass did not simply fail."""
+    legacy = {"currency_code": "EUR", "as_of": "2026-09-10", "close": 1.16, "provider": "yahoo"}
+    current = fx.raw_rows(
+        "JPY",
+        document(chart_body([(date(2026, 9, 10), 0.0068)])),
+        interval="1d",
+        range_="5d",
+        run_id="r",
+    )
+    got = fx.normalise([legacy, *current])
+    assert got.stats["legacy_rows"] == 1
+    assert [r.currency_code for r in got.rates] == ["JPY"]
 
 
 def test_a_subunit_gets_its_parent_s_WHOLE_history_in_the_same_pass() -> None:

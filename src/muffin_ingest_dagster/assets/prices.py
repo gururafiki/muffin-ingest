@@ -98,16 +98,24 @@ class PriceRun(dg.Config):
     budget_seconds: int = 18000
 
 
-def _fetcher(start: date, end: date) -> Any:
+def _fetcher(start: date, end: date, warnings: list[str] | None = None) -> Any:
     """A `Fetcher` for `fetch_with_isolation`: raises on transport, returns [] on an empty answer.
 
     Those being different facts is the entire reason this pipeline is being rewritten, and the
     in-process hub is what keeps them distinguishable — over HTTP a throttled yfinance and a symbol
     the provider does not carry are both an empty 204.
+
+    `warnings` COLLECTS WHAT THE PROVIDER SAID ABOUT ITSELF. `OBBject.warnings` is a provider
+    declaring itself degraded while still returning 200; the `Fetcher` protocol returns rows, so
+    without somewhere to put it the text was read for classification and then dropped — the one
+    sentence explaining an odd value, absent from the artifact that holds the value.
     """
 
     def fetch(subjects: Sequence[str], timeout_s: float) -> list[dict[str, object]]:
-        return openbb.price_history(subjects, start=start, end=end).rows
+        answer = openbb.price_history(subjects, start=start, end=end)
+        if warnings is not None:
+            warnings.extend(w for w in answer.warnings if w not in warnings)
+        return answer.rows
 
     return fetch
 
@@ -116,6 +124,14 @@ def _fetcher(start: date, end: date) -> Any:
 # these were hand-copied into three asset modules with the key expression inlined differently
 # each time, and two of those copies were wrong. See that module's header.
 _by_partition = partitioned.by_partition
+
+
+def _partition_day(row: dict[str, Any]) -> str:
+    """Which daily partition a raw row belongs to, read off the provider's own date field."""
+    parsed = prices.row_date(row)
+    return parsed.isoformat() if parsed is not None else ""
+
+
 _loaded_rows = partitioned.loaded_rows
 
 
@@ -127,6 +143,7 @@ def _ask(
     end: date,
     deadline: float,
     postgres: Postgres | None = None,
+    warnings: list[str] | None = None,
 ) -> BatchVerdict:
     """One provider call, wrapped in the ledger attempt that can justify a mark.
 
@@ -138,7 +155,7 @@ def _ask(
     the real asset with no database, and a lane that could only run against Postgres would be a lane
     nothing could replay.
     """
-    fetch = _fetcher(start, end)
+    fetch = _fetcher(start, end, warnings)
     timeout = min(60.0, max(5.0, deadline - time.monotonic()))
     if postgres is None:
         return fetch_with_isolation(
@@ -299,41 +316,62 @@ def _collect(
         by_symbol = {s.symbol: s for s in batch}
         stats["calls"] += 1
         since_last_call = time.monotonic()
+        # What the provider said about itself on this batch — collected by the fetcher and
+        # written onto every raw row it produced.
+        said: list[str] = []
         verdict: BatchVerdict = _ask(
-            context, by_symbol, start=start, end=end, deadline=deadline, postgres=postgres
+            context,
+            by_symbol,
+            start=start,
+            end=end,
+            deadline=deadline,
+            postgres=postgres,
+            warnings=said,
         )
         if verdict.throttled_out:
             stats["throttled"] += 1
             context.log.warning("provider is refusing us; stopping rather than marking anything")
             break
 
-        parsed = prices.bars_by_symbol(verdict.rows, next(iter(by_symbol)))
-        # A PARTITION MUST CONTAIN ONLY ITS OWN WINDOW, and the provider does not guarantee that.
-        # Measured 2026-09-11 against the real hub: `start_date=2026-09-09&end_date=2026-09-09`
-        # returns bars for BOTH 09-09 and 09-10 — a degenerate range is widened rather than refused
-        # — and a run made while Tokyo was trading also brought back a bar dated 09-11, which is a
-        # session still in progress. That second one is the dangerous half: a partial bar's "close"
-        # is not a close, and it looks exactly like a real one.
+        # GROUPED, NOT NARROWED. `bars_by_symbol` parses each provider row into a `Bar` so the
+        # window filter and the per-subject counters can work — but the `Bar` is used for those
+        # DECISIONS only. What reaches raw is the provider's own row, whole; see
+        # `prices.raw_rows`. Narrowing here is what dropped `open`/`high`/`low`/`vwap` at stage 1.
+        sole = next(iter(by_symbol))
+        parsed = prices.bars_by_symbol(verdict.rows, sole)
+        by_symbol_rows = prices.provider_rows_by_symbol(verdict.rows, sole)
+        # THE PROVIDER RETURNS BARS OUTSIDE THE WINDOW WE ASKED FOR, AND THEY ARE COUNTED HERE AND
+        # REFUSED IN STAGE 2. Measured 2026-09-11 against the real hub:
+        # `start_date=2026-09-09&end_date=2026-09-09` returns bars for BOTH 09-09 and 09-10 — a
+        # degenerate range is widened rather than refused — and a run made while Tokyo was trading
+        # also brought back a bar dated 09-11, a session still in progress whose "close" is not a
+        # close and looks exactly like a real one.
         #
-        # Filtering here rather than trusting the request is the only version that holds, because
-        # both causes are the provider's and neither is visible in what we asked for.
-        for symbol, series in parsed.items():
-            kept = [b for b in series if start <= b.trade_date < end]
-            stats["outside_window"] += len(series) - len(kept)
-            parsed[symbol] = kept
+        # THEY USED TO BE DROPPED RIGHT HERE, which made stage 1 the place that decides what
+        # belongs to a window — and a row deleted at fetch is a row no re-parse can recover. The
+        # counter stays, because a non-zero value is a statement about the PROVIDER's idea of a
+        # date range and the day it becomes zero is the day this rule stopped being needed.
+        stats["outside_window"] += sum(
+            1 for series in parsed.values() for b in series if not (start <= b.trade_date < end)
+        )
         dead = {d.upper() for d in verdict.dead}
         answered_here = 0
         for symbol, subject in by_symbol.items():
+            # THE PROVIDER ANSWERED, WHATEVER WINDOW THE BARS LANDED IN. This read the
+            # window-filtered list until 2026-09-12, so a symbol whose only bars fell outside the
+            # partition counted as `empty` — "the provider has nothing for this security" — which
+            # is the one conflation this pipeline exists to remove.
             bars = parsed.get(symbol.upper(), [])
             if bars:
                 answered_here += 1
                 stats["answered"] += 1
                 rows += prices.raw_rows(
                     subject,
-                    bars,
+                    by_symbol_rows.get(symbol.upper(), []),
                     provider=PROVIDER.code,
                     run_id=context.run.run_id,
                     observed=symbol,
+                    warnings=said,
                 )
             elif symbol.upper() in dead:
                 stats["dead"] += 1
@@ -388,8 +426,8 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
     # asking for one old day dragged back every session since it — 653 bars discarded for 96
     # securities on the first parity run, which is what made it visible. A range of at least a day
     # is honoured exactly, so handing the provider the half-open window Dagster already gives us
-    # asks for two days instead of two weeks. The inclusive filter below still keeps only the
-    # partition's own, so correctness never depended on this.
+    # asks for two days instead of two weeks. `price_bar` still publishes only the partition's
+    # own day, so correctness never depended on this.
     window: tuple[datetime, datetime] = context.partition_time_window
     start, end = window[0].date(), window[1].date()
 
@@ -422,7 +460,11 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
     context.add_output_metadata(
         {"subjects": len(subjects), "rows": len(rows), "enqueued": enqueued, **stats}
     )
-    return _by_partition(context, rows, key=lambda r: str(r["trade_date"]))
+    # KEYED BY THE PROVIDER'S OWN DATE, PARSED FOR PLACEMENT ONLY. `raw_rows` writes no
+    # `trade_date` — deriving one into the row would be a stage-1 interpretation, and a key is
+    # needed to place a file, not to store. A row whose date will not parse keys to "", which
+    # `by_partition` files in the run's last partition rather than dropping.
+    return _by_partition(context, rows, key=_partition_day)
 
 
 @dg.asset(
@@ -439,11 +481,23 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
 def price_bar(
     context: AssetExecutionContext, postgres: Postgres, raw_price_bars: Any
 ) -> list[dict[str, Any]]:
-    raw = _loaded_rows(raw_price_bars)
     with postgres.connect() as conn:
         currencies = prices.currency_by_security(conn)
 
-    rows = prices.normalise(raw, currencies, source_code=PROVIDER.code)
+    # EACH PARTITION PUBLISHES ITS OWN DAY, FROM ITS OWN FILE — applied here, against files, so a
+    # correction costs a re-parse rather than a re-fetch. PER FILE rather than over the run's
+    # window, because raw keeps the bars the provider sent outside the range it was asked (see
+    # `_collect`): a stray sits in one partition's file while the real bar sits in its own, and
+    # windowing the flattened run would let the writer's last-wins dedupe choose between them by
+    # file order. Per file, a stray is never published at all.
+    parts = partitioned.rows_per_partition(context, raw_price_bars)
+    raw = [row for part in parts.values() for row in part]
+    rows: list[dict[str, Any]] = []
+    for key, part in parts.items():
+        day = trading_day.time_window_for_partition_key(key)
+        rows += prices.normalise(
+            part, currencies, source_code=PROVIDER.code, window=(day.start.date(), day.end.date())
+        )
     # THE SECURITIES WITH NO CURRENCY ARE COUNTED, NOT HIDDEN. 425 of 10,894 have neither a listing
     # currency nor one of their own; the column is nullable so they still get a price, and this is
     # what stops that becoming normal.
@@ -544,7 +598,16 @@ def price_bar_history(
     with postgres.connect() as conn:
         currencies = prices.currency_by_security(conn)
 
-    rows = prices.normalise(raw, currencies, source_code=PROVIDER.code)
+    # UP TO BUT NOT INCLUDING TODAY. Somewhere a market is open and its bar for today is a session
+    # in progress; raw keeps it because it is what the provider said, and this is where it is
+    # refused. Re-running tomorrow admits it, by which time it is a close — which is the rule
+    # behaving correctly rather than drifting.
+    rows = prices.normalise(
+        raw,
+        currencies,
+        source_code=PROVIDER.code,
+        window=(HISTORY_START, date.today()),
+    )
     context.add_output_metadata(
         {
             "rows": len(rows),

@@ -32,8 +32,8 @@ from datetime import timedelta
 import dagster as dg
 from dagster import AssetExecutionContext
 
-from muffin_ingest import settings
-from muffin_ingest_dagster.assets import fx, indices, prices
+from muffin_ingest import metrics, settings
+from muffin_ingest_dagster.assets import fx, indices, prices, registries
 from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager
 from muffin_ingest_dagster.resources import Postgres
 from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
@@ -239,6 +239,25 @@ automation = dg.AutomationConditionSensorDefinition(
 )
 
 
+# THE EXPORTER STARTS IN THE CODE-LOCATION PARENT, ONCE, AT IMPORT.
+#
+# Each Dagster run is a SUBPROCESS, so a counter incremented during a run lives in a child that
+# exits moments later — a registry in the parent would report zero for ever while the work
+# happened. `prometheus_client`'s multiprocess mode has every process write its own file under
+# `PROMETHEUS_MULTIPROC_DIR` and the exporter aggregate them at scrape time; it is the only shape
+# that survives this process model.
+#
+# AT IMPORT RATHER THAN IN A RESOURCE, because the gRPC server never "runs" an asset — it serves
+# definitions — and a resource is only constructed inside a run, i.e. inside the child that has
+# no port. `enabled()` is false wherever `PROMETHEUS_MULTIPROC_DIR` is unset, so the unit tests,
+# `dagster definitions validate` and a local checkout all import this without binding a socket.
+#
+# `prometheus.yml` has carried the matching scrape job COMMENTED OUT since the service was
+# created, because it pointed at a port nothing listened on: a permanently-red target is the same
+# failure as a permanently-red gate, and the cost is the next real one behind it.
+metrics.start_exporter()
+
+
 defs = dg.Definitions(
     assets=[
         ledger_health,
@@ -262,10 +281,21 @@ defs = dg.Definitions(
         indices.raw_index_bars,
         indices.raw_sector_performance,
         indices.index_return,
+        registries.raw_sec_cik_map,
+        registries.security_cik,
+        registries.raw_nse_equity_list,
+        registries.security_nse_filer,
     ],
     asset_checks=[every_symbol_keyed_facet_retracts, every_askable_security_was_asked],
     jobs=[prune_dagster_storage],
-    schedules=[ledger_heartbeat, nightly_pruning, daily_prices, daily_fx, daily_indices],
+    schedules=[
+        ledger_heartbeat,
+        nightly_pruning,
+        daily_prices,
+        daily_fx,
+        daily_indices,
+        registries.weekly_registries,
+    ],
     sensors=[prices.new_securities_need_history, fx.new_currencies_need_history, automation],
     resources={
         "postgres": Postgres(),
