@@ -13,7 +13,8 @@ rates uses the most recent one rather than interpolating — A RATE WE DID NOT O
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -96,7 +97,12 @@ def askable_currencies(conn: Any, *, include_absent: bool = False) -> list[str]:
 
 
 def raw_rows(
-    currency: str, points: Sequence[Any], *, interval: str, run_id: str
+    currency: str,
+    points: Sequence[Any],
+    *,
+    interval: str,
+    run_id: str,
+    meta: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """What the provider said, plus who asked and how — the artifact, not the answer.
 
@@ -104,17 +110,38 @@ def raw_rows(
     price lane records `asked_symbol` beside `observed_symbol`: when a value turns out wrong, the
     first question is always what was actually requested.
     """
-    return [
-        {
-            "currency_code": currency,
-            "as_of": point.as_of.isoformat(),
-            "close": float(point.close),
-            "interval": interval,
-            "provider": "yahoo",
-            "run_id": run_id,
-        }
-        for point in points
-    ]
+    out: list[dict[str, Any]] = []
+    for point in points:
+        # THE PROVIDER'S WHOLE ROW FIRST, our context over the top. Yahoo sends `open`, `high`,
+        # `low`, `volume` and `adjclose` beside the close and this lane kept none of them — the
+        # narrowest raw layer in the pipeline, discarding at the moment of fetching what could
+        # only be recovered by re-asking for ten years of history per currency.
+        row: dict[str, Any] = dict(getattr(point, "quote", {}) or {})
+        # OUR COLUMNS ONLY. `close` is the provider's and is already in `quote` untouched — this
+        # used to overwrite it with `float(point.close)`, which is a coercion of a vendor field
+        # at stage 1 and therefore exactly the thing this layer must not do.
+        row.update(
+            {
+                "currency_code": currency,
+                "as_of": point.as_of.isoformat(),
+                "interval": interval,
+                "provider": "yahoo",
+                "run_id": run_id,
+                # OBSERVATIONS ABOUT THE POINT, recorded so stage 2 can apply the rules without
+                # re-deriving them from a `meta` block raw would otherwise have to carry.
+                "is_live_quote": point.is_live,
+                "provider_timestamp": point.timestamp,
+                # THE PROVIDER'S `meta` BLOCK, WHOLE, AS JSON. 27 keys on a real response and
+                # the pipeline stored none of them — `currency`, `longName`, `firstTradeDate`,
+                # `instrumentType` among them. One column rather than 27 because Parquet
+                # dictionary-encodes the repeated value to almost nothing, and because a new
+                # key then appears without a schema change: the whole point of keeping raw whole
+                # is that a field nobody wants today costs no refetch tomorrow.
+                "provider_meta": json.dumps(meta, sort_keys=True, default=str) if meta else None,
+            }
+        )
+        out.append(row)
+    return out
 
 
 #: THE SOURCE IS `yfinance`, NOT `yahoo`, AND THAT IS DELIBERATE DESPITE THE CALL BEING DIRECT.
@@ -144,8 +171,15 @@ def normalise(rows: Sequence[dict[str, Any]], *, source_code: str = SOURCE_CODE)
     """
     out: list[Rate] = []
     for row in rows:
+        # A LIVE QUOTE IS NOT A CLOSE, AND THIS IS NOW WHERE THAT IS DECIDED. Raw keeps the
+        # mid-session point because it is what the provider said; publishing it is the
+        # intraday-capture defect this pipeline replaces a resource for, so it is refused here
+        # — where changing the rule costs a re-parse instead of ten years of refetching.
+        if row.get("is_live_quote"):
+            continue
         close = row.get("close")
-        if not isinstance(close, int | float) or isinstance(close, bool):
+        # A NULL CLOSE IS A PADDED SESSION, also kept in raw and refused here.
+        if not isinstance(close, int | float) or isinstance(close, bool) or close <= 0:
             continue
         if not is_plausible(float(close)):
             continue

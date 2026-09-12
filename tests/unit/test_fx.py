@@ -103,25 +103,36 @@ def test_a_null_among_the_closes_is_dropped_not_carried(replaying: Any) -> None:
     series = yahoo_chart.chart("EURUSD=X", range_="5d", interval="1d")
     points = series.points
 
-    assert series.live_dropped == 1, "the final point is a live quote, not a bar"
-    assert series.nulls_dropped == 1, "a padded row for a session with no close yet"
-    assert len(points) == 4, "six points, one live quote, one null close"
-    assert all(p.close > 0 for p in points)
+    assert series.live_points == 1, "the final point is a live quote, not a bar"
+    assert series.null_closes == 1, "a padded row for a session with no close yet"
+    # RAW KEEPS ALL SIX. The live quote and the null are OBSERVED here and REFUSED in stage 2 —
+    # until 2026-09-12 they were discarded at fetch, which made this provider the place that
+    # decided what a bar is, so correcting either rule meant re-fetching every series held.
+    assert len(points) == 6, "every point the provider sent survives stage 1"
+    assert sum(1 for p in points if p.is_live) == 1
+    assert sum(1 for p in points if p.close is None) == 1
+
+    # AND STAGE 2 IS WHERE THEY GO. Four usable rates from six raw points.
+    rows = fx.raw_rows("EUR", points, interval="1d", run_id="r")
+    assert len(fx.normalise(rows)) == 4, (
+        "normalise must refuse the live quote and the null close — a mid-session price wearing "
+        "a close's clothes is the defect this pipeline replaces a resource for"
+    )
 
     # THE PAIRING IS THE ASSERTION, AND THE FIRST VERSION OF THIS TEST MISSED IT. Checking only
     # that the dates come out ascending and distinct passes under BOTH rules: filtering the nulls
     # out of `close` before zipping still yields five ascending dates, just the wrong five. The
     # mutation went green. What separates them is which DATE the last close lands on — with the
     # null at index 4 of 6, a filter-then-zip puts the final close a day early.
+    # EVERY pair now, not just the completed ones — a stricter form of the same assertion, and
+    # only expressible because stage 1 stopped dropping: the null close is still at index 4, so
+    # a filter-then-zip is still detectable, and now the live quote's own date is checked too.
     captured = CAPTURED["eur_spot"]
     offset = timedelta(seconds=captured["meta"]["gmtoffset"])
-    live_at = captured["meta"]["regularMarketTime"]
-    completed = [
-        (s, c)
+    expected = [
+        (datetime.fromtimestamp(s, tz=timezone(offset)).date(), c)
         for s, c in zip(captured["timestamp"], captured["close"], strict=True)
-        if s != live_at and c is not None
     ]
-    expected = [(datetime.fromtimestamp(s, tz=timezone(offset)).date(), c) for s, c in completed]
 
     shifted = (
         "the arrays are parallel, so dropping a close without its timestamp shifts every later "
@@ -130,14 +141,22 @@ def test_a_null_among_the_closes_is_dropped_not_carried(replaying: Any) -> None:
     # Field by field rather than as tuples: `pytest.approx` inside a tuple makes mypy --strict
     # reject the comparison as non-overlapping, and a date wants exact equality anyway.
     assert [p.as_of for p in points] == [d for d, _ in expected], shifted
-    assert [p.close for p in points] == pytest.approx([c for _, c in expected]), shifted
+    # `None` where the provider sent null, verbatim — so the comparison is exact rather than
+    # approximate for that entry and `pytest.approx` is applied only to the real numbers.
+    assert [p.close for p in points] == [
+        c if c is None else pytest.approx(c) for _, c in expected
+    ], shifted
 
 
 def test_ten_years_of_weekly_rates_is_what_the_history_lane_gets(replaying: Any) -> None:
     replaying("ils_history")
     series = yahoo_chart.chart("ILSUSD=X", range_="10y", interval="1wk")
-    assert len(series.points) == 523, "ten years of weekly closes, less the live quote"
-    assert series.live_dropped == 1
+    assert len(series.points) == 524, "every weekly point, the live quote included"
+    assert series.live_points == 1
+    rates = fx.normalise(fx.raw_rows("ILS", series.points, interval="1wk", run_id="r"))
+    assert len(rates) == 523, (
+        "stage 2 refuses the live quote, leaving ten years of completed weekly closes"
+    )
     assert series.points[0].as_of < date(2017, 1, 1) < series.points[-1].as_of
     assert series.timezone_name == "Europe/London", (
         "recorded from the response, so a future date-shift argument is settled by what was "
@@ -154,12 +173,17 @@ def test_a_currency_the_provider_barely_carries_SUCCEEDS_and_loads_almost_nothin
     times a day for ever with no count anywhere able to report it."""
     replaying("gel_history")
     series = yahoo_chart.chart("GELUSD=X", range_="10y", interval="1wk")
-    assert series.points == [], (
-        "the lari's ONLY point is the live quote, so Yahoo has no completed weekly bar for it at "
-        "all — a far more precise statement than 'it returned one row', and the one the negative "
-        "cache needs"
+    # THE POINT IS KEPT AND THE FACT IS STILL EXACT. Raw holds Yahoo's single mid-session quote,
+    # which is a better record than an empty series: "the provider answered, with a live quote and
+    # no completed bar" and "the provider returned nothing" are different facts, and only the
+    # first is true here.
+    assert len(series.points) == 1
+    assert series.points[0].is_live
+    assert series.live_points == 1
+    assert fx.normalise(fx.raw_rows("GEL", series.points, interval="1wk", run_id="r")) == [], (
+        "no COMPLETED weekly bar exists for the lari — which is what the negative cache needs, "
+        "and it is now derived from the data rather than from a counter"
     )
-    assert series.live_dropped == 1
 
 
 def test_the_band_refuses_the_inverted_pair_it_was_built_for() -> None:

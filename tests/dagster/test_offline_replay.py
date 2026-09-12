@@ -79,6 +79,12 @@ def sql(parquet: Path, query: str) -> list[tuple[Any, ...]]:
     return duckdb.sql(query.format(f=f"read_parquet('{parquet}')")).fetchall()
 
 
+def columns_of(parquet: Path) -> list[str]:
+    """The column names raw actually wrote — the shape, which no test asserted until raw was
+    found to be dropping four of the provider's ten fields."""
+    return list(duckdb.sql(f"select * from read_parquet('{parquet}') limit 1").columns)
+
+
 BATCH_SUBJECTS = [
     ("11111111-1111-1111-1111-111111111111", "AAPL", 5.0),
     ("22222222-2222-2222-2222-222222222222", "005930.KS", 4.0),
@@ -590,10 +596,21 @@ def test_a_multi_day_fx_backfill_writes_one_file_per_day(tmp_path: Path) -> None
     keys = ["2026-09-08", "2026-09-09"]
 
     def two_days(symbol: str, **kwargs: Any) -> yahoo_chart.Series:
+        # WITH A `quote`, BECAUSE THAT IS WHAT THE PROVIDER SENDS. Raw stores the vendor's row
+        # whole, so a `Point` built without one produces a row with no `close` column — which is
+        # correct behaviour and a dishonest fixture. Yahoo returns open/high/low/close/volume.
         return yahoo_chart.Series(
             points=[
-                yahoo_chart.Point(as_of=date(2026, 9, 8), close=1.11),
-                yahoo_chart.Point(as_of=date(2026, 9, 9), close=2.22),
+                yahoo_chart.Point(
+                    as_of=date(2026, 9, 8),
+                    close=1.11,
+                    quote={"open": 1.10, "high": 1.12, "low": 1.09, "close": 1.11, "volume": 7},
+                ),
+                yahoo_chart.Point(
+                    as_of=date(2026, 9, 9),
+                    close=2.22,
+                    quote={"open": 2.20, "high": 2.25, "low": 2.19, "close": 2.22, "volume": 9},
+                ),
             ]
         )
 
@@ -622,6 +639,13 @@ def test_a_multi_day_fx_backfill_writes_one_file_per_day(tmp_path: Path) -> None
         got = sql(path, "select distinct as_of, close from {f} order by 1")
         assert got == [(key, close)], (
             f"{key} holds {got} — each partition must carry its OWN day's rate and no other's"
+        )
+        # AND THE VENDOR'S WHOLE ROW SURVIVED. `open`/`high`/`low`/`volume` were discarded at
+        # stage 1 until 2026-09-12, unrecoverable without re-fetching ten years per currency.
+        cols = set(columns_of(path))
+        assert {"open", "high", "low", "volume"} <= cols, (
+            f"raw kept {sorted(cols)} — a field dropped at stage 1 can only come back by asking "
+            f"the provider again"
         )
 
 

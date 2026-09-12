@@ -98,16 +98,24 @@ class PriceRun(dg.Config):
     budget_seconds: int = 18000
 
 
-def _fetcher(start: date, end: date) -> Any:
+def _fetcher(start: date, end: date, warnings: list[str] | None = None) -> Any:
     """A `Fetcher` for `fetch_with_isolation`: raises on transport, returns [] on an empty answer.
 
     Those being different facts is the entire reason this pipeline is being rewritten, and the
     in-process hub is what keeps them distinguishable — over HTTP a throttled yfinance and a symbol
     the provider does not carry are both an empty 204.
+
+    `warnings` COLLECTS WHAT THE PROVIDER SAID ABOUT ITSELF. `OBBject.warnings` is a provider
+    declaring itself degraded while still returning 200; the `Fetcher` protocol returns rows, so
+    without somewhere to put it the text was read for classification and then dropped — the one
+    sentence explaining an odd value, absent from the artifact that holds the value.
     """
 
     def fetch(subjects: Sequence[str], timeout_s: float) -> list[dict[str, object]]:
-        return openbb.price_history(subjects, start=start, end=end).rows
+        answer = openbb.price_history(subjects, start=start, end=end)
+        if warnings is not None:
+            warnings.extend(w for w in answer.warnings if w not in warnings)
+        return answer.rows
 
     return fetch
 
@@ -127,6 +135,7 @@ def _ask(
     end: date,
     deadline: float,
     postgres: Postgres | None = None,
+    warnings: list[str] | None = None,
 ) -> BatchVerdict:
     """One provider call, wrapped in the ledger attempt that can justify a mark.
 
@@ -138,7 +147,7 @@ def _ask(
     the real asset with no database, and a lane that could only run against Postgres would be a lane
     nothing could replay.
     """
-    fetch = _fetcher(start, end)
+    fetch = _fetcher(start, end, warnings)
     timeout = min(60.0, max(5.0, deadline - time.monotonic()))
     if postgres is None:
         return fetch_with_isolation(
@@ -299,15 +308,30 @@ def _collect(
         by_symbol = {s.symbol: s for s in batch}
         stats["calls"] += 1
         since_last_call = time.monotonic()
+        # What the provider said about itself on this batch — collected by the fetcher and
+        # written onto every raw row it produced.
+        said: list[str] = []
         verdict: BatchVerdict = _ask(
-            context, by_symbol, start=start, end=end, deadline=deadline, postgres=postgres
+            context,
+            by_symbol,
+            start=start,
+            end=end,
+            deadline=deadline,
+            postgres=postgres,
+            warnings=said,
         )
         if verdict.throttled_out:
             stats["throttled"] += 1
             context.log.warning("provider is refusing us; stopping rather than marking anything")
             break
 
-        parsed = prices.bars_by_symbol(verdict.rows, next(iter(by_symbol)))
+        # GROUPED, NOT NARROWED. `bars_by_symbol` parses each provider row into a `Bar` so the
+        # window filter and the per-subject counters can work — but the `Bar` is used for those
+        # DECISIONS only. What reaches raw is the provider's own row, whole; see
+        # `prices.raw_rows`. Narrowing here is what dropped `open`/`high`/`low`/`vwap` at stage 1.
+        sole = next(iter(by_symbol))
+        parsed = prices.bars_by_symbol(verdict.rows, sole)
+        by_symbol_rows = prices.provider_rows_by_symbol(verdict.rows, sole)
         # A PARTITION MUST CONTAIN ONLY ITS OWN WINDOW, and the provider does not guarantee that.
         # Measured 2026-09-11 against the real hub: `start_date=2026-09-09&end_date=2026-09-09`
         # returns bars for BOTH 09-09 and 09-10 — a degenerate range is widened rather than refused
@@ -321,6 +345,17 @@ def _collect(
             kept = [b for b in series if start <= b.trade_date < end]
             stats["outside_window"] += len(series) - len(kept)
             parsed[symbol] = kept
+        # The same window applied to the rows that will actually be written. Filtered on the
+        # PARSED date rather than re-parsing, so the two can never disagree about which bars
+        # belong to this partition.
+        in_window = {
+            symbol: [
+                row
+                for row in rows_for
+                if (d := prices.row_date(row)) is not None and start <= d < end
+            ]
+            for symbol, rows_for in by_symbol_rows.items()
+        }
         dead = {d.upper() for d in verdict.dead}
         answered_here = 0
         for symbol, subject in by_symbol.items():
@@ -330,10 +365,11 @@ def _collect(
                 stats["answered"] += 1
                 rows += prices.raw_rows(
                     subject,
-                    bars,
+                    in_window.get(symbol.upper(), []),
                     provider=PROVIDER.code,
                     run_id=context.run.run_id,
                     observed=symbol,
+                    warnings=said,
                 )
             elif symbol.upper() in dead:
                 stats["dead"] += 1

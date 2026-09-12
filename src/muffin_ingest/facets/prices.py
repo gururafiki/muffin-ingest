@@ -210,31 +210,89 @@ def currency_by_security(conn: Any) -> dict[str, str]:
         return {row[0]: row[1] for row in cur.fetchall() if row[1]}
 
 
-def raw_rows(
-    subject: Subject, bars: Sequence[Bar], *, provider: str, run_id: str, observed: str
-) -> list[dict[str, Any]]:
-    """One provider answer as raw rows — what was asked, who it was asked for, and what came back.
+def row_date(row: Mapping[str, Any]) -> date | None:
+    """The provider row's own trade date, parsed. Shared so the window filter and the raw writer
+    cannot disagree about which partition a row belongs to."""
+    return _as_date(row.get("date"))
 
-    `security_id` is recorded even though it is OURS rather than the provider's, and that is
-    deliberate: it is a fact about the REQUEST, exactly as `ingest.attempt.asked_with` is. Without
-    it, stage 2 would have to re-resolve a symbol to a security using today's mapping, so a symbol
-    repaired between the fetch and the transform would silently re-attribute a whole series.
+
+def provider_rows_by_symbol(
+    rows: Sequence[Mapping[str, Any]], sole_symbol: str
+) -> dict[str, list[Mapping[str, Any]]]:
+    """Group the provider's rows by symbol WITHOUT touching them.
+
+    The mirror of `bars_by_symbol`: that one parses into `Bar` so the window filter and the
+    counters have something to decide on, this one keeps the vendor's row whole so raw can store
+    it. A row the provider did not label is attributed to `sole_symbol`, the same rule — the
+    provider adds a `symbol` column only when several were requested.
     """
-    return [
-        {
-            "security_id": subject.security_id,
-            "asked_symbol": subject.symbol,
-            "observed_symbol": observed,
-            "provider": provider,
-            "run_id": run_id,
-            "trade_date": bar.trade_date.isoformat(),
-            "close": bar.close,
-            "volume": bar.volume,
-            "dividend": bar.dividend,
-            "split_ratio": bar.split_ratio,
-        }
-        for bar in bars
-    ]
+    out: dict[str, list[Mapping[str, Any]]] = {}
+    for row in rows:
+        if row_date(row) is None:
+            continue
+        symbol = str(row.get("symbol") or sole_symbol).upper()
+        out.setdefault(symbol, []).append(row)
+    return out
+
+
+#: Columns this pipeline adds to a provider row. Everything else on a raw row came from the
+#: vendor, and `normalise` must read the vendor's own spelling rather than one of these.
+CONTEXT_COLUMNS = frozenset(
+    {"security_id", "asked_symbol", "observed_symbol", "provider", "run_id", "trade_date"}
+)
+
+
+def raw_rows(
+    subject: Subject,
+    provider_rows: Sequence[Mapping[str, Any]],
+    *,
+    provider: str,
+    run_id: str,
+    observed: str,
+    warnings: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    """The provider's rows, WHOLE, plus what we asked and who we asked it for.
+
+    RAW IS THE VENDOR'S ANSWER WITH NOTHING DROPPED. This function used to take `Bar` — six
+    fields — and the vendor sends ten: `open`, `high`, `low` and `vwap` were discarded at stage 1
+    and unrecoverable without re-fetching every bar we hold. That is precisely what the two-stage
+    split exists to prevent: adopting a field we do not use today must cost a re-parse of files
+    already on disk, never a re-fetch. Measured 2026-09-12 against the captured payload —
+    provider keys `close date dividend high low open split_ratio symbol volume vwap`, raw kept
+    six of ten.
+
+    CONTEXT IS ADDED, NEVER SUBTRACTED. `security_id` is recorded even though it is OURS: it is a
+    fact about the REQUEST, exactly as `ingest.attempt.asked_with` is. Without it stage 2 would
+    re-resolve the symbol with TODAY's mapping, so a symbol repaired between the fetch and the
+    transform would silently re-attribute a whole series. `asked_symbol` beside `observed_symbol`
+    is what makes "what did we actually request" answerable when a value turns out wrong.
+
+    `trade_date` is derived here rather than left to stage 2 for one reason only: it is the
+    PARTITION KEY, and the I/O manager needs it to decide which file a row belongs in. The
+    provider's own `date` is kept untouched beside it.
+    """
+    out: list[dict[str, Any]] = []
+    for row in provider_rows:
+        parsed = _as_date(row.get("date"))
+        enriched = dict(row)
+        enriched.update(
+            {
+                "security_id": subject.security_id,
+                "asked_symbol": subject.symbol,
+                "observed_symbol": observed,
+                "provider": provider,
+                "run_id": run_id,
+                "trade_date": parsed.isoformat() if parsed else None,
+                # WHAT THE PROVIDER SAID ABOUT ITSELF. `OBBject.warnings` is a provider
+                # declaring itself degraded while still returning 200 — it was read for
+                # classification and then discarded, so the text that explains an odd value was
+                # never on disk beside it. Stored per row: Parquet dictionary-encodes one
+                # repeated string per call to nothing.
+                "provider_warnings": "\n".join(warnings) if warnings else None,
+            }
+        )
+        out.append(enriched)
+    return out
 
 
 def normalise(

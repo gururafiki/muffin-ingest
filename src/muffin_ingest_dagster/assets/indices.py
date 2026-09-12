@@ -119,13 +119,22 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
             context.log.warning("batch failed: %s", exc)
             continue
 
-        parsed = prices.bars_by_symbol(answer.rows, batch[0] if len(batch) == 1 else "")
+        sole = batch[0] if len(batch) == 1 else ""
+        parsed = prices.bars_by_symbol(answer.rows, sole)
+        # GROUPED, NOT NARROWED — the `Bar` drives the window filter and the counters, while the
+        # provider's own row is what reaches raw. This lane kept five fields of the ten yfinance
+        # sends, discarding `open`/`high`/`low`/`volume`/`vwap` at stage 1.
+        raw_by_symbol = prices.provider_rows_by_symbol(answer.rows, sole)
         # ONLY THE TOP IS CUT. Everything before `end` is the lookback the long periods need; what
         # must go is anything the partition does not cover, which for a daily partition is today.
         for symbol, series in parsed.items():
             kept = [bar for bar in series if bar.trade_date < end]
             stats["outside_window"] += len(series) - len(kept)
             parsed[symbol] = kept
+        in_window = {
+            symbol: [row for row in rows_for if (d := prices.row_date(row)) is not None and d < end]
+            for symbol, rows_for in raw_by_symbol.items()
+        }
 
         for symbol, series in parsed.items():
             codes = by_symbol.get(symbol) or by_symbol.get(symbol.upper())
@@ -139,16 +148,17 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
             stats["bars"] += len(series) * len(codes)
             rows.extend(
                 {
+                    # THE PROVIDER'S ROW FIRST, our context over the top.
+                    **dict(row),
                     "index_code": code,
                     "asked_symbol": symbol,
-                    "trade_date": bar.trade_date.isoformat(),
-                    "close": bar.close,
-                    "dividend": bar.dividend,
+                    "trade_date": d.isoformat(),
                     "provider": "yfinance",
-                    "run_id": context.run_id,
+                    "run_id": context.run.run_id,
                 }
                 for code in codes
-                for bar in series
+                for row in in_window.get(symbol, [])
+                if (d := prices.row_date(row)) is not None
             )
         stats["empty"] += sum(1 for s in batch if s.upper() not in {k.upper() for k in parsed})
 

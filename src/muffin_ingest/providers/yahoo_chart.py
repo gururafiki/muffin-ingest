@@ -37,29 +37,63 @@ class YahooRefused(Exception):
 
 @dataclass(frozen=True)
 class Point:
-    """One close at one date. Yahoo returns parallel arrays; this is one aligned pair."""
+    """One aligned row of Yahoo's parallel arrays: the date, the close, and EVERYTHING ELSE.
+
+    `close` is named because every rule in this pipeline turns on it — the plausibility band, the
+    live-quote drop, the null drop. `quote` carries the provider's whole row for that timestamp
+    (`open`, `high`, `low`, `volume`, and whatever else it sends) so stage 1 can store it.
+
+    IT USED TO BE `as_of` AND `close` ALONE, which silently made the FX lane's raw layer the
+    narrowest in the pipeline: everything Yahoo sends but the close was discarded at the moment of
+    fetching and unrecoverable without re-asking for ten years of history per currency.
+    """
 
     as_of: date
-    close: float
+    #: The close AS THE PROVIDER SENT IT — `None` where it sent a null, which it does for a padded
+    #: session with no data yet. Not coerced and not dropped: stage 2 decides what a usable close
+    #: is, so a rule change there costs a re-parse rather than ten years of refetching.
+    close: float | None
+    #: The provider's own row for this timestamp, unaltered. Empty only if Yahoo sent no quote
+    #: block at all, which it does for a symbol it does not carry.
+    quote: dict[str, Any] = field(default_factory=dict)
+    #: The raw epoch stamp, kept so stage 2 can re-derive the date under a corrected rule.
+    timestamp: float | None = None
+    #: TRUE FOR A MID-SESSION QUOTE, identified by its stamp equalling `regularMarketTime`.
+    #: RECORDED RATHER THAN DROPPED. Publishing one is the intraday-capture defect this pipeline
+    #: replaces a resource for — but that is a decision for stage 2, and dropping it here made
+    #: "Yahoo had only a live quote for the lari" a counter rather than something in the data.
+    is_live: bool = False
 
 
 @dataclass
 class Series:
-    """Completed bars, plus what was dropped getting to them.
+    """EVERY point the provider returned, and what was observed about them.
 
-    THE COUNTS ARE NOT DECORATION. `live_dropped` non-zero is the normal case during a session and
-    zero after one closes; `nulls_dropped` says the provider is padding. Both were invisible until a
+    THE COUNTS ARE NOT DECORATION. `live_points` non-zero is the normal case during a session and
+    zero after one closes; `null_closes` says the provider is padding. Both were invisible until a
     partition claimed a day it had not collected.
+
+    THEY ARE NAMED FOR WHAT THEY COUNT, NOT FOR WHAT USED TO HAPPEN TO THEM. Until 2026-09-12
+    they were `live_dropped` / `nulls_dropped` and the points really were discarded here, which
+    made stage 1 the place that decided what a bar is — so correcting either rule meant
+    re-fetching ten years of history per currency. The points are kept; `facets/fx.py` applies
+    the rules; a number that is not what its name says is the failure mode this repo is mostly
+    about.
     """
 
     points: list[Point] = field(default_factory=list)
-    #: Points that were a LIVE quote rather than a completed bar.
-    live_dropped: int = 0
-    #: Points whose close was null — a padded row for a session with no data yet.
-    nulls_dropped: int = 0
+    #: Points that are a LIVE quote rather than a completed bar. Present in `points`.
+    live_points: int = 0
+    #: Points whose close was null — a padded row for a session with no data yet. Present too.
+    null_closes: int = 0
     #: The exchange's timezone name, as the provider states it. Recorded so a future date-shift
     #: argument is settled by what was received rather than by what someone remembers.
     timezone_name: str | None = None
+    #: THE WHOLE `meta` BLOCK, UNREAD. 27 keys on a real response — `currency`, `longName`,
+    #: `firstTradeDate`, `instrumentType`, `fiftyTwoWeekHigh` — of which this module interprets
+    #: three and the pipeline stored none. Carried so stage 1 can write it: a field nobody wants
+    #: today is exactly the field whose absence costs a refetch tomorrow.
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 def pair(currency: str) -> str:
@@ -128,7 +162,20 @@ def chart(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -
     first = results[0] or {}
     stamps = first.get("timestamp") or []
     quotes = (first.get("indicators") or {}).get("quote") or [{}]
-    closes = (quotes[0] or {}).get("close") or []
+    quote = quotes[0] or {}
+    closes = quote.get("close") or []
+    # EVERY PARALLEL ARRAY YAHOO SENT, not just the close — `open`, `high`, `low`, `volume`, and
+    # anything it adds later. Read generically so a new array needs no code change, which is the
+    # point of keeping raw whole.
+    series_by_field = {
+        name: values
+        for name, values in quote.items()
+        if isinstance(values, list) and len(values) == len(stamps)
+    }
+    adj = (first.get("indicators") or {}).get("adjclose") or [{}]
+    adjclose = (adj[0] or {}).get("adjclose") if adj else None
+    if isinstance(adjclose, list) and len(adjclose) == len(stamps):
+        series_by_field["adjclose"] = adjclose
     meta = first.get("meta") or {}
 
     # A BAR'S DATE IS ITS EXCHANGE'S DATE, NOT UTC's, AND FOR FX THAT IS A WHOLE DAY.
@@ -159,17 +206,30 @@ def chart(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -
     # statement than "it returned one row".
     live_at = meta.get("regularMarketTime")
 
-    out = Series(timezone_name=meta.get("exchangeTimezoneName"))
-    for stamp, close in zip(stamps, closes, strict=False):
+    out = Series(timezone_name=meta.get("exchangeTimezoneName"), meta=dict(meta))
+    for index, (stamp, close) in enumerate(zip(stamps, closes, strict=False)):
         if not isinstance(stamp, int | float):
+            # The ONLY row dropped here, and it is not a row: without a timestamp there is no
+            # date to file it under and nothing downstream could ever interpret it.
             continue
-        if live_at is not None and stamp == live_at:
-            out.live_dropped += 1
-            continue
-        if not isinstance(close, int | float) or isinstance(close, bool) or not (close > 0):
-            out.nulls_dropped += 1
-            continue
+        is_live = live_at is not None and stamp == live_at
+        usable = isinstance(close, int | float) and not isinstance(close, bool) and close > 0
+        # COUNTED, NOT DROPPED. Both were removed here until 2026-09-12, which made stage 1 the
+        # place that decided what a bar is — so correcting either rule meant re-fetching. They
+        # are now observations about the response, and `facets/fx.py` applies them.
+        out.live_points += int(is_live)
+        out.null_closes += int(not usable)
         out.points.append(
-            Point(as_of=datetime.fromtimestamp(float(stamp), tz=tz).date(), close=float(close))
+            Point(
+                as_of=datetime.fromtimestamp(float(stamp), tz=tz).date(),
+                close=float(close) if usable else None,
+                timestamp=float(stamp),
+                is_live=is_live,
+                quote={
+                    name: values[index]
+                    for name, values in series_by_field.items()
+                    if values[index] is not None
+                },
+            )
         )
     return out

@@ -99,9 +99,9 @@ def _collect(
         "outside_window": 0,
         # A LIVE QUOTE IS NOT A BAR. Non-zero is the normal case while a session is open and zero
         # once it closes; it is counted because publishing one is the exact defect being replaced.
-        "live_dropped": 0,
+        "live_points": 0,
         # A padded row for a session with no data yet — a statement about the provider.
-        "nulls_dropped": 0,
+        "null_closes": 0,
     }
     empty: list[str] = []
     last_error: str | None = None
@@ -132,8 +132,8 @@ def _collect(
 
         consecutive_transport = 0
         points = series.points
-        stats["live_dropped"] += series.live_dropped
-        stats["nulls_dropped"] += series.nulls_dropped
+        stats["live_points"] += series.live_points
+        stats["null_closes"] += series.null_closes
         if window is not None:
             start, end = window
             kept = [p for p in points if start <= p.as_of < end]
@@ -147,7 +147,11 @@ def _collect(
 
         stats["answered"] += 1
         stats["points"] += len(points)
-        rows.extend(fx.raw_rows(currency, points, interval=interval, run_id=context.run_id))
+        rows.extend(
+            fx.raw_rows(
+                currency, points, interval=interval, run_id=context.run.run_id, meta=series.meta
+            )
+        )
 
     if empty:
         context.log.info("provider has nothing for: %s", ", ".join(sorted(empty)))
