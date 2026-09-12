@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from muffin_ingest import settings
+from muffin_ingest import metrics, settings
 
 
 class DocumentRefused(RuntimeError):
@@ -74,12 +74,18 @@ NSE_UA = (
 def _get(url: str, *, headers: dict[str, str], timeout_s: float) -> Document:
     import httpx
 
-    try:
-        response = httpx.get(url, headers=headers, timeout=timeout_s, follow_redirects=True)
-    except httpx.HTTPError as exc:  # transport: never an absence
-        raise DocumentRefused(f"{url}: {type(exc).__name__}: {exc}") from exc
-    if response.status_code != 200:
-        raise DocumentRefused(f"{url}: HTTP {response.status_code}")
+    provider = url.split("/")[2] if "//" in url else "unknown"
+    with metrics.request(provider) as outcome:
+        try:
+            response = httpx.get(url, headers=headers, timeout=timeout_s, follow_redirects=True)
+        except httpx.HTTPError as exc:  # transport: never an absence
+            raise DocumentRefused(f"{url}: {type(exc).__name__}: {exc}") from exc
+        if response.status_code != 200:
+            # A REFUSAL IS NOT AN ABSENCE. SEC answers 403 to a User-Agent it dislikes and the
+            # body explains nothing; recording that as `empty` would make a config error look
+            # like a provider that has stopped publishing.
+            outcome["outcome"] = "refused"
+            raise DocumentRefused(f"{url}: HTTP {response.status_code}")
     return Document(
         url=url,
         body=response.content,

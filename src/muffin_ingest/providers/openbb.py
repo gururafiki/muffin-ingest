@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
+from muffin_ingest import metrics
 from muffin_ingest.providers.outcome import Outcome
 from muffin_ingest.providers.vocab import no_data_for_subject, throttled
 
@@ -148,15 +149,22 @@ def price_history(
     """
     from openbb import obb
 
-    return answer_from(
-        obb.equity.price.historical(
-            symbol=",".join(symbols),
-            provider=provider,
-            start_date=start.isoformat(),
-            end_date=end.isoformat(),
-            interval=interval,
+    # COUNTED HERE BECAUSE IT CANNOT BE COUNTED ANYWHERE ELSE. `http-cache` sits in front of
+    # openbb-api and yfinance fetches through `curl_cffi`, ignoring our base URLs entirely — so
+    # this request is invisible to nginx's `$provider` metrics by construction. Importing the hub
+    # in-process moved that blind spot inside our own worker; this closes it.
+    #
+    # Labelled with the PROVIDER, not the route: the thing being rate-limited is yfinance.
+    with metrics.request(provider):
+        return answer_from(
+            obb.equity.price.historical(
+                symbol=",".join(symbols),
+                provider=provider,
+                start_date=start.isoformat(),
+                end_date=end.isoformat(),
+                interval=interval,
+            )
         )
-    )
 
 
 def sector_performance(provider: str = "finviz") -> Answer:
@@ -175,6 +183,7 @@ def sector_performance(provider: str = "finviz") -> Answer:
     """
     from openbb import obb
 
-    return answer_from(
-        obb.equity.compare.groups(group="sector", metric="performance", provider=provider)
-    )
+    with metrics.request(provider):
+        return answer_from(
+            obb.equity.compare.groups(group="sector", metric="performance", provider=provider)
+        )
