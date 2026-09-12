@@ -15,6 +15,7 @@ is immutable and DART answers in ~3.5 s from this node.
 from __future__ import annotations
 
 import os
+import re
 
 
 def _env(name: str, default: str) -> str:
@@ -106,10 +107,53 @@ def provider_base(provider: str, real_origin: str) -> str:
     return real_origin
 
 
+#: SEC wants a contact address and refuses a crawler that advertises a WEBSITE instead.
+_CONTACT = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
+#: A scheme, or a bare `host.tld` — both are refused even when an email is also present.
+#: Applied to the string with EMAILS REMOVED, because `ops@example.com` contains `example.com`
+#: and a lookaround clever enough to tell them apart is a lookaround nobody will read correctly.
+_HOSTNAME = re.compile(r"https?://|\b[\w-]+\.[a-z]{2,}\b", re.IGNORECASE)
+
+
 def user_agent() -> str:
     """SEC MANDATES a descriptive User-Agent, and it is not part of the cache key.
 
     Two callers differing only by header share a cache entry, so this being wrong is invisible
     until SEC blocks the node.
+
+    IT WANTS A CONTACT ADDRESS AND REFUSES A WEBSITE. Measured against
+    `www.sec.gov/files/company_tickers.json` on 2026-09-12, two paced rounds, identical both times:
+
+        403   1,924 B   muffin-market/1.0 (+https://github.com/…/muffin)      <- the deployed value
+        403   1,924 B   muffin-market/1.0 (+https://github.com/…/muffin; ops@example.com)
+        200 797,931 B   muffin-market/1.0 (ops@example.com)
+        403   1,924 B   muffin-market/1.0 (example.org)
+
+    THE SECOND ROW IS THE ONE THAT MATTERS: adding an email does not rescue a User-Agent that
+    also carries a URL, so "must contain an email" is necessary and NOT sufficient. An unpaced
+    first pass suggested a URL was tolerated alongside an email; it did not reproduce when the
+    probes were spaced, and the paced result is the one recorded here.
+
+    This function had NO CALLER until the registry lane needed it — the one HTTP provider in the
+    repo sends its own browser string — so the mandated header was configured, deployed, and had
+    never once been used, carrying a value that could only ever have been refused. Exactly what
+    its own docstring warned would be invisible.
+
+    SO THERE IS NO DEFAULT NOW. A default that is guaranteed to 403 is worse than none: it turns
+    a configuration error into a provider outage, one the 403 body does not explain and which
+    looks identical to being blocked. Refusing names the variable and the required shape at the
+    moment of the call, before any request leaves.
     """
-    return _env("MUFFIN_USER_AGENT", "muffin-market/1.0 (+https://github.com/gururafiki/muffin)")
+    value = _env("MUFFIN_USER_AGENT", "")
+    if not _CONTACT.search(value):
+        raise RuntimeError(
+            "MUFFIN_USER_AGENT must be set and must contain a contact email address; SEC answers "
+            '403 without one. Example: "muffin-market/1.0 (ops@example.com)".'
+        )
+    if _HOSTNAME.search(_CONTACT.sub("", value)):
+        raise RuntimeError(
+            f"MUFFIN_USER_AGENT contains a hostname or URL ({value!r}); SEC answers 403 to those "
+            f"even when a contact email is also present — measured, twice, paced. Give the email "
+            f"alone."
+        )
+    return value
