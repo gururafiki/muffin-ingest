@@ -713,3 +713,57 @@ def test_the_finviz_asset_does_not_sit_on_the_yfinance_pool() -> None:
 
     pool = asset_indices.raw_sector_performance.op.pool
     assert pool == "finviz", f"raw_sector_performance is on the {pool!r} pool, not finviz"
+
+
+def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does() -> None:
+    """FRESHNESS IS HOW "THIS STOPPED RUNNING" BECOMES VISIBLE WITHOUT A GRAFANA RULE — and until
+    2026-09-12 exactly one asset of thirteen had a policy.
+
+    But the split matters more than the coverage, in both directions:
+
+    * A SCHEDULED asset with no policy goes quiet and nothing notices. That is the failure
+      `resource_health` and `muffin-resource-stalled` exist to catch in the old system, rebuilt in
+      the orchestrator that already knows when each asset last materialised.
+
+    * A BACKFILL-ONLY asset with a policy goes red the day after its load and stays red for ever,
+      against a lane behaving exactly as designed. This codebase has twice paid for a gate left
+      red for a reason nobody acts on, and the cost is never the ignored check — it is the next
+      true positive behind it.
+
+    So the assertion runs both ways. The tidying instinct that makes four assets "consistent" is
+    the same one that reintroduced the history lane's OOM by making its backfill policy match the
+    cross-section's, which is why that asymmetry is pinned by a test too.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    #: Idles at zero by design: the load is one backfill, then nothing until a new subject appears.
+    backfill_only = {
+        "raw_price_history",
+        "price_bar_history",
+        "raw_fx_history",
+        "fx_rate_history",
+    }
+
+    # READ OFF THE SPEC. `freshness_policies_by_key` exists and is the LEGACY one — it returns
+    # nothing for a policy declared via `@asset(freshness_policy=...)`, so a test using it reports
+    # every asset as unwatched and would have been "fixed" by adding policies that were already
+    # there. A guard whose accessor is wrong fails in the safe direction exactly once.
+    policies = {
+        spec.key.to_user_string(): spec.freshness_policy
+        for asset in d.defs.assets or []
+        for spec in getattr(asset, "specs", [])
+    }
+
+    assert policies, "no assets resolved — the accessor moved and this test now proves nothing"
+
+    missing = sorted(n for n, p in policies.items() if p is None and n not in backfill_only)
+    assert not missing, (
+        f"scheduled asset(s) with no freshness policy: {missing}. A lane that stops running is "
+        f"invisible without one — that is the whole failure mode `resource_health` was built for."
+    )
+
+    wrongly_watched = sorted(n for n in backfill_only if policies.get(n) is not None)
+    assert not wrongly_watched, (
+        f"backfill-only lane(s) carrying a freshness policy: {wrongly_watched}. These idle at zero "
+        f"on purpose, so a staleness window goes red the day after the load and never recovers."
+    )

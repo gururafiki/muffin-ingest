@@ -19,7 +19,7 @@ plausibility band, and subunits being DERIVED rather than fetched.
 # No `from __future__ import annotations` — Dagster resolves `context` by comparing the class.
 
 import time
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import dagster as dg
@@ -176,6 +176,7 @@ _loaded_rows = partitioned.loaded_rows
     io_manager_key="parquet_io",
     group_name="fx",
     kinds={"yahoo", "parquet"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Every tracked currency's latest close against USD, as the provider gave it.",
 )
 def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgres) -> Any:
@@ -235,6 +236,10 @@ def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgre
     group_name="fx",
     kinds={"postgres"},
     metadata={"table": "market.fx_rate", "conflict": ["currency_code", "as_of"]},
+    # SAME WINDOW AS ITS SOURCE. A normalise stage stale while its raw is fresh means the
+    # TRANSFORM stopped — a different failure from the provider going quiet, and invisible
+    # otherwise, because the raw asset's own policy would still be green.
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Today's rates as core rows, with subunits derived from their parents.",
 )
 def fx_rate(
@@ -298,6 +303,13 @@ def raw_fx_history(context: AssetExecutionContext, config: FxRun, postgres: Post
     group_name="fx",
     kinds={"postgres"},
     metadata={"table": "market.fx_rate", "conflict": ["currency_code", "as_of"]},
+    # NO FRESHNESS POLICY, AND THAT IS THE POINT OF THIS LANE. It idles at zero by design — the
+    # load is one backfill and then nothing until a new subject appears. A staleness window here
+    # would go red the day after the load and stay red for ever, against a lane behaving exactly
+    # as intended, and this codebase has twice paid for a gate left red for a reason nobody acts
+    # on: the cost is never the ignored check, it is the next true positive behind it.
+    #
+    # "Is this subject loaded?" is answered by the PARTITION GRID, not by a clock.
     description="The weekly history as core rows, into the same table Lane A writes.",
 )
 def fx_rate_history(

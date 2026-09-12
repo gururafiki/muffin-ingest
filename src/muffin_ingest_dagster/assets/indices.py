@@ -55,6 +55,7 @@ class IndexRun(dg.Config):
     io_manager_key="parquet_io",
     group_name="indices",
     kinds={"yfinance", "parquet"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Proxy-ETF bars for every country and group scope, as the provider gave them.",
 )
 def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: Postgres) -> Any:
@@ -183,6 +184,7 @@ def raw_index_bars(context: AssetExecutionContext, config: IndexRun, postgres: P
     io_manager_key="parquet_io",
     group_name="indices",
     kinds={"finviz", "parquet"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Sector performance as finviz publishes it — a current snapshot, not a series.",
 )
 def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -> Any:
@@ -235,6 +237,7 @@ def raw_sector_performance(context: AssetExecutionContext, postgres: Postgres) -
         # generating it. Scoped per index so a bounded run retracts only what it covered.
         "replace_scope": ["index_code"],
     },
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Country and group returns computed from proxy bars, plus finviz's sector figures.",
 )
 def index_return(

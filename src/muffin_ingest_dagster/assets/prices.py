@@ -433,6 +433,7 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
     group_name="prices",
     kinds={"postgres"},
     metadata={"table": "market.price_bar", "conflict": ["security_id", "trade_date"]},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Raw bars as typed core rows. Never calls a provider, so a fix here is free.",
 )
 def price_bar(
@@ -474,6 +475,13 @@ def price_bar(
     io_manager_key="parquet_io",
     group_name="prices",
     kinds={"yfinance", "parquet"},
+    # NO FRESHNESS POLICY, AND THAT IS THE POINT OF THIS LANE. It idles at zero by design — the
+    # load is one backfill and then nothing until a new subject appears. A staleness window here
+    # would go red the day after the load and stay red for ever, against a lane behaving exactly
+    # as intended, and this codebase has twice paid for a gate left red for a reason nobody acts
+    # on: the cost is never the ignored check, it is the next true positive behind it.
+    #
+    # "Is this subject loaded?" is answered by the PARTITION GRID, not by a clock.
     description="Full history for these securities. Idles at zero; the load is one backfill.",
 )
 def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres: Postgres) -> Any:
@@ -574,6 +582,10 @@ class ReturnsRun(dg.Config):
         # `1d = 0.00%` for four days after the fix that stopped generating it.
         "replace_scope": ["security_id"],
     },
+    # DERIVED FROM BARS THAT ARRIVE DAILY, so a day without a rebuild means the eager condition
+    # stopped firing — which is exactly the failure that went unseen for the whole history load
+    # (`AUTO-MATERIALIZE runs ever: 0` against 48 daemon ticks, and no counter could show it).
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
     description="Price and total return per period, computed from the bars. No provider call.",
 )
 def security_return(
