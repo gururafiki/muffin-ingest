@@ -8,7 +8,7 @@ description:
 license: AGPL-3.0
 metadata:
   author: muffin
-  version: '1.0.0'
+  version: '1.1.0'
 ---
 
 # Building an ingestion family on Dagster
@@ -35,6 +35,45 @@ follows is a specific instance of that.
 **Stage 1 is the only stage allowed a network call.** Re-running stage 2 or 3 after a logic fix must
 cost no provider request. That is what makes the transformation rules testable against frozen bytes,
 and it is the property the whole design is arranged around.
+
+### Stage 1 stores the provider's answer, whole
+
+**Raw is what the provider sent, with nothing dropped and nothing rewritten. Every narrowing belongs
+to stage 2.** A field nobody reads today must still be on disk tomorrow, or adopting it costs a
+re-fetch of everything held — the one cost the split exists to remove.
+
+Audited 2026-09-12, **all three frame lanes were breaking it while 181 tests passed**, because
+nothing asserted the SHAPE of raw — only the values it kept:
+
+| lane | raw kept | the provider sent |
+|---|---|---|
+| prices | a `Bar` dataclass — 6 fields, plus a derived `trade_date` | 10 fields |
+| indices | 5 fields, plus a derived `trade_date` | 10 fields |
+| fx | a per-timestamp pivot of the chart's arrays | nested arrays, OHLCV, `adjclose`, a 29-key `meta` |
+
+* **A row is the provider's row verbatim, plus declared context.** Context is *added*, never
+  subtracted: `security_id`, `asked_symbol` beside `observed_symbol`, `provider`, `run_id`, the
+  provider's own warnings. `security_id` is ours and is recorded anyway — without it stage 2
+  re-resolves the symbol with *today's* mapping and silently re-attributes a series. Hold the set
+  in one constant (`prices.CONTEXT_COLUMNS`) and assert raw against it, so nothing derived creeps
+  back in as "just the key".
+* **A document is the response BODY, byte for byte** — a row with `body` beside `url` (with its
+  parameters), `sha256`, `content_type` and `fetched_at` (`providers.documents.Document`). The
+  Parquet manager stores `bytes` as `binary` unchanged; there is no second I/O manager.
+* **A pivot is an interpretation, however faithful.** Reshaping Yahoo's parallel arrays into one
+  object per timestamp kept every field it knew about and lost everything else — a second quote
+  block, an array whose length does not match `timestamp`, a key Yahoo adds beside it. Split such a
+  provider into `fetch` (the network call, returning bytes) and `parse` (pure, run in stage 2).
+* **Placement is not storage.** A partition key is needed to choose a FILE: parse the provider's
+  date to place the row, and write nothing derived into it.
+* **Assert bytes, not a round trip.** `json.loads(stored) == json.loads(served)` passes a stage 1
+  that re-serialised, which is already a choice of key order and number format. Compare sha256.
+* **Assert a superset for rows, never an equality.** The day a vendor adds a field is the event
+  this rule exists to make free, and an equality turns it red.
+* **A library that parses for you has already interpreted.** openbb returns typed `Data` —
+  `extra="allow"` keeps undeclared vendor fields, but dates and floats are already coerced. Store
+  `model_dump()` whole and write down that the layer beneath it is not raw; owning that layer means
+  calling the vendor directly.
 
 ## What is a partition, and what is data
 
@@ -189,6 +228,27 @@ A "close" that is not a close looks exactly like one. The old pipeline's disagre
 overwhelmingly this: the stored value sits **inside** that session's own high/low. History must end
 *before* today for the same reason.
 
+### Do not window the flattened run — publish each partition from its own file
+
+Keeping the provider's whole answer means a file can hold a row that belongs to ANOTHER partition:
+a range widened forward, a session still trading, a lookback. So the window moves to stage 2 — and
+applying it to the run's FLATTENED input is wrong in three different ways, each found by asking what
+a RANGE re-parse, the thing stage 2 exists to make free, would now do:
+
+* **prices:** the stray bar sits in one partition's file and the real one in its own, and the
+  writer dedupes last-wins — so the flattened run picks between them by **file order**, which is
+  right only by accident of sorting.
+* **fx:** one chart body covers a range, so it is filed under every day a run covers
+  (`partitioned.to_every_partition`); a flattened window publishes each rate once per copy.
+* **indices:** every daily run stores its whole 1,900-day lookback, so a range re-parse loaded each
+  bar once per file — a day beside its own duplicate, in a series every return rule reads
+  positionally.
+
+Keep the input per partition (`partitioned.rows_per_partition`), window each file to its own day,
+and where files legitimately overlap keep one row per key, the newest file's. **And when old raw is
+in a format the new rules cannot read, count it** — a skipped legacy row publishes nothing and reads
+exactly like a day the provider had nothing for.
+
 ### Do not probe with the display symbol
 
 `ALMARAI.SR` is what the app shows; yfinance wants `2280.SR`. A baseline sample asked with the
@@ -318,9 +378,14 @@ production run:
   `GELUSD=X` is the extreme: its only point is the live quote, so the provider has no completed bar
   for the lari at all, which is what the negative cache needs to hear.
 
-Count both drops. `live_dropped` non-zero is normal during a session and zero after it closes;
-`nulls_dropped` says the provider is padding. **Capture the `meta` with the fixture** — the first
-capture here omitted it, and that omission is what let both defects ship.
+Both are OBSERVED at parse and REFUSED in stage 2 — never dropped at fetch, which made correcting
+either rule cost ten years of refetching per currency. Count them: `live_points` non-zero is normal
+during a session and zero after it closes; `null_closes` says the provider is padding. **Key the
+live-quote rule on the stamp, never on the date:** a captured EURUSD body ends in Friday's last tick
+(1.16009) *beside* that day's completed bar (1.16099), both dated 2026-09-11 in London, so "keep the
+last point per day" publishes the tick — wrong in the fourth decimal and entirely plausible.
+**Capture the whole body, byte for byte, as the fixture** — the first capture here omitted `meta`
+and the second kept six of its keys, and those omissions are what let both defects ship.
 
 ### A DATE MUST COME FROM THE DATA — four times in one family, in four different disguises
 
@@ -338,9 +403,9 @@ Every one of these produced a plausible number with a wrong date, and none was v
    three were all at the BOTTOM of a window, which is exactly why this one was not looked for.
 
 The rule that covers all four: **the date travels with the data.** Stamp from the last input
-actually used; anchor windows on the data; cut a series at BOTH ends of the partition's window; and
-where a source genuinely has no date, record when it was READ, in the raw artifact, so nothing
-downstream has to invent one.
+actually used; anchor windows on the data; cut a series at BOTH ends of the partition's window, in
+stage 2 and against the stored file; and where a source genuinely has no date, record when it was
+READ, in the raw artifact, so nothing downstream has to invent one.
 
 ### A source that cannot be asked about a past day must not be date-partitioned
 
@@ -417,7 +482,7 @@ is **behavioural**: the window filter's count moves.
 
 1. **Design doc first** — the model has to be right the first time, because it lands in one
    migration. A correction mid-build-out costs a deploy.
-2. **Capture real provider payloads** before writing a parser. Include one subject the provider has
+2. **Capture real provider payloads — the whole response, as bytes —** before writing a parser. Include one subject the provider has
    *nothing* for, and one whose response has a different shape (a single-item request often does).
 3. **Library first, assets second.** Parsing and rules in `muffin_ingest`, tested with no Dagster.
 4. **Ship the schema additively**, beside what it replaces. Nothing reads it yet.
