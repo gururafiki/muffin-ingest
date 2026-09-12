@@ -18,6 +18,7 @@ treat it differently from both a transport failure and an empty venue.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any
 
 import httpx
 
@@ -40,7 +41,7 @@ class OpenFigiThrottled(RuntimeError):
     again, one venue at a time."""
 
 
-def _post(path: str, body: dict[str, object], timeout_s: float) -> Document:
+def _post(path: str, body: Any, timeout_s: float) -> Document:
     base = settings.provider_base("openfigi", REAL_ORIGIN)
     url = f"{base}{path}"
     with metrics.request("openfigi") as outcome:
@@ -89,3 +90,14 @@ def filter_exchange(
     if cursor:
         body["start"] = cursor
     return _post("/v3/filter", body, timeout_s)
+
+
+def mapping(jobs: list[dict[str, Any]], *, timeout_s: float = 20.0) -> Document:
+    """One `/v3/mapping` request — THE RESPONSE IS POSITIONAL: entry j answers job j.
+
+    Each job is `{"idType": "ID_ISIN", "idValue": "<isin>"}` and may carry `exchCode: "US"` to
+    restrict to the US listing (the SEC-usable ticker) or not (every venue, for the local line).
+    The body is stored whole; `facets/symbology.parse_mapping` reads it back positionally, and a
+    reordering there — or here — would attach one company's listing to another's.
+    """
+    return _post("/v3/mapping", list(jobs), timeout_s)
