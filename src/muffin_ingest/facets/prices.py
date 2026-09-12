@@ -228,17 +228,19 @@ def provider_rows_by_symbol(
     """
     out: dict[str, list[Mapping[str, Any]]] = {}
     for row in rows:
-        if row_date(row) is None:
-            continue
+        # A ROW WHOSE DATE WILL NOT PARSE IS STILL WHAT THE PROVIDER SENT. It used to be dropped
+        # here, which made stage 1 the judge of whether a row is usable — and a row deleted at
+        # fetch is one no re-parse can recover. `normalise` refuses it instead.
         symbol = str(row.get("symbol") or sole_symbol).upper()
         out.setdefault(symbol, []).append(row)
     return out
 
 
-#: Columns this pipeline adds to a provider row. Everything else on a raw row came from the
-#: vendor, and `normalise` must read the vendor's own spelling rather than one of these.
+#: EVERY column this pipeline adds to a provider row, and nothing computed from the vendor's own
+#: fields. A test holds `raw_rows` to exactly this set, so a derived column creeping back into
+#: stage 1 — `trade_date` was one, parsed from the vendor's `date` — fails rather than ships.
 CONTEXT_COLUMNS = frozenset(
-    {"security_id", "asked_symbol", "observed_symbol", "provider", "run_id", "trade_date"}
+    {"security_id", "asked_symbol", "observed_symbol", "provider", "run_id", "provider_warnings"}
 )
 
 
@@ -267,13 +269,13 @@ def raw_rows(
     transform would silently re-attribute a whole series. `asked_symbol` beside `observed_symbol`
     is what makes "what did we actually request" answerable when a value turns out wrong.
 
-    `trade_date` is derived here rather than left to stage 2 for one reason only: it is the
-    PARTITION KEY, and the I/O manager needs it to decide which file a row belongs in. The
-    provider's own `date` is kept untouched beside it.
+    NOTHING IS DERIVED INTO THE ROW. An earlier version added a parsed `trade_date` here because
+    the I/O manager needs a partition key — but a key is needed for PLACEMENT, not for storage,
+    so the asset passes `row_date` as the key function and the row itself stays the provider's.
+    The rule is that stage 1 adds context and subtracts nothing; a normalised date is neither.
     """
     out: list[dict[str, Any]] = []
     for row in provider_rows:
-        parsed = _as_date(row.get("date"))
         enriched = dict(row)
         enriched.update(
             {
@@ -282,7 +284,6 @@ def raw_rows(
                 "observed_symbol": observed,
                 "provider": provider,
                 "run_id": run_id,
-                "trade_date": parsed.isoformat() if parsed else None,
                 # WHAT THE PROVIDER SAID ABOUT ITSELF. `OBBject.warnings` is a provider
                 # declaring itself degraded while still returning 200 — it was read for
                 # classification and then discarded, so the text that explains an odd value was
@@ -296,7 +297,11 @@ def raw_rows(
 
 
 def normalise(
-    rows: Sequence[Mapping[str, Any]], currencies: Mapping[str, str], *, source_code: str
+    rows: Sequence[Mapping[str, Any]],
+    currencies: Mapping[str, str],
+    *,
+    source_code: str,
+    window: tuple[date, date] | None = None,
 ) -> list[dict[str, Any]]:
     """Raw rows to `market.price_bar` rows. No provider call, so a fix here is free to re-run.
 
@@ -308,9 +313,17 @@ def normalise(
     for row in rows:
         close = row.get("close")
         security_id = row.get("security_id")
-        trade_date = row.get("trade_date")
-        if security_id is None or trade_date is None or not isinstance(close, int | float):
+        # THE DATE IS PARSED HERE, FROM THE PROVIDER'S OWN FIELD. Raw carries the vendor's `date`
+        # untouched; turning it into a `trade_date` is an interpretation and belongs downstream.
+        parsed = row_date(row)
+        if security_id is None or parsed is None or not isinstance(close, int | float):
             continue
+        # AND THE WINDOW IS APPLIED HERE TOO. The provider widens a degenerate range and can
+        # return a session still in progress; both used to be filtered at fetch, which threw the
+        # rows away. They are stored and refused here, so the rule can change for free.
+        if window is not None and not (window[0] <= parsed < window[1]):
+            continue
+        trade_date = parsed.isoformat()
         if isinstance(close, bool) or close <= 0:
             continue
         out.append(

@@ -192,8 +192,8 @@ def test_normalisation_carries_the_currency_it_has_and_withholds_the_one_it_does
     from muffin_ingest.facets import prices
 
     raw = [
-        {"security_id": SUBJECTS[0][0], "trade_date": KEY, "close": 100.0, "volume": 1},
-        {"security_id": SUBJECTS[1][0], "trade_date": KEY, "close": 200.0, "volume": 2},
+        {"security_id": SUBJECTS[0][0], "date": KEY, "close": 100.0, "volume": 1},
+        {"security_id": SUBJECTS[1][0], "date": KEY, "close": 200.0, "volume": 2},
     ]
     rows = prices.normalise(raw, {SUBJECTS[0][0]: "USD"}, source_code="yfinance")
     assert [r["currency_code"] for r in rows] == ["USD", None]
@@ -204,8 +204,15 @@ def test_normalisation_carries_the_currency_it_has_and_withholds_the_one_it_does
 def test_normalisation_refuses_a_close_that_is_not_a_positive_number(close: object) -> None:
     from muffin_ingest.facets import prices
 
-    raw = [{"security_id": SUBJECTS[0][0], "trade_date": KEY, "close": close}]
-    assert prices.normalise(raw, {}, source_code="yfinance") == []
+    # A CONTROL ROW BESIDE THE BAD ONE, and the first version had none. Its raw row carried no
+    # provider `date`, so once the date moved to stage 2 `normalise` refused it for THAT reason and
+    # this test went on passing without ever reaching the close rule it is named for.
+    raw = [
+        {"security_id": SUBJECTS[0][0], "date": KEY, "close": close},
+        {"security_id": SUBJECTS[1][0], "date": KEY, "close": 100.0},
+    ]
+    out = prices.normalise(raw, {}, source_code="yfinance")
+    assert [r["security_id"] for r in out] == [SUBJECTS[1][0]]
 
 
 def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_path: Path) -> None:
@@ -294,9 +301,30 @@ def test_a_partition_contains_only_its_own_window(tmp_path: Path) -> None:
                 rows.append({"symbol": s, "date": d, "close": 100.0})
         return Answer(rows=rows)
 
-    m = meta(materialise(tmp_path, spilling), asset_prices.raw_price_bars)
-    assert m["outside_window"] > 0, "the spillover is counted, not dropped in silence"
-    assert m["rows"] == m["answered"], "exactly one bar per answering security — its own day"
+    saved = openbb.price_history
+    openbb.price_history = spilling
+    try:
+        result = dg.materialize(
+            [asset_prices.raw_price_bars, asset_prices.price_bar],
+            partition_key=KEY,
+            resources={
+                "postgres": FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "postgres_io": _Capture(),
+            },
+        )
+    finally:
+        openbb.price_history = saved
+
+    assert result.success
+    m = meta(result, asset_prices.raw_price_bars)
+    assert m["outside_window"] == m["answered"], "the spillover is counted, not dropped in silence"
+    # RAW KEEPS IT. The spilled bar is what the provider said; deleting it at fetch is what made
+    # stage 1 the judge of a window, so that a rule change there cost a re-fetch.
+    assert m["rows"] == 2 * m["answered"]
+    # AND THE CORE TABLE DOES NOT: exactly one bar per answering security, on the partition's day.
+    assert {r["trade_date"] for r in _Capture.last} == {KEY}
+    assert len(_Capture.last) == m["answered"]
 
 
 # --- returns ------------------------------------------------------------------------------------

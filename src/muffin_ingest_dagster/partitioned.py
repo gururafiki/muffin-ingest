@@ -68,8 +68,19 @@ def by_partition(
     # manager writes an empty file for those, and that is what makes "we collected that slice and
     # there was nothing" distinguishable from "we never collected it".
     out: dict[str, Rows] = {k: [] for k in keys}
+    known = set(keys)
     for row in rows:
-        out.setdefault(key(row), []).append(row)
+        placed = key(row)
+        # A ROW THE RUN WAS NOT ASKED FOR IS STILL THE PROVIDER'S ANSWER, so it is FILED rather
+        # than dropped. `equity.price.historical` widens a degenerate range (asking for 09-09
+        # alone returns 09-09 AND 09-10) and a call made mid-session brings back a bar for a day
+        # still trading. Discarding those made stage 1 the place that decides what belongs to a
+        # window — and a row deleted at fetch is a row no re-parse can recover.
+        #
+        # It goes in the LAST partition of the run, which is the one whose request reached
+        # furthest forward, and it keeps its own date so stage 2 can see it does not belong.
+        # The I/O manager rejects a key outside the range, so there is nowhere else it could go.
+        out[placed if placed in known else keys[-1]].append(row)
     return out
 
 
@@ -102,4 +113,58 @@ def loaded_rows(loaded: Any) -> Rows:
     raise TypeError(
         f"raw input is {type(loaded).__name__}, expected a mapping of partition key to rows "
         f"or a sequence of rows — the I/O manager and the asset disagree about the run's shape"
+    )
+
+
+def to_every_partition(context: AssetExecutionContext, rows: Rows) -> Rows | dict[str, Rows]:
+    """File the same rows under EVERY partition the run covers. For an artifact that covers a
+    RANGE rather than belonging to a day.
+
+    WHY THIS IS NOT `by_partition` WITH A CLEVERER KEY. `by_partition` asks a row which partition
+    it belongs to, which presumes the row carries a date — true for a bar, false for a whole
+    provider response. Yahoo's chart body for `range=5d` is one document covering five sessions:
+    there is no honest way to file it under one of them, and filing it under the day we happened
+    to ask would date the artifact by the clock, which is the thing this pipeline keeps being
+    bitten by.
+
+    So it is filed under each day in the run, and the claim each partition makes stays true:
+    *this is the provider's answer covering that day*. Stage 2 reads the body and decides which
+    points fall where — meaning a corrected timezone or window rule costs a re-parse of files
+    already on disk rather than ten years of refetching per currency.
+
+    THE DUPLICATION IS THE POINT, not a cost being tolerated. A partition that does not contain
+    its own evidence cannot be re-read on its own, and re-reading one partition in isolation is
+    what the whole split is for.
+    """
+    if context.has_partition_key or not context.has_partition_key_range:
+        return rows
+    keys = list(context.partition_keys)
+    # A RANGE OF EXACTLY ONE IS NOT A RANGE — see `by_partition`; `UPathIOManager` takes its
+    # single-partition path and would hand the mapping straight to the writer.
+    if len(keys) == 1:
+        return rows
+    return {k: list(rows) for k in keys}
+
+
+def rows_per_partition(context: AssetExecutionContext, loaded: Any) -> dict[str, Rows]:
+    """The loaded input KEPT per partition — for a stage whose rule is per partition.
+
+    `loaded_rows` flattens, which is right when nothing downstream cares which file a row came
+    from. A stage that publishes "each partition's own day" does care: raw keeps whatever the
+    provider sent, so one partition's file can hold a bar for a day that belongs to ANOTHER — a
+    range widened forward, a session still trading. Windowing the flattened run would offer that
+    stray beside the real bar from its own file, and the writer's last-wins dedupe would then pick
+    between them by FILE ORDER: right only by accident of sorting.
+
+    Keyed by partition so the caller applies each partition's own window to its own file, after
+    which a stray cannot be published at all.
+    """
+    if isinstance(loaded, Mapping):
+        return {str(key): list(rows) for key, rows in sorted(loaded.items())}
+    keys = list(context.partition_keys)
+    if isinstance(loaded, Sequence) and len(keys) == 1:
+        return {keys[0]: list(loaded)}
+    raise TypeError(
+        f"raw input is {type(loaded).__name__} for {len(keys)} partition(s) — the I/O manager "
+        f"hands over a mapping for several and a sequence for exactly one"
     )

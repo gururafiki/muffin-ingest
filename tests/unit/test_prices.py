@@ -373,7 +373,44 @@ def test_raw_keeps_every_field_the_provider_sent() -> None:
     assert rows[0]["security_id"] == "s-1"
     assert rows[0]["asked_symbol"] == "AAPL"
     assert rows[0]["observed_symbol"] == "AAPL"
-    assert rows[0]["trade_date"] == "2026-09-10", (
-        "the partition key is derived here because the I/O manager needs it to place the row, "
-        "and the provider's own `date` must survive beside it"
+    # NOTHING IS DERIVED INTO THE ROW. An earlier version wrote a parsed `trade_date` here because
+    # the I/O manager needs a key to place the file — but placement is not storage, and a parsed
+    # date is an interpretation of the vendor's own field. The asset reads `row_date` to place the
+    # row; the row itself is the provider's fields plus declared context, and nothing else.
+    added = set(rows[0]) - set(provider_row)
+    assert added <= prices.CONTEXT_COLUMNS, (
+        f"raw grew {sorted(added - prices.CONTEXT_COLUMNS)} — stage 1 adds declared context and "
+        f"nothing computed from the vendor's fields"
     )
+    assert "trade_date" not in rows[0]
+    assert prices.row_date(rows[0]) == date(2026, 9, 10), "and the placement key is still readable"
+
+
+def test_a_row_whose_date_will_not_parse_is_kept_in_raw_and_refused_in_stage_2() -> None:
+    """A ROW DELETED AT FETCH IS A ROW NO RE-PARSE CAN RECOVER.
+
+    `provider_rows_by_symbol` dropped any row whose `date` would not parse until 2026-09-12, which
+    made stage 1 the judge of what a usable row is. It is kept now, and `normalise` — the stage a
+    rule change costs nothing to re-run — is where it is refused.
+    """
+    sent = [
+        {"symbol": "AAPL", "date": "not a date", "close": 1.0},
+        {"symbol": "AAPL", "date": "2026-09-10", "close": 2.0},
+    ]
+    assert len(prices.provider_rows_by_symbol(sent, "AAPL")["AAPL"]) == 2, "stage 1 kept both"
+
+    out = prices.normalise([dict(r, security_id="s-1") for r in sent], {}, source_code="yfinance")
+    assert [r["trade_date"] for r in out] == ["2026-09-10"]
+
+
+def test_the_window_is_applied_in_stage_2_and_is_half_open() -> None:
+    """The provider widens a degenerate range and returns a session still in progress; both used to
+    be cut at fetch. The window is a stage-2 rule now, half-open like Dagster's own: the
+    partition's day is in, the day its window ends on is out."""
+    raw = [
+        {"security_id": "s-1", "date": d, "close": 1.0}
+        for d in ("2026-09-09", "2026-09-10", "2026-09-11")
+    ]
+    window = (date(2026, 9, 10), date(2026, 9, 11))
+    out = prices.normalise(raw, {}, source_code="yfinance", window=window)
+    assert [r["trade_date"] for r in out] == ["2026-09-10"]

@@ -19,7 +19,7 @@ plausibility band, and subunits being DERIVED rather than fetched.
 # No `from __future__ import annotations` — Dagster resolves `context` by comparing the class.
 
 import time
-from datetime import date, timedelta
+from datetime import timedelta
 from typing import Any
 
 import dagster as dg
@@ -71,39 +71,32 @@ def _collect(
     range_: str,
     interval: str,
     budget_seconds: int,
-    window: tuple[date, date] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Ask for each currency in turn and return raw rows plus what the asking established.
+    """Ask for each currency in turn and store WHAT CAME BACK, unopened.
 
     ONE CURRENCY PER REQUEST, because the endpoint takes one symbol. There is nothing to batch, and
     so — unlike the price lane — no isolation pass is needed: every call is already isolated and the
     provider's answer is already about exactly one subject.
 
-    THREE OUTCOMES, NOT TWO, and keeping them apart is the point of this pipeline. `answered` means
-    points came back; `empty` means Yahoo said it has nothing for this pair, which is a fact about
-    the currency; `transport` means we never got an answer, which is a fact about us or the network.
-    Marking a currency absent on the third is how a thirty-second outage becomes a month of silence.
+    THE COUNTERS HERE ARE ABOUT THE CALL AND NOTHING ELSE. `answered` means a body came back;
+    `transport` means we never got one, which is a fact about us or the network. Everything about
+    the CONTENT of those bodies — points, live quotes, null closes, rates refused by the band — is
+    counted by `fx.normalise` against files on disk, because until 2026-09-12 counting it here is
+    what dragged the parse, the window filter and the live-quote rule in front of the write.
+    Marking a currency absent on a transport failure is how a thirty-second outage becomes a month
+    of silence, which is why the two can never share a counter.
     """
     deadline = time.monotonic() + budget_seconds
     rows: list[dict[str, Any]] = []
     stats = {
         "calls": 0,
         "answered": 0,
-        "empty": 0,
         "transport": 0,
         "unasked": 0,
-        "points": 0,
-        # Points the provider returned that do not belong to the window we asked for. Counted
-        # rather than dropped in silence: a non-zero value is a statement about the PROVIDER's idea
-        # of a range, and the day it becomes zero is the day this filter stopped being needed.
-        "outside_window": 0,
-        # A LIVE QUOTE IS NOT A BAR. Non-zero is the normal case while a session is open and zero
-        # once it closes; it is counted because publishing one is the exact defect being replaced.
-        "live_points": 0,
-        # A padded row for a session with no data yet — a statement about the provider.
-        "null_closes": 0,
+        # What is actually on disk for this run. A body that shrinks to nothing across a whole
+        # run is a provider event no row count can show, because the rows are the documents.
+        "bytes": 0,
     }
-    empty: list[str] = []
     last_error: str | None = None
     consecutive_transport = 0
 
@@ -117,7 +110,9 @@ def _collect(
 
         stats["calls"] += 1
         try:
-            series = yahoo_chart.chart(yahoo_chart.pair(currency), range_=range_, interval=interval)
+            document = yahoo_chart.fetch(
+                yahoo_chart.pair(currency), range_=range_, interval=interval
+            )
         except yahoo_chart.YahooRefused as exc:
             stats["transport"] += 1
             last_error = str(exc)
@@ -131,34 +126,20 @@ def _collect(
             continue
 
         consecutive_transport = 0
-        points = series.points
-        stats["live_points"] += series.live_points
-        stats["null_closes"] += series.null_closes
-        if window is not None:
-            start, end = window
-            kept = [p for p in points if start <= p.as_of < end]
-            stats["outside_window"] += len(points) - len(kept)
-            points = kept
-
-        if not points:
-            stats["empty"] += 1
-            empty.append(currency)
-            continue
-
         stats["answered"] += 1
-        stats["points"] += len(points)
+        stats["bytes"] += len(document.body)
+        # A BODY THAT SAYS "I DO NOT CARRY THIS PAIR" IS STORED LIKE ANY OTHER. It is the
+        # provider's answer, it is what makes the absence provable from disk, and deciding it
+        # yielded no rate is stage 2's job — the same rule that keeps a 404 naming an absence
+        # apart from a 404 that is a refusal.
         rows.extend(
             fx.raw_rows(
-                currency, points, interval=interval, run_id=context.run.run_id, meta=series.meta
+                currency, document, interval=interval, range_=range_, run_id=context.run.run_id
             )
         )
 
-    if empty:
-        context.log.info("provider has nothing for: %s", ", ".join(sorted(empty)))
     if last_error:
         context.log.warning("last error: %s", last_error)
-    # Carried on the stats so the caller can mark them, and ONLY when something else answered —
-    # a run in which nothing answered is evidence about the provider, never about a currency.
     context.log.info("fx collect: %s", stats)
     return rows, stats
 
@@ -184,52 +165,44 @@ _loaded_rows = partitioned.loaded_rows
     description="Every tracked currency's latest close against USD, as the provider gave it.",
 )
 def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgres) -> Any:
-    """THE PARTITION'S OWN DAY, NOT THE NEWEST THING THE PROVIDER HAS.
+    """WHAT YAHOO SERVED FOR EACH PAIR, WHOLE — one body per currency, nothing opened.
 
-    A five-day range is requested so the partition's day is certainly inside what comes back — a
-    weekend, a holiday, or a provider that pads. It is NOT requested so that five days can be
-    stored, and the first version of this asset took the newest point instead: a run for the
-    2026-09-10 partition wrote 42 rates dated **2026-09-11**.
+    THE PARTITION CLAIMS COVERAGE, NOT CONTENT. A five-day range is asked so the partition's day
+    is certainly inside what comes back — a weekend, a holiday, or a provider that pads. It is NOT
+    asked so that five days can be published, and the first version of this asset wrote the newest
+    point instead: a run for the 2026-09-10 partition wrote 42 rates dated **2026-09-11**, a
+    session still in progress. `fx_rate` refuses both of those now, reading the body.
 
-    Both halves of that are wrong. A partition claims to have collected its own window, so writing
-    another day's value makes the claim false; and 09-11 was a session still in progress, which is
-    precisely what this pipeline refuses to publish for prices — a mid-session quote is not a close,
-    and it looks exactly like one.
-
-    A day with no rate therefore materialises EMPTY, which is the honest answer: there is no Sunday
-    exchange rate, and the I/O manager's empty-partition marker says "collected, nothing there"
-    rather than leaving a hole indistinguishable from a run that never happened.
+    THE WINDOW FILTER USED TO LIVE HERE AND THAT WAS THE DEFECT. Points outside the partition's
+    day were discarded before anything was stored, so a bug in the date rule — and there has been
+    one, dating every FX bar a day early — cost ten years of refetching per currency instead of a
+    re-parse. Stage 1 stores; stage 2 decides.
     """
-    # Indexed rather than `.start`/`.end`, matching the price lane — and with `single_run` this
-    # covers the WHOLE backfilled range, so the filter is right for a range as well as a day.
-    window = context.partition_time_window
-    start, end = window[0].date(), window[1].date()
     with postgres.connect() as conn:
         currencies = fx.askable_currencies(conn, include_absent=config.include_absent)
     if config.limit is not None:
         currencies = currencies[: config.limit]
 
-    context.log.info("spot for %s currencies over %s..%s", len(currencies), start, end)
+    window = context.partition_time_window
+    context.log.info(
+        "spot for %s currencies covering %s..%s",
+        len(currencies),
+        window[0].date(),
+        window[1].date(),
+    )
     rows, stats = _collect(
         context,
         currencies,
         range_=SPOT_RANGE,
         interval="1d",
         budget_seconds=config.budget_seconds,
-        window=(start, end),
     )
 
     context.add_output_metadata({**stats, "rows": len(rows), "currencies": len(currencies)})
-    # KEYED BY THE BAR'S OWN DAY, because this asset is DATE-partitioned — a `single_run` backfill
-    # covering several days must write one file per day. This returned a flat list until
-    # 2026-09-12, so the first multi-day FX backfill would have fetched every rate and then died at
-    # the write with `does not support persisting an output associated with multiple partitions`.
-    # It had never been run, which is the only reason it was never seen: the daily schedule always
-    # covers exactly one partition, and that is the path a flat list happens to satisfy.
-    #
-    # `as_of` is already the ISO day the point belongs to, dated from the provider's `gmtoffset`
-    # rather than from UTC — so the partition key comes from the data, not from the clock.
-    return partitioned.by_partition(context, rows, key=lambda r: str(r["as_of"]))
+    # FILED UNDER EVERY DAY THE RUN COVERS, because a chart body covers a RANGE and belongs to no
+    # single day. Keying it by a date read out of the body would put the artifact's placement back
+    # inside stage 1 — which is exactly the interpretation this lane just stopped making.
+    return partitioned.to_every_partition(context, rows)
 
 
 @dg.asset(
@@ -249,22 +222,39 @@ def raw_fx_spot(context: AssetExecutionContext, config: FxRun, postgres: Postgre
 def fx_rate(
     context: AssetExecutionContext, postgres: Postgres, raw_fx_spot: Any
 ) -> list[dict[str, Any]]:
-    """Never calls a provider, so a fix here costs nothing to re-run."""
-    raw = _loaded_rows(raw_fx_spot)
-    rates = fx.normalise(raw)
+    """Bodies on disk to typed rates. Never calls a provider, so a fix here costs nothing to re-run.
+
+    THE WINDOW IS APPLIED HERE. A partition publishes its own day and no other: writing the newest
+    point Yahoo happens to hold would make the partition's claim false, and that newest point is
+    routinely a mid-session quote whose "close" is not a close.
+    """
+    # PER PARTITION, FROM ITS OWN FILE. `raw_fx_spot` files the SAME body under every day a run
+    # covers — a chart body covers a range and belongs to no single day — so a range run hands
+    # this stage one copy per partition. Windowing the flattened set would publish every rate once
+    # per copy; windowing each file to its own day publishes each day exactly once, from the
+    # partition that claims it.
+    rates: list[fx.Rate] = []
+    stats: dict[str, int] = {}
+    for key, part in partitioned.rows_per_partition(context, raw_fx_spot).items():
+        day = fx_day.time_window_for_partition_key(key)
+        parsed = fx.normalise(part, window=(day.start.date(), day.end.date()))
+        rates += parsed.rates
+        for name, count in parsed.stats.items():
+            stats[name] = stats.get(name, 0) + count
     with_subunits = fx.with_subunits(rates)
 
     context.add_output_metadata(
         {
+            **stats,
             "rows": len(with_subunits),
             "observed": len(rates),
             "derived": len(with_subunits) - len(rates),
-            # A RISING COUNT HERE IS A STATEMENT ABOUT THE PROVIDER, not a repair to be pleased
-            # about: the band's headline case is an inverted pair, which is a wrong number rather
-            # than a missing one.
-            "refused_by_band": len(raw) - len(rates),
         }
     )
+    if stats.get("unreadable"):
+        # A BODY WE STORED AND CANNOT READ IS OURS, NOT THE PROVIDER'S. Loud rather than fatal:
+        # one malformed document must not blank the other forty-two currencies.
+        context.log.error("%s stored bodies would not parse", stats["unreadable"])
     return fx.core_rows(with_subunits)
 
 
@@ -294,8 +284,8 @@ def raw_fx_history(context: AssetExecutionContext, config: FxRun, postgres: Post
         budget_seconds=config.budget_seconds,
     )
     context.add_output_metadata({**stats, "rows": len(rows)})
-    # Keyed by CURRENCY here — this lane's partition is the currency, where the spot lane's is the
-    # day. Same helper, different key, which is the whole reason the key is a parameter.
+    # Keyed by CURRENCY here — this lane's partition IS the subject, so unlike the spot lane the
+    # document does belong to exactly one key and `by_partition` can say which.
     return partitioned.by_partition(context, rows, key=lambda r: str(r["currency_code"]))
 
 
@@ -331,17 +321,21 @@ def fx_rate_history(
     must not retract what an earlier one wrote.
     """
     raw = _loaded_rows(raw_fx_history)
-    rates = fx.normalise(raw)
-    with_subunits = fx.with_subunits(rates)
+    # NO WINDOW. This lane's partition is the currency, so every point in the body belongs to it —
+    # the ten-year range is the subject's whole history rather than a slice of a calendar.
+    parsed = fx.normalise(raw)
+    with_subunits = fx.with_subunits(parsed.rates)
 
     context.add_output_metadata(
         {
+            **parsed.stats,
             "rows": len(with_subunits),
-            "observed": len(rates),
-            "derived": len(with_subunits) - len(rates),
-            "refused_by_band": len(raw) - len(rates),
+            "observed": len(parsed.rates),
+            "derived": len(with_subunits) - len(parsed.rates),
         }
     )
+    if parsed.stats["unreadable"]:
+        context.log.error("%s stored bodies would not parse", parsed.stats["unreadable"])
     return fx.core_rows(with_subunits)
 
 
