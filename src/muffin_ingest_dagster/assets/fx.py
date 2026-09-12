@@ -255,6 +255,12 @@ def fx_rate(
         # A BODY WE STORED AND CANNOT READ IS OURS, NOT THE PROVIDER'S. Loud rather than fatal:
         # one malformed document must not blank the other forty-two currencies.
         context.log.error("%s stored bodies would not parse", stats["unreadable"])
+    if stats.get("legacy_rows"):
+        context.log.warning(
+            "%s raw rows predate the stored-body format and yield nothing; re-materialise "
+            "raw_fx_spot for these partitions to re-read them",
+            stats["legacy_rows"],
+        )
     return fx.core_rows(with_subunits)
 
 
@@ -336,6 +342,12 @@ def fx_rate_history(
     )
     if parsed.stats["unreadable"]:
         context.log.error("%s stored bodies would not parse", parsed.stats["unreadable"])
+    if parsed.stats["legacy_rows"]:
+        context.log.warning(
+            "%s raw rows predate the stored-body format and yield nothing; re-materialise "
+            "raw_fx_history for these currencies to re-read them",
+            parsed.stats["legacy_rows"],
+        )
     return fx.core_rows(with_subunits)
 
 

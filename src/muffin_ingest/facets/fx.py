@@ -199,10 +199,18 @@ def normalise(
         # A BODY ON DISK THAT WILL NOT PARSE IS OUR PROBLEM, and it must not blank the other
         # forty-two currencies. Counted so the asset can report it; non-zero is never normal.
         "unreadable": 0,
+        # A ROW WITH NO BODY WAS WRITTEN BEFORE 2026-09-12, when raw held a per-point pivot rather
+        # than the response. Nothing in it can be re-read under today's rules — the pivot IS the
+        # loss this format replaced — so it yields nothing, and it is COUNTED rather than skipped:
+        # a stage-2 re-run over an old partition would otherwise publish no rates and read exactly
+        # like a day the provider had nothing for. The remedy is re-materialising that raw
+        # partition, which is one call per currency.
+        "legacy_rows": 0,
     }
     for row in rows:
         body = row.get("body")
         if body is None:
+            stats["legacy_rows"] += 1
             continue
         stats["documents"] += 1
         try:

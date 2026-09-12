@@ -331,6 +331,24 @@ def test_the_spot_window_is_applied_in_stage_2_against_the_stored_body() -> None
     assert got.stats["outside_window"] == 2
 
 
+def test_a_row_from_before_the_body_format_is_counted_not_silently_skipped() -> None:
+    """RAW FX HELD A PER-POINT PIVOT UNTIL 2026-09-12, and those files are still on disk. Nothing in
+    them can be re-read under today's rules, so they yield no rate — but a re-run of stage 2 over an
+    old partition must SAY so, or it publishes nothing and reads exactly like a day the provider had
+    nothing for. The current-format row beside it is what proves the pass did not simply fail."""
+    legacy = {"currency_code": "EUR", "as_of": "2026-09-10", "close": 1.16, "provider": "yahoo"}
+    current = fx.raw_rows(
+        "JPY",
+        document(chart_body([(date(2026, 9, 10), 0.0068)])),
+        interval="1d",
+        range_="5d",
+        run_id="r",
+    )
+    got = fx.normalise([legacy, *current])
+    assert got.stats["legacy_rows"] == 1
+    assert [r.currency_code for r in got.rates] == ["JPY"]
+
+
 def test_a_subunit_gets_its_parent_s_WHOLE_history_in_the_same_pass() -> None:
     """THE RULE THE LANE TURNS ON. A subunit filled separately — or only by the spot lane — ends up
     with three days against its parent's ten years, and a consumer joining "the most recent rate at
