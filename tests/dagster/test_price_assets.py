@@ -715,7 +715,16 @@ def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
     """
     from muffin_ingest_dagster import definitions as d
 
-    known = {"yfinance", "yahoo", "finviz", "sec", "nse", "sql", "openfigi_filter"}
+    known = {
+        "yfinance",
+        "yahoo",
+        "finviz",
+        "sec",
+        "nse",
+        "sql",
+        "openfigi_filter",
+        "openfigi_mapping",
+    }
     # The pool is declared on the asset's underlying op, not on the AssetsDefinition.
     used = {
         pool
@@ -770,6 +779,13 @@ def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does(
         "price_bar_history",
         "raw_fx_history",
         "fx_rate_history",
+        # The symbology lane idles after the initial resolution: a security asked once and answered
+        # never needs re-asking, so a staleness window would go red against the lane behaving as
+        # designed (its re-ask is the 30-day stale-miss sensor, not a clock).
+        "raw_figi_ticker",
+        "raw_figi_local_symbol",
+        "raw_yahoo_symbol",
+        "security_symbology",
     }
 
     # READ OFF THE SPEC. `freshness_policies_by_key` exists and is the LEGACY one — it returns
