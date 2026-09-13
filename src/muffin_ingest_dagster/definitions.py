@@ -33,7 +33,7 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest import metrics, settings
-from muffin_ingest_dagster.assets import discovery, fx, indices, prices, registries
+from muffin_ingest_dagster.assets import discovery, fx, indices, prices, registries, symbology
 from muffin_ingest_dagster.io_managers import ParquetIOManager, PostgresIOManager
 from muffin_ingest_dagster.resources import Postgres
 from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_storage
@@ -292,6 +292,11 @@ defs = dg.Definitions(
         discovery.fund_holding,
         discovery.raw_exchange_sweep,
         discovery.venue_listing,
+        # The identity ladder: evidence rungs and the resolver onto the identity tables.
+        symbology.raw_figi_ticker,
+        symbology.raw_figi_local_symbol,
+        symbology.raw_yahoo_symbol,
+        symbology.security_symbology,
     ],
     asset_checks=[every_symbol_keyed_facet_retracts, every_askable_security_was_asked],
     jobs=[prune_dagster_storage],
@@ -309,6 +314,7 @@ defs = dg.Definitions(
         fx.new_currencies_need_history,
         discovery.new_nport_filings,
         discovery.new_exchange_sweeps,
+        symbology.new_symbols_needed,
         automation,
     ],
     resources={
