@@ -120,28 +120,51 @@ def request(provider: str) -> Iterator[dict[str, str]]:
 
 
 def start_exporter(port: int = 9102) -> None:
-    """Serve the aggregated multiprocess registry. Called once, in the code-location parent.
+    """Serve the aggregated multiprocess registry — from the process that can bind the port.
 
-    IT CLEARS THE DIRECTORY FIRST, and that is a correctness requirement rather than housekeeping:
-    `MultiProcessCollector` sums every file it finds, so a restart that inherits the previous
-    incarnation's files serves those counts as current. It is also the only thing that bounds the
-    directory at all — see the module docstring on why `mark_process_dead` does not.
+    EVERY RUN CALLS THIS TOO, NOT ONLY THE CODE-LOCATION PARENT. A Dagster run is a subprocess that
+    re-imports `definitions.py`, and it inherits `PROMETHEUS_MULTIPROC_DIR`. The first version
+    cleared the directory and then bound the port unconditionally, so in every run it deleted the
+    counter files the parent and any concurrent run had written, then died loading definitions on
+
+        OSError: [Errno 98] Address already in use
+
+    — failing EVERY run from 2026-09-13 to 2026-09-16 (heartbeat and daily lanes alike) while the
+    exporter's Prometheus target stayed up and read healthy. Unit tests called it once per process,
+    so the second caller never existed in them.
+
+    So THE PORT DECIDES OWNERSHIP. Bind first; a process that finds the port already served is a run
+    inside a live code location, and it returns without touching the directory.
+
+    Only the process that bound clears stale files, and that is still a correctness requirement
+    rather than housekeeping: `MultiProcessCollector` sums every file it finds, so a restart that
+    inherits the previous incarnation's files serves those counts as current. It is also the only
+    thing that bounds the directory at all — see the module docstring on why `mark_process_dead`
+    does not.
     """
     if not enabled():
         return
+    import errno
+
     from prometheus_client import CollectorRegistry, multiprocess, start_http_server
 
     directory = os.environ[MULTIPROC_ENV]
     os.makedirs(directory, exist_ok=True)
-    for stale in os.listdir(directory):
-        if stale.endswith(".db"):
-            os.unlink(os.path.join(directory, stale))
 
     registry: CollectorRegistry = CollectorRegistry()
     # `prometheus_client` ships no stubs for the multiprocess helpers. Ignored by CODE
     # rather than blanket-ignored, so a DIFFERENT error here still fails the build.
     multiprocess.MultiProcessCollector(registry)  # type: ignore[no-untyped-call]
-    start_http_server(port, registry=registry)
+    try:
+        start_http_server(port, registry=registry)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        return
+
+    for stale in os.listdir(directory):
+        if stale.endswith(".db"):
+            os.unlink(os.path.join(directory, stale))
 
 
 def mark_dead(pid: int | None = None) -> None:

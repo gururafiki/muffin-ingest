@@ -82,6 +82,54 @@ def test_the_exporter_clears_the_directory_because_stale_files_are_reported_as_c
     )
 
 
+def _run_like(port: int) -> None:
+    """What a Dagster run does: import `definitions.py` (which starts the exporter), then call a
+    provider."""
+    metrics.start_exporter(port)
+    with metrics.request("yfinance") as outcome:
+        outcome["outcome"] = "answered"
+
+
+def test_a_run_inside_a_live_code_location_neither_fails_nor_clears_the_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EVERY RUN RE-IMPORTS THE DEFINITIONS, so every run calls `start_exporter` a second time.
+
+    The first version cleared the directory and then bound the port unconditionally. In production
+    each run therefore deleted the counters already written and then died loading definitions on
+    `OSError: [Errno 98] Address already in use` — every run from 2026-09-13 to 2026-09-16 failed
+    that way, while the exporter's own target read healthy.
+
+    Two children make the two wrong rules disagree. The original rule makes a child exit non-zero;
+    a half-fix that swallows the bind error but still clears FIRST lets the second child delete the
+    first child's counter, so the total reads 1 instead of 2.
+    """
+    monkeypatch.setenv(metrics.MULTIPROC_ENV, str(tmp_path))
+    metrics.start_exporter(19204)  # the code-location parent: binds and owns the directory
+
+    exit_codes = []
+    for _ in range(2):
+        proc = multiprocessing.Process(target=_run_like, args=(19204,))
+        proc.start()
+        proc.join()
+        exit_codes.append(proc.exitcode)
+
+    assert exit_codes == [0, 0], (
+        f"a run died starting the exporter (exit codes {exit_codes}) — the port is already served "
+        "by the code location, and a run must take that as its cue to leave it alone"
+    )
+    body = urllib.request.urlopen("http://127.0.0.1:19204/metrics").read().decode()
+    answered = [
+        float(line.split(" ")[1])
+        for line in body.splitlines()
+        if line.startswith('muffin_ingest_provider_requests_total{outcome="answered"')
+    ]
+    assert answered == [2.0], (
+        f"expected both runs' requests to be counted, got {answered} — a run that clears the "
+        "directory deletes the counters every other process has written"
+    )
+
+
 def test_mark_process_dead_does_not_remove_counter_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

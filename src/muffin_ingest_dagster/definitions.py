@@ -252,6 +252,11 @@ automation = dg.AutomationConditionSensorDefinition(
 # no port. `enabled()` is false wherever `PROMETHEUS_MULTIPROC_DIR` is unset, so the unit tests,
 # `dagster definitions validate` and a local checkout all import this without binding a socket.
 #
+# BUT EVERY RUN IMPORTS THIS MODULE TOO, with the variable inherited — so this line executes once
+# per run as well as once per code-location start. Until `start_exporter` learned to take an
+# already-served port as "I am a run" (see its docstring), every run died here with
+# `OSError: [Errno 98] Address already in use`, from 2026-09-13 to 2026-09-16.
+#
 # `prometheus.yml` has carried the matching scrape job COMMENTED OUT since the service was
 # created, because it pointed at a port nothing listened on: a permanently-red target is the same
 # failure as a permanently-red gate, and the cost is the next real one behind it.
