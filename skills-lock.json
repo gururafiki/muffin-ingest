@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "skills": {
+    "dagster-expert": {
+      "source": "dagster-io/skills",
+      "ref": "v1.13.22",
+      "sourceType": "github",
+      "skillPath": "plugins/dagster/skills/dagster-expert/SKILL.md",
+      "computedHash": "c3f631f1c606a6c90e848508490e5cc04bd193e3c32d32f9f6b1bfa33ccc380f"
+    }
+  }
+}
