@@ -276,13 +276,13 @@ def index_return(
     # with itself. Partitions are visited oldest first, so the newest fetch of a day is kept.
     latest: dict[str, dict[date, prices.Bar]] = {}
     outside_window = 0
+    null_closes = 0
     for row in (
         r for part in partitioned.rows_per_partition(context, raw_index_bars).values() for r in part
     ):
         # THE PROVIDER'S OWN DATE, PARSED HERE. Raw carries the vendor's `date` untouched.
         trade_date = prices.row_date(row)
-        close = row.get("close")
-        if trade_date is None or not isinstance(close, int | float) or isinstance(close, bool):
+        if trade_date is None:
             continue
         # ONLY THE TOP IS CUT. Everything before the window's end is the lookback the long periods
         # need; what must go is the bar for a day the partition does not cover, which for a daily
@@ -290,8 +290,17 @@ def index_return(
         if trade_date >= window[1].date():
             outside_window += 1
             continue
+        # A SESSION INSIDE THE WINDOW CAN STILL HAVE NO CLOSE. yfinance sent `close: NaN` for 09-16
+        # to the run at 00:00:34 UTC on 09-17, for 60 of 61 proxies. A bare `isinstance` admitted
+        # it as the newest bar, `_eligible` refused each whole series on `isfinite`, and 60 scopes
+        # kept serving 09-15 behind `with_returns=1`. Refused here, the return comes from the last
+        # session that has a close — stamped with that session's date — and the count says so.
+        close = prices.close_of(row)
+        if close is None:
+            null_closes += 1
+            continue
         latest.setdefault(str(row["index_code"]), {})[trade_date] = prices.Bar(
-            trade_date=trade_date, close=float(close), dividend=row.get("dividend")
+            trade_date=trade_date, close=close, dividend=row.get("dividend")
         )
     series = {
         code: sorted(days.values(), key=lambda b: b.trade_date) for code, days in latest.items()
@@ -343,6 +352,9 @@ def index_return(
             "sector_rows": len(sectors),
             "unmapped_labels": len(unmapped),
             "outside_window": outside_window,
+            # Non-zero on a scheduled night is expected, not a defect: a session the provider has
+            # not closed yet. It is the count that makes a `with_returns` drop explicable.
+            "null_closes": null_closes,
         }
     )
     return out

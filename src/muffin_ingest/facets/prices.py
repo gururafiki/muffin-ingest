@@ -19,6 +19,7 @@ THREE SHAPES THE PROVIDER RESPONSE HAS THAT LOOK LIKE ONE:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -56,13 +57,24 @@ def _positive(value: Any) -> float | None:
     A ZERO CLOSE IS NOT A PRICE, and admitting one is not a small error: it yields -100% on every
     period at once, which was a 1,078-row defect. Booleans are refused explicitly because `bool` is
     an `int` in Python and `True` would otherwise store as 1.0.
+
+    FINITE AS WELL, because yfinance sends `close: NaN` for a session it has not closed yet — 60 of
+    61 index proxies at 00:00:34 UTC on 2026-09-17, with open/high/low/volume populated. NaN is a
+    `float`, so a bare type check admits it, and Postgres cannot refuse it later: `'NaN'::numeric`
+    sorts above every number, so `close > 0` holds. `inf > 0` holds too.
     """
     if value is None or isinstance(value, bool):
         return None
     if not isinstance(value, int | float):
         return None
     number = float(value)
-    return number if number > 0 else None
+    return number if math.isfinite(number) and number > 0 else None
+
+
+def close_of(row: Mapping[str, Any]) -> float | None:
+    """The one rule for what counts as a close in a provider row. Every lane reads it from here,
+    because each hand-written copy of it admitted NaN."""
+    return _positive(row.get("close"))
 
 
 def _optional_number(value: Any) -> float | None:
@@ -81,7 +93,7 @@ def bar_from(row: Mapping[str, Any], sole_symbol: str) -> tuple[str, Bar] | None
     which is the single-symbol case, not an error.
     """
     trade_date = _as_date(row.get("date"))
-    close = _positive(row.get("close"))
+    close = close_of(row)
     if trade_date is None or close is None:
         return None
 
@@ -311,12 +323,13 @@ def normalise(
     """
     out: list[dict[str, Any]] = []
     for row in rows:
-        close = row.get("close")
+        # `close <= 0` USED TO BE THE CHECK HERE, and it is false for NaN — see `close_of`.
+        close = close_of(row)
         security_id = row.get("security_id")
         # THE DATE IS PARSED HERE, FROM THE PROVIDER'S OWN FIELD. Raw carries the vendor's `date`
         # untouched; turning it into a `trade_date` is an interpretation and belongs downstream.
         parsed = row_date(row)
-        if security_id is None or parsed is None or not isinstance(close, int | float):
+        if security_id is None or parsed is None or close is None:
             continue
         # AND THE WINDOW IS APPLIED HERE TOO. The provider widens a degenerate range and can
         # return a session still in progress; both used to be filtered at fetch, which threw the
@@ -324,13 +337,11 @@ def normalise(
         if window is not None and not (window[0] <= parsed < window[1]):
             continue
         trade_date = parsed.isoformat()
-        if isinstance(close, bool) or close <= 0:
-            continue
         out.append(
             {
                 "security_id": security_id,
                 "trade_date": trade_date,
-                "close": float(close),
+                "close": close,
                 "volume": row.get("volume"),
                 "currency_code": currencies.get(str(security_id)),
                 "source_code": source_code,

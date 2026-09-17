@@ -84,10 +84,17 @@ def test_a_batched_response_is_attributed_by_its_own_symbol_column() -> None:
     assert set(bars_by_symbol(rows, "IGNORED")) == {"AAPL", "MSFT"}
 
 
-@pytest.mark.parametrize("close", [0, -1, None, "12.0", True])
+@pytest.mark.parametrize(
+    "close", [0, -1, None, "12.0", True, float("nan"), float("inf"), float("-inf")]
+)
 def test_a_close_that_is_not_a_positive_number_is_not_a_bar(close: object) -> None:
     """A zero close yields -100% on EVERY period at once — a 1,078-row defect. `True` is refused
-    explicitly because bool is an int in Python and would otherwise store as 1.0."""
+    explicitly because bool is an int in Python and would otherwise store as 1.0.
+
+    NaN is a `float`, and yfinance sends one for a session it has not closed yet: measured
+    2026-09-17 at 00:00:34 UTC, 60 of 61 index proxies came back for 09-16 with open/high/low/volume
+    and `close: NaN`. `NaN > 0` is false, so it was already refused here; `inf > 0` is true, and it
+    was not."""
     assert bar_from({"date": "2026-09-09", "close": close}, "X") is None
 
 
