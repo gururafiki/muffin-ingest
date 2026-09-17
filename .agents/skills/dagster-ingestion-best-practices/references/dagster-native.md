@@ -11,7 +11,7 @@ project environment.
 |---|---|---|
 | A table or raw dataset | `@dg.asset`, one per table; `@dg.multi_asset` only when one computation writes tables together | ops and jobs as the unit |
 | Run on a clock | `ScheduleDefinition`, `build_schedule_from_partitioned_job` | pg_cron, cron offsets |
-| Run after upstream changes | `AutomationCondition.eager()` **and** the automation sensor declared RUNNING in code — Dagster ships it stopped | chained schedules |
+| Run after upstream changes | `AutomationCondition.eager()` **and** the automation sensor declared RUNNING in code — Dagster ships it stopped. Eager also needs **no upstream partition missing**, so it never fires for an unpartitioned asset over a partition set that is never complete (`security_return`; open: `docs/deferred/2026-09-17-security-return-never-auto-materialises.md`). Why it did not fire: `dagster.asset_daemon_asset_evaluations` | chained schedules |
 | New subjects appear | a sensor issuing `AddDynamicPartitionsRequest` | backlog views |
 | What was asked / what is missing | partition status; backfill over missing partitions | `pending_*` views, `%_missing_at` columns |
 | One caller per provider | `pool="<provider>"` at limit 1 | mutex tables |
@@ -65,6 +65,12 @@ tables or data bigger than memory, use a resource and `deps`.
 - State budgets in the unit the **vendor** sees: openbb's yfinance adapter asks once per symbol, so
   batching lowers our call count, not theirs.
 - Raising a pool above 1 makes in-run pacing N× looser — note it beside the pool.
+- **`granularity: run` holds every pool a run names for the whole run.** Every stage-2 asset and the
+  heartbeat share `sql`, so one long run queues every lane. Measured: the heartbeat ran 111 s late
+  behind `daily_prices` (open: `docs/deferred/2026-09-16-sql-pool-run-granularity-blocks-every-lane.md`).
+- Pace to what the vendor tolerates **per minute**, not per run. One observation each: a nightly run
+  at ~42 calls/min was refused at call 329, and a backfill at ~14/min finished 601 calls. That is a
+  starting point, not a known limit.
 
 ## Dependency isolation
 

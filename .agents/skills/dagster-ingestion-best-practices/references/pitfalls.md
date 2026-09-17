@@ -33,6 +33,11 @@ recorded as having answered nothing when not one had been asked, because openbb 
 the image. **`transport` and `empty` are different outcomes.** Folding "no answer" into "answered
 with nothing" is the most expensive confusion this codebase has.
 
+**Sum the outcome counters against `subjects`; a gap is a branch that forgot to count.** The 09-16
+price partition reported `answered=5974 empty=586 throttled=1 unasked=0` of 12,017. The throttle
+branch broke out of the loop without counting the rest, so 5,437 securities were never asked and the
+"every subject was asked" check passed (fixed in #40). Assert the sum in a test that stops mid-run.
+
 ## Do not let a guard check the wrong gate
 
 `every-table-is-reachable` asked `has_table_privilege` — a question about grants — and passed while
@@ -66,6 +71,12 @@ statement about the provider, and is how the degenerate range was found.
 A "close" that is not a close looks exactly like one; the old pipeline's disagreements were
 overwhelmingly this (the stored value sits *inside* that session's own high and low). History must end
 before today for the same reason.
+
+**A session that has ended can still have no close.** At 00:00:34 UTC, four hours after the US close,
+yfinance returned 09-16 for 60 of 61 proxies with open/high/low/volume and **`close: NaN`**. NaN is a
+`float`, so a type check admits it. Postgres cannot backstop it: `numeric` stores `'NaN'` and sorts
+it above every number, so `CHECK (close > 0)` passes. Read every close through the one
+finite-and-positive rule, `prices.close_of`, and count the refusals (`null_closes`).
 
 ## Do not window the flattened run — publish each partition from its own file
 
@@ -163,6 +174,10 @@ whole body — including `meta` — as the fixture.
 Stamp from the last input used, anchor windows on the data, cut a series at both ends of the window,
 and where a source has no date, record when it was **read** in the raw artifact.
 
+Disguise 1 is still live: the finviz sector snapshot stores `taken = date.today()` as `as_of`, so the
+00:00 UTC run files the US session under the next day (open:
+`docs/deferred/2026-09-17-sector-snapshot-dated-by-the-clock.md`).
+
 ## A source that cannot be asked about a past day must not be date-partitioned
 
 finviz answers "as of now" with no date. The obvious guard — refuse a partition whose window has
@@ -177,6 +192,10 @@ has nothing for: two rounds rewrote the same 139,7xx rows while progress sat sti
 `instance.get_materialized_partitions(asset_key)`. Count partitions materialized, not rows that look
 right. **Caveat:** runs older than 90 days are pruned with their events — see
 [dagster-native.md](dagster-native.md#dagster-state-has-a-retention-period).
+
+**Partition metadata from a `single_run` range is the run's, not the partition's.** Every partition of
+a four-day FX retry read `rows=82`, including a Sunday with no rates. Find empty days by counting the
+table per date.
 
 ## Do not map a many-to-one relation with a dict comprehension
 
@@ -212,7 +231,15 @@ it is behavioural — the window filter's count moves.
 
 ## Shipping
 
-- A roll restarts the code location and **kills in-flight runs** (runs are its subprocesses) — roll
-  deliberately.
+- A roll restarts the code location and **kills in-flight runs**: `DefaultRunLauncher` starts each
+  run as a `multiprocessing` child of the code server (`dagster/_grpc/server.py`, `StartRun`), and
+  `run_monitoring` is off. Wait for long runs, and look for runs left `STARTED` afterwards.
+- **Verify the first scheduled night, not only the backfill.** The 09-16 recovery backfills ran at
+  noon over settled sessions at ~14 calls/min, and all passed. The first night at 00:00 UTC succeeded
+  on every run and published half a price day (throttled at ~42 calls/min), 1 of 61 index scopes
+  (NaN closes) and no FX (a stale cache body). Read the counters of the first scheduled run.
+- **A backfill range must cover every missing partition.** One day left outside it (09-11) kept
+  `security_return`'s `eager()` blocked; list missing partitions from Dagster before choosing the
+  range.
 - The roll is safe because `image_ingest` is the moving `:latest` tag everywhere it is set; pin it to a
   sha and the next deploy silently undoes a roll.
