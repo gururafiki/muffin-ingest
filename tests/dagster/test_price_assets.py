@@ -177,6 +177,35 @@ def test_a_throttle_stops_the_run_and_marks_nothing(tmp_path: Path) -> None:
     assert m["rows"] == 0
 
 
+def test_a_throttle_halfway_counts_every_subject_it_never_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A DAY PARTITION CLAIMS ITS WHOLE CROSS-SECTION, and the throttle branch hid half of one.
+
+    Measured on the 2026-09-16 partition: yfinance refused call 329 of ~601, the loop broke, and the
+    run reported `answered=5974 empty=586 throttled=1 unasked=0` against 12,017 subjects — 5,437
+    securities never asked, the partition materialised as complete, and
+    `every_askable_security_was_asked` passed. The budget and transport branches both counted the
+    remainder; this one did not. A refused ask is not an answer, so its batch counts as unasked.
+    """
+    monkeypatch.setattr(asset_prices.PROVIDER, "batch_size", 1)
+    monkeypatch.setattr(asset_prices.PROVIDER, "min_seconds_between_calls", 0.0)
+    calls: list[list[str]] = []
+
+    def answers_once_then_refuses(symbols: Sequence[str], **kw: Any) -> Answer:
+        calls.append(list(symbols))
+        if len(calls) > 1:
+            raise ProviderRefused("equity.price.historical: YFRateLimitError: Too Many Requests")
+        return bars_for(symbols)
+
+    m = meta(materialise(tmp_path, answers_once_then_refuses), asset_prices.raw_price_bars)
+    assert (m["subjects"], m["answered"], m["throttled"]) == (2, 1, 1)
+    assert m["unasked"] == 1, "the refused batch and everything after it were never answered"
+    accounted = m["answered"] + m["empty"] + m["dead"] + m["transport"] + m["unasked"]
+    missing = m["subjects"] - accounted
+    assert missing == 0, f"{missing} subjects fell out of every count"
+
+
 def test_an_empty_day_still_materialises(tmp_path: Path) -> None:
     """A market holiday produces no bars, and the partition is still a fact we collected."""
     result = materialise(tmp_path, lambda symbols, **kw: Answer(rows=[]))
@@ -200,8 +229,13 @@ def test_normalisation_carries_the_currency_it_has_and_withholds_the_one_it_does
     assert all(r["source_code"] == "yfinance" for r in rows)
 
 
-@pytest.mark.parametrize("close", [0, -1, None, "100.0", True])
+@pytest.mark.parametrize(
+    "close", [0, -1, None, "100.0", True, float("nan"), float("inf"), float("-inf")]
+)
 def test_normalisation_refuses_a_close_that_is_not_a_positive_number(close: object) -> None:
+    """NaN IS THE ONE THAT MATTERED, AND IT PASSED: `close <= 0` is false for NaN, and
+    `price_bar_close_positive` cannot stop it either, because Postgres sorts `'NaN'::numeric` above
+    every number — so a session yfinance has not closed yet would be stored as a bar."""
     from muffin_ingest.facets import prices
 
     # A CONTROL ROW BESIDE THE BAD ONE, and the first version had none. Its raw row carried no

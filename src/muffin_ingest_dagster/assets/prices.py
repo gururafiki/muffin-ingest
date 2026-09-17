@@ -330,7 +330,17 @@ def _collect(
         )
         if verdict.throttled_out:
             stats["throttled"] += 1
-            context.log.warning("provider is refusing us; stopping rather than marking anything")
+            # THE REST IS UNASKED, AND THIS BRANCH FORGOT TO SAY SO while the budget and transport
+            # branches both did. Measured on the 2026-09-16 partition: refused at call 329 of ~601,
+            # reported `unasked=0`, so 5,437 of 12,017 securities were never asked, the partition
+            # materialised as complete and `every_askable_security_was_asked` passed. A refused
+            # ask is not an answer, so the refused batch counts too.
+            stats["unasked"] += len(subjects) - i
+            context.log.warning(
+                "provider is refusing us; stopping with %s subjects unasked rather than marking "
+                "anything",
+                stats["unasked"],
+            )
             break
 
         # GROUPED, NOT NARROWED. `bars_by_symbol` parses each provider row into a `Bar` so the

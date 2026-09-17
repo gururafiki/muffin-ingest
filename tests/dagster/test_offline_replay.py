@@ -624,6 +624,80 @@ def test_the_index_lane_cuts_the_TOP_of_its_lookback_series(tmp_path: Path) -> N
     )
 
 
+def test_a_session_the_provider_has_not_closed_is_not_the_newest_bar(tmp_path: Path) -> None:
+    """A NaN CLOSE IS A FLOAT, AND IT TOOK SIXTY COUNTRIES' RETURNS WITH IT.
+
+    Measured 2026-09-17: the scheduled run fired at 00:00:34 UTC, four hours after the US close, and
+    yfinance returned the 09-16 session for 60 of 61 proxies with open/high/low/volume populated and
+    `close: NaN`. `isinstance(close, float)` admitted it as the newest bar, `_eligible` then refused
+    each whole series on `isfinite`, and the run reported `with_returns=1` while 60 scopes kept
+    serving 09-15. The backfill a few hours earlier never met it: by then 09-15 had long settled.
+
+    The unclosed session is refused like any other unusable close, so a return still comes from the
+    last session that HAS one — and is stamped with that session's date, never the partition's.
+    """
+    from muffin_ingest.facets import indices as facet_indices
+    from muffin_ingest.providers import openbb as hub
+    from muffin_ingest.providers.openbb import Answer
+    from muffin_ingest_dagster.assets import indices as asset_indices
+
+    key = "2026-09-10"
+    days = [date(2026, 8, 1) + timedelta(days=n) for n in range(41)]
+    assert days[-1] == date(2026, 9, 10)
+
+    def unclosed_today(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        return Answer(
+            rows=[
+                {
+                    "symbol": "EWZ",
+                    "date": d.isoformat(),
+                    "open": 30.0,
+                    "close": float("nan") if d == days[-1] else 30.0 + n / 10,
+                }
+                for n, d in enumerate(days)
+            ]
+        )
+
+    def no_sectors(provider: str = "finviz") -> Answer:
+        return Answer(rows=[])
+
+    resources = {
+        "postgres": FxPostgres(),
+        "parquet_io": ParquetIOManager(str(tmp_path)),
+        "postgres_io": CapturingPostgresIO(),
+    }
+    CAPTURED_WRITES.clear()
+    saved = hub.price_history, hub.sector_performance, facet_indices.proxied_scopes
+    hub.price_history = unclosed_today
+    hub.sector_performance = no_sectors
+    facet_indices.proxied_scopes = lambda conn: [("country:BR", "EWZ")]
+    try:
+        dg.materialize([asset_indices.raw_index_bars], partition_key=key, resources=resources)
+        dg.materialize([asset_indices.raw_sector_performance], resources=resources)
+        result = dg.materialize(
+            [
+                asset_indices.raw_index_bars,
+                asset_indices.raw_sector_performance,
+                asset_indices.index_return,
+            ],
+            selection=[asset_indices.index_return],
+            partition_key=key,
+            resources=resources,
+        )
+    finally:
+        hub.price_history, hub.sector_performance, facet_indices.proxied_scopes = saved
+
+    assert result.success
+    stamped = {r["as_of"] for batch in CAPTURED_WRITES for r in batch}
+    assert stamped == {"2026-09-09"}, (
+        f"returns stamped {sorted(stamped)} — an unclosed session must fall back to the last "
+        f"close, not withhold every period for the scope"
+    )
+    events = result.asset_materializations_for_node(asset_indices.index_return.op.name)
+    metadata = {k: v.value for k, v in events[0].metadata.items()}
+    assert (metadata["with_returns"], metadata["null_closes"]) == (1, 1)
+
+
 def test_a_range_of_exactly_one_partition_is_written_as_one_partition(tmp_path: Path) -> None:
     """A RANGE OF ONE IS NOT A RANGE, AND THE I/O MANAGER DISAGREES ABOUT WHICH IT IS.
 
