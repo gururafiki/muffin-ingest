@@ -709,6 +709,74 @@ def test_the_automation_sensor_is_declared_and_running() -> None:
     )
 
 
+def test_security_return_rebuilds_when_daily_bars_land_whatever_else_is_missing() -> None:
+    """EAGER NEVER FIRED IN PRODUCTION, AND THE SENSOR WAS ONLY THE FIRST REASON.
+
+    Every `security_return` materialisation on record was a hand-run. The daemon's own evaluation
+    on 2026-09-17 said why: deps updated since last handled was TRUE, and `~any_deps_missing` was
+    FALSE. An unpartitioned asset depends on EVERY upstream partition — `price_bar` lacked one day,
+    and `price_bar_history` has unfilled `security` keys by design — so the condition waited for a
+    state Lane B never reaches.
+
+    Decided 2026-09-17: rebuild whenever the daily bars land, whatever is missing, and let the
+    history lane neither trigger nor block (a multi-day history backfill counts as in progress for
+    its whole length). The sequence below is production's: built once by hand, earlier days
+    missing, a history key unfilled, then one new day of bars.
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    instance = dg.DagsterInstance.ephemeral()
+    instance.add_dynamic_partitions(asset_prices.SECURITY_PARTITION, [SUBJECTS[0][0]])
+    selection = dg.AssetSelection.assets(asset_prices.security_return)
+    key = asset_prices.security_return.key
+
+    def tick(cursor: Any = None) -> Any:
+        return dg.evaluate_automation_conditions(
+            d.defs, instance, asset_selection=selection, cursor=cursor
+        )
+
+    first = tick()
+    instance.report_runless_asset_event(dg.AssetMaterialization(asset_key=key))
+    quiet = tick(first.cursor)
+    assert quiet.get_num_requested(key) == 0, "nothing upstream changed, so nothing to rebuild"
+
+    newest = asset_prices.trading_day.get_last_partition_key()
+    assert newest is not None
+    instance.report_runless_asset_event(
+        dg.AssetMaterialization(asset_key=asset_prices.price_bar.key, partition=newest)
+    )
+    after_bars = tick(quiet.cursor)
+    assert after_bars.get_num_requested(key) == 1, (
+        "a day of bars landed while earlier days and history keys were missing — exactly the "
+        "production state in which eager() refused"
+    )
+
+    instance.report_runless_asset_event(dg.AssetMaterialization(asset_key=key))
+    settled = tick(after_bars.cursor)
+    instance.report_runless_asset_event(
+        dg.AssetMaterialization(
+            asset_key=asset_prices.price_bar_history.key, partition=SUBJECTS[0][0]
+        )
+    )
+    after_history = tick(settled.cursor)
+    assert after_history.get_num_requested(key) == 0, (
+        "the history lane is ignored: its bars reach returns with the next daily rebuild"
+    )
+
+
+def test_the_heartbeat_waits_on_no_pool() -> None:
+    """THE CANARY MUST NOT QUEUE BEHIND THE WORK IT WATCHES.
+
+    It shared `sql` with every stage-2 asset at run granularity, so it started 111 s late behind
+    `daily_prices` on 2026-09-17 and sat QUEUED behind a 40-minute recovery run the same morning.
+    Behind a multi-hour run its 3-hour freshness window would read as a dead daemon. It is a
+    five-second read, not a writer, so it takes no pool (decided 2026-09-17).
+    """
+    from muffin_ingest_dagster import definitions as d
+
+    assert d.ledger_health.op.pool is None
+
+
 def test_every_collection_schedule_is_running() -> None:
     """They shipped STOPPED deliberately — a schedule spending the provider budget on numbers
     nobody had compared was the wrong default — and the comparison has now happened.

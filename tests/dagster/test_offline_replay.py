@@ -461,6 +461,54 @@ def test_the_fx_spot_lane_keeps_only_its_own_partition_s_day(tmp_path: Path) -> 
     )
 
 
+def test_a_stale_body_fails_a_weekday_fx_partition_instead_of_publishing_nothing(
+    tmp_path: Path,
+) -> None:
+    """A MATERIALISED PARTITION IS A COMPLETENESS CLAIM, AND AN EMPTY WEEKDAY IS NOT ONE.
+
+    http-cache served the 2026-09-17 00:00 run the body it had cached a day earlier, so every point
+    fell before the 09-16 window: `rows=0, outside_window=152`, and the partition materialised as a
+    day with no exchange rates. FX trades every weekday, so a weekday with no rate inside its window
+    from bodies that DO carry rates is a stale answer. It fails, naming the partition, so a retry is
+    visible and nothing claims the day.
+
+    A weekend is the control: no session, so the same shape is a true empty day and must succeed.
+    Known edge, accepted: 25 Dec and 1 Jan have no session either and will fail, loudly.
+    """
+    from muffin_ingest_dagster.assets import fx as asset_fx
+
+    resources = {
+        "postgres": FxPostgres(),
+        "parquet_io": ParquetIOManager(str(tmp_path)),
+        "postgres_io": CapturingPostgresIO(),
+    }
+    yesterdays_cache = chart_body([(date(2026, 9, 14), 1.16), (date(2026, 9, 15), 1.17)])
+
+    CAPTURED_WRITES.clear()
+    with serving(yesterdays_cache):
+        weekday = dg.materialize(
+            [asset_fx.raw_fx_spot, asset_fx.fx_rate],
+            partition_key="2026-09-16",
+            resources=resources,
+            raise_on_error=False,
+        )
+    assert not weekday.success, "a weekday with no rate inside its window must not materialise"
+    failures = [e for e in weekday.all_events if e.event_type_value == "STEP_FAILURE"]
+    assert failures and "2026-09-16" in str(failures[0].event_specific_data), (
+        "the failure names the partition, so the retry is obvious"
+    )
+    assert CAPTURED_WRITES == [], "nothing is written for a failed day"
+
+    friday_close = chart_body([(date(2026, 9, 10), 1.16), (date(2026, 9, 11), 1.17)])
+    with serving(friday_close):
+        saturday = dg.materialize(
+            [asset_fx.raw_fx_spot, asset_fx.fx_rate],
+            partition_key="2026-09-12",
+            resources=resources,
+        )
+    assert saturday.success, "a weekend has no session, so an empty day there is the truth"
+
+
 class FxConn:
     """Answers the one query `raw_fx_spot` makes."""
 

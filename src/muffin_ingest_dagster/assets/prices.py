@@ -640,7 +640,20 @@ class ReturnsRun(dg.Config):
 
 @dg.asset(
     deps=[price_bar, price_bar_history],
-    automation_condition=dg.AutomationCondition.eager(),
+    # EAGER, MINUS THE GATE THAT MADE IT NEVER FIRE, AND DEAF TO THE HISTORY LANE.
+    #
+    # Plain `eager()` requires that NO upstream partition is missing, and an unpartitioned asset
+    # depends on every one. `price_bar_history` has unfilled `security` keys by design, so every
+    # production materialisation of this asset was a hand-run. The daemon's evaluation on
+    # 2026-09-17 named `~any_deps_missing` as the false branch.
+    #
+    # The history lane is IGNORED rather than merely allowed: a multi-day history backfill counts
+    # as "in progress" for its whole length and would hold every nightly rebuild. Its bars still
+    # arrive, because this asset reads the whole table and the next daily rebuild picks them up.
+    # Lineage keeps both dependencies. Decided 2026-09-17.
+    automation_condition=dg.AutomationCondition.eager()
+    .without(~dg.AutomationCondition.any_deps_missing())
+    .ignore(dg.AssetSelection.assets(price_bar_history)),
     pool="sql",
     io_manager_key="postgres_io",
     group_name="prices",

@@ -235,12 +235,29 @@ def fx_rate(
     # partition that claims it.
     rates: list[fx.Rate] = []
     stats: dict[str, int] = {}
+    stale: list[str] = []
     for key, part in partitioned.rows_per_partition(context, raw_fx_spot).items():
         day = fx_day.time_window_for_partition_key(key)
         parsed = fx.normalise(part, window=(day.start.date(), day.end.date()))
+        # A WEEKDAY WITH NO RATE INSIDE ITS WINDOW, FROM BODIES THAT DO CARRY RATES, IS A STALE
+        # ANSWER, not a day without FX. http-cache served the 2026-09-17 00:00 run a body cached a
+        # day earlier: `rows=0, outside_window=152`, and the partition materialised as a day with
+        # no rates. FX trades every weekday; a weekend has no session, so there the same shape is
+        # the truth. Accepted edge: 25 Dec and 1 Jan have no session and will fail, loudly.
+        if not parsed.rates and parsed.stats.get("outside_window", 0) and day.start.weekday() < 5:
+            stale.append(key)
         rates += parsed.rates
         for name, count in parsed.stats.items():
             stats[name] = stats.get(name, 0) + count
+    if stale:
+        raise dg.Failure(
+            description=(
+                f"no rate inside the window of weekday partition(s) {', '.join(stale)} while the "
+                f"stored bodies carry rates for other days: a stale or cached answer. "
+                f"Re-materialise raw_fx_spot and fx_rate for them."
+            ),
+            metadata={"stale_partitions": ", ".join(stale), **stats},
+        )
     with_subunits = fx.with_subunits(rates)
 
     context.add_output_metadata(
