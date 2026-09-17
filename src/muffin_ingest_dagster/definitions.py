@@ -43,7 +43,10 @@ from muffin_ingest_dagster.retention import nightly_pruning, prune_dagster_stora
     group_name="ledger",
     description="The ingest ledger is reachable and answers. Proves the code location can see the "
     "database, which is the one thing a smoke asset should establish.",
-    pool="sql",
+    # NO POOL: THE CANARY MUST NOT QUEUE BEHIND THE WORK IT WATCHES. On `sql` at run granularity it
+    # started 111 s late behind `daily_prices` (2026-09-17) and sat QUEUED behind a 40-minute
+    # recovery run, so any multi-hour run would turn its 3-hour window red and read as a dead
+    # daemon. It is three counts, not a writer.
     kinds={"postgres"},
     # HOURLY SCHEDULE, SO THREE HOURS IS TWO MISSED TICKS. This is the canary for the whole code
     # location — if it stops, the daemon or the database connection has gone, and every other
@@ -272,8 +275,8 @@ defs = dg.Definitions(
         # Lane B: history and repair, per security.
         prices.raw_price_history,
         prices.price_bar_history,
-        # Derived from the bars, eager on both lanes — no cron offset, which is what the old
-        # system's :24/:54/:14 choreography was for.
+        # Derived from the bars, rebuilt when the daily lane lands (history is picked up by that
+        # rebuild) — no cron offset, which is what the old :24/:54/:14 choreography was for.
         prices.security_return,
         # FX, in the same two lanes — a daily cross-section that claims completeness, and a
         # per-currency history whose subject IS the slice.

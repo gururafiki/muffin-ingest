@@ -68,6 +68,15 @@ class SecProvider:
         return Outcome.DEAD_SUBJECT if no_data_for_subject(error) else Outcome.TRANSPORT
 
 
+def test_the_nightly_price_lane_is_paced_under_what_yfinance_refused() -> None:
+    """yfinance refused the 2026-09-17 night at call 329, asked at ~42 calls/min (a 1.0 s spacing
+    against ~1.4 s calls). Two runs at ~14-15 calls/min finished 601 calls unthrottled. Spacing is
+    between call STARTS, so it caps the rate however fast a call returns (decided 2026-09-17)."""
+    from muffin_ingest.providers.yfinance import Yfinance
+
+    assert 60 / Yfinance.min_seconds_between_calls <= 15
+
+
 def test_the_two_providers_want_different_names_for_the_same_company() -> None:
     """The whole reason this seam exists."""
     assert PriceProvider().spell(BERKSHIRE) == "BRK-B"

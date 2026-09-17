@@ -50,15 +50,16 @@ class Yfinance:
     #: exactly one process is calling it and there is no contention to coordinate. A token bucket in
     #: Postgres would be arbitrating between runs that cannot overlap.
     #:
-    #: DENOMINATED IN CALLS, WHICH IS NOT THE SAME AS SYMBOLS. One call of twenty symbols is twenty
-    #: Yahoo requests issued serially inside `yf.download(..., threads=False)`, each measured at
-    #: ~0.67 s — so a batch already paces itself at roughly one request a second, and this interval
-    #: is the gap BETWEEN batches. Setting it from a symbol rate would double-count the provider's
-    #: own serialisation.
+    #: DENOMINATED IN CALLS, and it is the spacing between call STARTS, so it caps the rate however
+    #: fast a call returns. That matters, because a one-day window is fast: on 2026-09-17 the
+    #: nightly run made 329 calls in 467 s (~1.4 s each, not the ~13 s that "twenty serial requests
+    #: at 0.67 s" once predicted) and yfinance refused call 329 at ~42 calls/min. Two backfills at
+    #: ~14-15 calls/min finished 601 calls unthrottled. 4 s is that rate: a night takes ~40 min.
+    #: One observation each, so re-measure `throttled` over the next nights before tuning it.
     #:
     #: IF THE POOL IS EVER WIDENED PAST 1, THIS SILENTLY BECOMES N TIMES LOOSER. That is the one
     #: thing to remember about it, and it belongs at the pool as much as here.
-    min_seconds_between_calls = 1.0
+    min_seconds_between_calls = 4.0
 
     def spell(self, security: SecurityRef) -> str | None:
         """The PROVIDER symbol, and never the US ticker when a provider symbol exists.
