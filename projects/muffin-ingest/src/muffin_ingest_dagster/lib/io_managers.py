@@ -218,6 +218,23 @@ class ParquetIOManager(dg.UPathIOManager):
         )
         return merged
 
+    def stored_rows_for(
+        self, asset_key: dg.AssetKey, partition_key: str
+    ) -> Sequence[Mapping[str, Any]]:
+        """What a partition already holds, asked OUTSIDE a run's output context.
+
+        An asset that extends rather than replaces has to know how far it got BEFORE it fetches,
+        and Dagster offers nothing for it: self-dependency (`TimeWindowPartitionMapping`) is
+        time-window only, so it cannot express "this same subject partition, as it was before".
+
+        THE PATH IS BUILT HERE AND WRITTEN BY `UPathIOManager`, WHICH IS A DRIFT WAITING TO HAPPEN —
+        an expensive one, because a lookup that silently misses reads as "nothing stored" and makes
+        the asset re-fetch a whole history it already had. `test_the_public_lookup_reads_what_the_
+        manager_wrote` drives the real seam and compares, so the two cannot diverge unnoticed.
+        """
+        path = self._base_path.joinpath(*asset_key.path, partition_key)
+        return self._stored_rows(self._with_extension(path))
+
     def _stored_rows(self, path: UPath) -> Sequence[Mapping[str, Any]]:
         """What the partition already holds, or nothing if it holds nothing yet."""
         import pyarrow.parquet as pq
@@ -240,6 +257,26 @@ class ParquetIOManager(dg.UPathIOManager):
             return []
         rows: list[dict[str, Any]] = table.to_pylist()
         return rows
+
+
+class RawStore(dg.ConfigurableResource):  # type: ignore[type-arg]
+    """Read-only access to what a raw partition already holds, for an asset that EXTENDS it.
+
+    A thin Pythonic wrapper rather than a second implementation: it delegates to `ParquetIOManager`,
+    so there is exactly one path convention and the read cannot drift from the write. It exists at
+    all because Dagster will not mix `required_resource_keys` with typed resource parameters on one
+    asset — *"Cannot specify resource requirements in both @asset decorator and as arguments to the
+    decorated function"* — and a `UPathIOManager` passed as a typed parameter is read as an asset
+    INPUT, failing with `Input asset "["raw_store"]" is not produced by any of the provided asset
+    ops`, which names neither the resource nor the cause.
+    """
+
+    base_path: str
+
+    def stored_rows_for(
+        self, asset_key: dg.AssetKey, partition_key: str
+    ) -> Sequence[Mapping[str, Any]]:
+        return ParquetIOManager(base_path=self.base_path).stored_rows_for(asset_key, partition_key)
 
 
 class PostgresIOManager(dg.ConfigurableIOManager):

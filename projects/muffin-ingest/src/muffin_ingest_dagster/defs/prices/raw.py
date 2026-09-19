@@ -21,6 +21,7 @@ from muffin_ingest_dagster.defs.prices.partitions import (
     trading_day,
 )
 from muffin_ingest_dagster.lib import partitioned
+from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
@@ -441,10 +442,34 @@ def raw_price_bars(context: AssetExecutionContext, config: PriceRun, postgres: P
     # as intended, and this codebase has twice paid for a gate left red for a reason nobody acts
     # on: the cost is never the ignored check, it is the next true positive behind it.
     #
-    # "Is this subject loaded?" is answered by the PARTITION GRID, not by a clock.
-    description="Full history for these securities. Idles at zero; the load is one backfill.",
+    # "Is this subject loaded?" is answered by the PARTITION GRID, not by a clock — and since
+    # 2026-09-19 that grid is durable, because the job that pruned the event log behind it was
+    # retired for exactly this reason.
+    #
+    # THE PARTITION EXTENDS RATHER THAN BEING REPLACED. Without `merge_on` a run that fetched only
+    # the days since the watermark would write those days ALONE over ten years of stored bars — the
+    # extension deleting the history it was extending. The key is the provider's own `date` beside
+    # our `security_id`; both are on every row `prices.raw_rows` emits, and a `datetime.date`
+    # survives the Parquet round trip as a `datetime.date`, which is what makes it safe to key on.
+    metadata={"merge_on": ["security_id", "date"]},
+    description="Each security's bars, extended from where its own partition left off.",
 )
-def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres: Postgres) -> Any:
+def raw_price_history(
+    context: AssetExecutionContext, config: PriceRun, postgres: Postgres, raw_store: RawStore
+) -> Any:
+    """Each security, from where its own partition left off.
+
+    TWO COHORTS, NOT ONE WINDOW PER SUBJECT, and the reason is that a window costs bytes rather
+    than requests: the vendor is asked ONCE PER SYMBOL whatever range we name (measured — four
+    symbols produced six `/v8/finance/chart/<ticker>` requests), so widening a batch's window buys
+    no extra call and narrowing it saves none. What a window does bound is MEMORY, which is the
+    real constraint here: twelve symbols at full history measured 11.6 MB of JSON.
+
+    So a security that has never been collected is asked for everything, and one that has is asked
+    from its own newest stored bar. Splitting on that keeps a single new security from dragging the
+    other twenty-four in its run through ten years each — which is what one shared window would do
+    the moment a subject was added.
+    """
     wanted = set(context.partition_keys)
 
     with postgres.connect() as conn:
@@ -454,21 +479,71 @@ def raw_price_history(context: AssetExecutionContext, config: PriceRun, postgres
             if s.security_id in wanted
         ]
 
-    context.log.info("full history for %s of %s requested securities", len(subjects), len(wanted))
-    rows, stats = _collect(
-        context,
-        subjects,
-        start=HISTORY_START,
-        # EXCLUSIVE, AND THEREFORE "UP TO BUT NOT INCLUDING TODAY". Somewhere a market is open,
-        # and its bar for today is a session in progress whose "close" is not a close. The daily
-        # lane collects each day once it has closed; history must not race ahead of it and write a
-        # partial bar that then looks settled.
-        end=date.today(),
-        # SMALLER THAN THE CROSS-SECTION'S, because this is a MEMORY budget wearing a time budget's
-        # clothes: twelve symbols at full history measured 11.6 MB of JSON in 8.1 s.
-        batch_size=PROVIDER.history_batch_size,
-        budget_seconds=config.budget_seconds,
-        postgres=postgres,
+    # WHAT EACH PARTITION ALREADY HOLDS, read through the manager that wrote it. Asking the raw
+    # files rather than `market.price_bar` keeps stage 1 independent of stage 2 having succeeded —
+    # and a watermark that reads too OLD is merely a wider window, which the merge then dedupes,
+    # while one that reads too NEW would leave a hole nothing reports.
+    watermarks: dict[str, date] = {}
+    for subject in subjects:
+        stored = raw_store.stored_rows_for(context.asset_key, subject.security_id)
+        dates = [d for d in (prices.row_date(row) for row in stored) if d is not None]
+        if dates:
+            watermarks[subject.security_id] = max(dates)
+
+    loading = [s for s in subjects if s.security_id not in watermarks]
+    extending = [s for s in subjects if s.security_id in watermarks]
+    # EXCLUSIVE, AND THEREFORE "UP TO BUT NOT INCLUDING TODAY". Somewhere a market is open, and its
+    # bar for today is a session in progress whose "close" is not a close. A lane must not write a
+    # partial bar that then looks settled.
+    end = date.today()
+
+    # BUILT, NOT INLINED IN THE LOOP HEADER. `_earliest` takes a min over the watermarks, so
+    # evaluating it for an empty cohort raises `min() iterable argument is empty` — which is what
+    # the first run of a never-collected security does, i.e. the commonest case there is.
+    cohorts: list[tuple[list[prices.Subject], date]] = []
+    if loading:
+        cohorts.append((loading, HISTORY_START))
+    if extending:
+        cohorts.append((extending, _earliest(watermarks, end)))
+
+    rows: list[dict[str, Any]] = []
+    stats: dict[str, int] = {}
+    for cohort, start in cohorts:
+        context.log.info("%s securities from %s..%s", len(cohort), start, end)
+        got, cohort_stats = _collect(
+            context,
+            cohort,
+            start=start,
+            end=end,
+            # SMALLER THAN THE CROSS-SECTION'S, because this is a MEMORY budget wearing a time
+            # budget's clothes: twelve symbols at full history measured 11.6 MB of JSON in 8.1 s.
+            batch_size=PROVIDER.history_batch_size,
+            budget_seconds=config.budget_seconds,
+            postgres=postgres,
+        )
+        rows += got
+        for name, value in cohort_stats.items():
+            stats[name] = stats.get(name, 0) + value
+
+    context.add_output_metadata(
+        {
+            "requested": len(wanted),
+            "rows": len(rows),
+            "loading_full_history": len(loading),
+            "extending_from_watermark": len(extending),
+            **stats,
+        }
     )
-    context.add_output_metadata({"requested": len(wanted), "rows": len(rows), **stats})
     return _by_partition(context, rows, key=lambda r: str(r["security_id"]))
+
+
+def _earliest(watermarks: dict[str, date], end: date) -> date:
+    """The oldest watermark in the cohort, re-asking its newest stored day.
+
+    THE STORED DAY IS RE-ASKED RATHER THAN SKIPPED, because a provider restates: a bar can be
+    corrected, split-adjusted or filled in after the fact, and the merge supersedes it per key. A
+    watermark of `end` would also make a degenerate range — `start == end` returns everything from
+    `start` to today on this provider, measured — so the window is held at least a day wide.
+    """
+    oldest = min(watermarks.values())
+    return min(oldest, end - timedelta(days=1))
