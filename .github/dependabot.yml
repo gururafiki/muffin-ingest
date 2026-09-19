@@ -1,0 +1,63 @@
+# Dependabot configuration.
+# https://docs.github.com/code-security/dependabot/working-with-dependabot/dependabot-options-reference
+#
+# `uv`, NOT `pip`, AND THE DIFFERENCE IS LOAD-BEARING HERE. Every environment in this workspace is
+# resolved by uv and installed with `--frozen` — CI and the Dockerfile both — so the file that
+# decides what runs is `uv.lock`, not the bound in `pyproject.toml`. The `pip` ecosystem does not
+# read a uv lock: it would propose a pyproject bound, the lock would keep the old version, and the
+# PR would go green having changed nothing that runs.
+version: 2
+updates:
+  # ONE ENTRY WITH `directories`, NOT THREE ENTRIES. The Dagster version triple is pinned in BOTH
+  # `projects/muffin-ingest/pyproject.toml` (what the image installs) and
+  # `deployments/local/pyproject.toml` (what `dg` runs), so a per-directory entry would raise two
+  # PRs for one upgrade and let one of them merge alone. Grouped across directories, it is one PR
+  # or none.
+  - package-ecosystem: "uv"
+    directories:
+      - "/libs/muffin-ingest-lib"
+      - "/projects/muffin-ingest"
+      - "/deployments/local"
+    schedule:
+      interval: "weekly"
+    groups:
+      # THE THREE DAGSTER PACKAGES MOVE TOGETHER OR NOT AT ALL. `dagster` and `dagster-webserver`
+      # are 1.13.x while `dagster-postgres` is 0.29.x — two version schemes for ONE release — so a
+      # PR bumping one of them alone pins a combination nobody ships. That is not a theory: the
+      # image built, the code location loaded and `definitions validate` passed with
+      # `dagster-webserver` absent entirely, and the webserver then crash-looped on the node.
+      #
+      # AND MERGING ONE IS A PROCEDURE, NOT A BUMP. Before it goes in, and CI cannot check any of
+      # these: re-vendor `.agents/skills/dagster-expert` at the matching tag (it is pinned to the
+      # version this repo runs), diff `dagster/_core/storage/alembic/versions` between the two —
+      # new revisions need `dagster instance migrate` on the node BEFORE the roll, or the daemon
+      # meets a schema it does not know — and confirm the definitions snapshot test is untouched,
+      # because a rename of an asset, check, schedule or sensor orphans its history silently.
+      dagster:
+        patterns: ["dagster", "dagster-*"]
+      # One PR for the routine noise; majors stay individual, because those deserve to be read.
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+
+  # The Dockerfile's base image and the pinned `uv` binary it copies from.
+  #
+  # THAT `uv` PIN EXISTS TWICE — `ghcr.io/astral-sh/uv:<v>` here and `UV_VERSION` in
+  # `quality.yml` — and Dependabot can only see this half, so a bump would silently leave CI
+  # resolving with one version and the image with another. `quality.yml` asserts the two agree, so
+  # such a PR fails rather than drifting; the fix is to move both in the same commit.
+  - package-ecosystem: "docker"
+    directory: "/projects/muffin-ingest"
+    schedule:
+      interval: "weekly"
+
+  # A PR THAT TOUCHES ONLY WORKFLOW FILES CAN NEED A HUMAN CLICK, and that is expected rather than
+  # broken. `gh pr merge` refuses without the `workflow` OAuth scope, and the `code_scanning` rule
+  # waits on a CodeQL result that a change with nothing analyzable in it reports as `skipping` —
+  # GitHub's own merge button treats that as satisfied and nothing else does.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
