@@ -53,9 +53,10 @@ Conventions — what belongs in which stage, and why a rename is a migration —
 
 Dagster manages runs, schedules, retries, checks and freshness, and this repo uses it for all of
 them. What it does not model is per-ITEM state — which of ~12,350 securities × ~40 facets is due,
-absent, throttled or leased. Its only per-item primitive is partitions, which are bounded at about
-25,000 per asset and meant for time windows. So the ledger is the one deliberately custom piece, and
-it is three tables.
+absent, throttled or leased. Its only per-item primitive is partitions: Dagster documents 100,000
+per asset, which is why a subject grid is the right shape for one facet's collection and still
+cannot carry 12,350 × 40 of them, nor the leasing, backoff and absence rules around each. So the
+ledger is the one deliberately custom piece, and it is three tables.
 
 ## Licence
 

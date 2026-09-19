@@ -44,8 +44,12 @@ never answer from memory. This skill is muffin's layer on top of it, and wins wh
    provider request.
 5. **Failed ≠ empty ≠ throttled ≠ dead subject.** Never record "the provider has nothing" unless the
    subject was asked alone and the provider was proven healthy in the same run.
-6. **A materialized partition is a completeness claim.** Partition the question the data cannot
-   answer about itself; never date × subject.
+6. **A materialized partition is a completeness claim, and the partition is the unit the PROVIDER
+   is asked about.** Measure that grain on the wire — a wrapper hides it — then partition neither
+   finer (a bulk API's calls multiply) nor coarser (a refusal mid-way claims a period it does not
+   hold). Never date × subject. **Extend from what raw already holds**; re-fetching a history to
+   gain a day is the most expensive mistake available
+   ([dagster-native.md](references/dagster-native.md)).
 7. **Plan before code.** Work through the planning stages; at each, present options with trade-offs
    and a recommendation, and ask instead of assuming. Spec: `docs/specs/<yyyy>-<mm>-<dd>-<name>.md`
    in the umbrella.
@@ -105,6 +109,8 @@ muffin-ingest/                       dg workspace
 | "The endpoint presumably returns X" | Call it, capture it, measure it (planning stage 5) |
 | "CI is green, so ship it" | Tiny subset locally, then live, reading every counter |
 | "The schema is awkward but it works" | Rule 2 — fix the model now, expand/contract |
+| "One call fetches the universe, so partition by day" | Count URLs, not calls — openbb's yfinance asks once per ticker |
+| "Re-materialise the partition to pick up the new day" | Extend from the stored rows; a full re-fetch is the bug |
 
 ## References
 
@@ -112,6 +118,8 @@ muffin-ingest/                       dg workspace
 - [implementation.md](references/implementation.md) — the stages, shipping, deferred notes
 - [raw-layer.md](references/raw-layer.md) — what stage 1 may and may not do
 - [data-modelling.md](references/data-modelling.md) — core and serving rules, expand/contract, migrations
-- [dagster-native.md](references/dagster-native.md) — need → feature, I/O managers, partitions, isolation, upgrades
+- [dagster-native.md](references/dagster-native.md) — need → feature, I/O managers, partitions and
+  the provider's request grain, extending instead of re-fetching, choosing a refresh trigger,
+  isolation, upgrades
 - [project-structure.md](references/project-structure.md) — layout, what goes where, names are state
 - [pitfalls.md](references/pitfalls.md) — mistakes this pipeline already made, with measurements
