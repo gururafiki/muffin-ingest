@@ -913,7 +913,8 @@
   "resources": {
     "parquet_io": "ParquetIOManager",
     "postgres": "Postgres",
-    "postgres_io": "PostgresIOManager"
+    "postgres_io": "PostgresIOManager",
+    "raw_store": "RawStore"
   },
   "schedules": {
     "daily_fx_schedule": {

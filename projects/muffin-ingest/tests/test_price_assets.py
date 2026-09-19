@@ -24,7 +24,7 @@ from muffin_ingest_dagster.defs.prices import core as prices_core
 from muffin_ingest_dagster.defs.prices import derived as prices_derived
 from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
 from muffin_ingest_dagster.defs.prices import raw as prices_raw
-from muffin_ingest_dagster.lib.io_managers import ParquetIOManager
+from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import loaded_defs
 
@@ -274,6 +274,7 @@ def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_p
                 resources={
                     "postgres": FakePostgres(),
                     "parquet_io": ParquetIOManager(str(tmp_path)),
+                    "raw_store": RawStore(base_path=str(tmp_path)),
                 },
             )
         finally:
@@ -913,3 +914,79 @@ def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does(
         f"backfill-only lane(s) carrying a freshness policy: {wrongly_watched}. These idle at zero "
         f"on purpose, so a staleness window goes red the day after the load and never recovers."
     )
+
+
+def _history_run(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    asked_windows: list[tuple[Any, Any]],
+    rows: list[dict[str, Any]],
+) -> dg.ExecuteInProcessResult:
+    """One materialisation of the history lane, recording the WINDOW the provider was asked for."""
+
+    def record(symbols: Sequence[str], **kw: Any) -> Answer:
+        asked_windows.append((kw.get("start"), kw.get("end")))
+        return Answer(rows=list(rows))
+
+    saved = openbb.price_history
+    openbb.price_history = record
+    try:
+        return dg.materialize(
+            [prices_raw.raw_price_history],
+            partition_key=SUBJECTS[1][0],
+            instance=instance,
+            resources={
+                "postgres": FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "raw_store": RawStore(base_path=str(tmp_path)),
+            },
+        )
+    finally:
+        openbb.price_history = saved
+
+
+def test_the_history_lane_extends_from_its_watermark_rather_than_refetching(tmp_path: Path) -> None:
+    """The second run asks from the newest bar it already holds, not from the start of history.
+
+    This is the whole economy of the lane: the vendor is asked once per symbol whatever the range,
+    so what a watermark saves is not calls but ten years of payload per security per night — and,
+    more importantly, it is what lets a partition be re-materialised at all without either losing
+    its history or re-paying for it.
+    """
+    windows: list[tuple[Any, Any]] = []
+    stored = {"symbol": "005930.KS", "date": date(2026, 9, 17), "close": 1.0, "volume": 1}
+
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
+        first = _history_run(tmp_path, instance, windows, [stored])
+        assert first.success
+        second = _history_run(
+            tmp_path,
+            instance,
+            windows,
+            [{**stored, "date": date(2026, 9, 18), "close": 2.0}],
+        )
+        assert second.success
+
+    assert windows[0][0] == prices_partitions.HISTORY_START, "a new subject is asked for everything"
+    assert windows[1][0] == date(2026, 9, 17), (
+        f"the second run asked from {windows[1][0]}; it holds a bar for 2026-09-17 and must extend "
+        f"from it, not re-fetch the whole history"
+    )
+    assert meta(second, prices_raw.raw_price_history)["extending_from_watermark"] == 1
+
+
+def test_extending_a_partition_keeps_the_bars_it_already_held(tmp_path: Path) -> None:
+    """The extension must not overwrite the history it extends — `merge_on` is what stops it."""
+    windows: list[tuple[Any, Any]] = []
+    base = {"symbol": "005930.KS", "close": 1.0, "volume": 1}
+
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
+        _history_run(tmp_path, instance, windows, [{**base, "date": date(2026, 9, 17)}])
+        _history_run(tmp_path, instance, windows, [{**base, "date": date(2026, 9, 18)}])
+
+    held = RawStore(base_path=str(tmp_path)).stored_rows_for(
+        prices_raw.raw_price_history.key, SUBJECTS[1][0]
+    )
+    assert sorted(str(r["date"]) for r in held) == ["2026-09-17", "2026-09-18"]
