@@ -8,6 +8,35 @@ measurements behind every decision, is
 [`docs/superpowers/specs/2026-09-09-ingestion-rework-design.md`](https://github.com/gururafiki/muffin/blob/main/docs/superpowers/specs/2026-09-09-ingestion-rework-design.md)
 in the umbrella repo.
 
+## Layout
+
+A **`dg` workspace**, so a dependency that cannot share an environment becomes a new project rather
+than a repo-wide move. Each package locks its own environment with `uv`.
+
+```
+dg.toml                       the workspace
+deployments/local/            the environment `dg` runs in, and DAGSTER_HOME for local runs
+libs/muffin-ingest-lib/       muffin_ingest — the library, with NO Dagster dependency
+projects/muffin-ingest/       the code location + Dockerfile; src/muffin_ingest_dagster/defs/<family>/
+```
+
+```bash
+# The library: unit tests, no orchestrator installed
+cd libs/muffin-ingest-lib && uv sync && uv run pytest
+
+# The code location: loads, checks and asset tests
+cd projects/muffin-ingest && uv sync
+export DAGSTER_HOME=$PWD/../../deployments/local/dagster_home
+uv run dagster definitions validate -m muffin_ingest_dagster.definitions
+uv run dg check defs && uv run pytest
+
+# The image (built from the workspace root, as CI does)
+docker build -f projects/muffin-ingest/Dockerfile -t muffin-ingest:local .
+```
+
+Conventions — what belongs in which stage, and why a rename is a migration — are in
+`.agents/skills/dagster-ingestion-best-practices`.
+
 ## The three parts, and why they are separate
 
 - **`muffin_ingest`** is a plain Python library with no Dagster import anywhere in it. Providers
