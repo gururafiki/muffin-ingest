@@ -111,6 +111,20 @@ jobs:
       IMAGE: ghcr.io/gururafiki/muffin-ingest:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
+      - name: The uv pin in the Dockerfile is the one this workflow resolves with
+        # THE SAME FACT IN TWO PLACES WILL DRIFT, AND DEPENDABOT CAN ONLY SEE ONE OF THEM. It
+        # watches the Dockerfile, so it would propose `ghcr.io/astral-sh/uv:<new>` while
+        # `UV_VERSION` above keeps resolving these lockfiles with the old binary — a green PR that
+        # leaves CI and the image on different resolvers. A lock is a guarantee only if both halves
+        # read it the same way, which is why that env var says so and this asserts it.
+        run: |
+          pinned=$(sed -n 's|.*ghcr.io/astral-sh/uv:\([0-9][^ ]*\).*|\1|p' projects/muffin-ingest/Dockerfile)
+          test -n "$pinned" || { echo "::error::no uv pin found in the Dockerfile"; exit 1; }
+          [ "$pinned" = "$UV_VERSION" ] || {
+            echo "::error::Dockerfile pins uv $pinned, quality.yml resolves with $UV_VERSION"
+            exit 1
+          }
+          echo "uv $pinned in both"
       - uses: docker/login-action@v3
         if: github.ref == 'refs/heads/main'
         with:
