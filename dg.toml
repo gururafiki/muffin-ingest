@@ -1,0 +1,9 @@
+directory_type = "workspace"
+
+[workspace]
+
+# ONE PROJECT TODAY, AND THE WORKSPACE IS THE POINT. A second project is how a dependency that
+# cannot share this environment gets its own venv, image and code location without moving the
+# repo — see `dagster-ingestion-best-practices/references/dagster-native.md`, the isolation ladder.
+[[workspace.projects]]
+path = "projects/muffin-ingest"

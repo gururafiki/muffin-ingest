@@ -1,8 +1,8 @@
 # Project structure
 
 A `dg` workspace, so a dependency that cannot share an environment becomes a new project rather than a
-repo-wide move. Status: **target layout** — muffin-ingest is being migrated to it (umbrella
-`todos.md` › Ingestion rework).
+repo-wide move. This is muffin-ingest's layout as of 2026-09-19; each package locks its own
+environment with `uv`, and the image is built from the workspace root.
 
 ```
 muffin-ingest/
@@ -10,17 +10,20 @@ muffin-ingest/
   deployments/local/pyproject.toml      environment for running dg across the workspace
   libs/muffin-ingest-lib/               package muffin_ingest — NO Dagster dependency
     pyproject.toml  uv.lock             extras per dependency group
-    src/muffin_ingest/
+    src/muffin_ingest/                  py.typed — an installed distribution, not a source tree
       providers/<vendor>.py             fetch (what the vendor sent), classify, spell, batch size
       providers/openbb.py               the hub in-process; one typed function per route
       facets/<family>.py                parse and normalise raw into core rows (pure)
       derive/<thing>.py                 computations over data already held (pure)
       writers.py  ledger.py  metrics.py  settings.py
-    tests/                              unit tests, run with no Dagster installed
-    tests/fixtures/<provider>/          captured payloads and how to re-capture them — the one copy
+    tests/unit/                         unit tests, run with no Dagster installed
+    tests/fixtures/                     captured payloads and how to re-capture them — the ONE copy,
+                                        read by the project's tests through `tests.FIXTURES`
     scripts/                            capture scripts
   projects/muffin-ingest/               one code location, `muffin_ingest`
-    pyproject.toml  uv.lock  Dockerfile [tool.dg] project; the library as an editable path source
+    pyproject.toml  uv.lock  Dockerfile [tool.dg] project; the library as an editable path source.
+                                        The hub is an EXTRA (`--extra hub`), so CI can prove the
+                                        location loads without it.
     src/muffin_ingest_dagster/
       definitions.py                    starts the exporter; load_from_defs_folder
       lib/                              io_managers.py  partitioned.py  resources.py — classes only
@@ -34,7 +37,9 @@ muffin-ingest/
         checks.py                       asset checks
         automation.py                   jobs, schedules, sensors
     envs/<name>/                        Pipes venvs (pyproject + uv.lock), only when needed
-    tests/<family>/                     asset, check and sensor tests; offline replay
+    tests/                              asset, check and sensor tests; offline replay; the
+                                        definitions snapshot. Per-family folders once a family
+                                        needs several files.
   .agents/skills/                       dagster-expert (vendored, pinned) and this skill
   skills-lock.json                      source, tag and hash of vendored skills
 ```
@@ -65,15 +70,18 @@ orphans history or resets a cursor.
   side effect. A deliberate rename is a migration with its own plan.
 - Asset keys are nouns naming the dataset or table (`raw_price_bars`, `price_bar`), with no
   `key_prefix`.
-- Family → `group_name`; stage → `kinds` plus a `layer` tag (`raw`, `core`, `derived`, `serving`);
-  provider → `pool`.
+- Family → `group_name`; provider → `pool`; storage → `kinds`. The STAGE is carried by the module an
+  asset lives in (`raw.py`, `core.py`, `derived.py`) and by its I/O manager, not by a tag — adding a
+  `layer` tag later is a deliberate change to every asset, and the snapshot test will say so.
 - A definitions snapshot test lists every name, and changes only on purpose.
 - No `from __future__ import annotations` in a Dagster module: it turns the `context` annotation into
   a string and validation rejects it with a message that does not name the cause.
 
 ## Commands
 
-With `deployments/local`'s environment active, from the workspace root:
+`DAGSTER_HOME` points at `deployments/local/dagster_home`, whose `dagster.yaml` is the only switch
+that turns telemetry off for BOTH Dagster and `dg` — `dg`'s own `[cli.telemetry]` is read from the
+user-level config (`~/.config/dg.toml`), never from the repo's `dg.toml`. From the workspace root:
 
 - `dg list defs` — what loads
 - `dg check defs` — every definition loads without error
@@ -88,5 +96,7 @@ New projects come from a pinned `uvx create-dagster@<version> project projects/<
 2. Library: `providers/<vendor>.py` if the vendor is new, `facets/<family>.py`, fixtures, unit tests.
 3. `defs/<family>/` by stage, with pools and partitions from the spec and metadata counters on every
    asset.
-4. Tests under `projects/muffin-ingest/tests/<family>/`; add the new names to the snapshot test.
+4. Tests under `projects/muffin-ingest/tests/`; regenerate the definitions snapshot
+   (`MUFFIN_UPDATE_SNAPSHOT=1 uv run pytest tests/test_definitions_snapshot.py`) and read its diff:
+   additions are ordinary, a removal or a change is a rename.
 5. Continue with [implementation.md](implementation.md) from stage 3.

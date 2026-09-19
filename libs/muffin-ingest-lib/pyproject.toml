@@ -1,0 +1,111 @@
+[project]
+name = "muffin-ingest-lib"
+version = "0.1.0"
+description = "Muffin's ingestion library: providers, the ingest task ledger, parsers and writers."
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.13,<3.14"
+
+# WHY AGPL AND NOT GPLv3 LIKE EVERY OTHER MUFFIN REPO: `openbb-core` is AGPL-3.0 and is IMPORTED
+# here rather than called over HTTP. That is a deliberate trade recorded in the design — the REST
+# hop is where a yfinance throttle becomes an empty 204 that is byte-identical to "this symbol has
+# no data", which is the confusion that once negative-cached ~8,300 securities in an afternoon.
+#
+# NO DAGSTER, EVER. This package is the half that outlives any choice of orchestrator, and the CI
+# `checks` job installs it WITHOUT one — which is what proves the rule rather than asserting it.
+dependencies = [
+  # One provider call is one place that is counted, paced and bounded, so these two are imported
+  # unconditionally: `providers/documents.py`, `yahoo_chart.py`, `openfigi.py` and `metrics.py`.
+  "httpx>=0.28,<0.29",
+  "prometheus-client>=0.21,<1",
+  "pydantic>=2.10,<3",
+  "structlog>=24.4,<26",
+]
+
+[project.optional-dependencies]
+# THE HUB IS AN EXTRA BECAUSE IT IS ~250 MB AND IMPORTED INSIDE A FUNCTION. `providers/openbb.py`
+# imports it lazily so `dagster definitions validate`, the unit tests and the CI `checks` job all
+# run without the provider code installed, and the tests drive a fake hub for the same reason.
+#
+# TWO KINDS OF EXTENSION, AND THE FIRST LIST HAD ONLY ONE OF THEM. A PROVIDER supplies data
+# (yfinance, finviz); a ROUTER supplies the namespace you call it through (`obb.equity.*`). With
+# providers alone the hub imports perfectly and every call dies on
+#
+#     AttributeError: 'App' object has no attribute 'equity'
+#
+# — a message that names neither the cause nor the fix. Guarded now by resolving every route in
+# `ROUTES` inside the built image.
+hub = [
+  "openbb-core>=1.4,<2",
+  # Providers.
+  "openbb-yfinance>=1.4,<2",
+  "openbb-finviz>=1.3,<2",
+  "openbb-nasdaq>=1.4,<2",
+  "openbb-fred>=1.4,<2",
+  "openbb-oecd>=1.4,<2",
+  "openbb-federal-reserve>=1.4,<2",
+  # Routers, one per namespace named in `providers/openbb.py::ROUTES`. A route whose router is not
+  # installed is a control table advertising work nothing can do.
+  "openbb-equity>=1.4,<2",
+  "openbb-etf>=1.4,<2",
+  "openbb-economy>=1.4,<2",
+  "openbb-fixedincome>=1.4,<2",
+  "openbb-index>=1.4,<2",
+  "openbb-crypto>=1.4,<2",
+  "openbb-derivatives>=1.4,<2",
+]
+# The direct providers, for the four things openbb measurably cannot do: N-PORT holdings (no `sec`
+# provider on `etf/holdings`), ISIN resolution (`equity/search` returns zero hits for an ISIN),
+# quarterly SEC statements (`period=quarter` is 422), and DART (TLS 1.2 static-RSA).
+#
+# NOTHING IMPORTS THESE THREE YET (measured 2026-09-19): they are carried unchanged from the
+# single pyproject so the image keeps the same contents across the workspace move, because
+# dropping a declared dependency can remove something a provider reaches for implicitly —
+# pandas.read_html needs lxml, and openbb-finviz scrapes. Drop them in a change that measures it.
+filings = [
+  "edgartools>=4.14,<5",
+  "pdfplumber>=0.11,<0.12",
+  "lxml>=5.3,<6",
+]
+
+[dependency-groups]
+dev = [
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  "respx>=0.22",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/muffin_ingest"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+# Strict. The classifier decides whether thousands of securities get negative-cached, and a
+# `str | None` slipping through is exactly how that goes wrong quietly.
+files = ["src", "tests"]
+
+# THE HUB IS DELIBERATELY NOT A CHECK-TIME DEPENDENCY, so mypy must be told rather than made to
+# resolve it. Without this it fails in CI while passing on any machine that happens to have openbb
+# installed — which is precisely what it did.
+[[tool.mypy.overrides]]
+module = ["openbb", "openbb.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: drives a real provider; excluded from CI"]
+addopts = "-m 'not live'"

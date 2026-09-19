@@ -25,7 +25,9 @@ database — never with "should work".
 - **Static:** `dg check defs`, mypy for the library and the project, ruff; the definitions snapshot
   test changes only for a deliberate rename or addition.
 - **Guards:** prove each one by deleting what it guards and watching it fail — and confirm the
-  mutation actually applied.
+  mutation actually applied, **reached the interpreter** (clear `__pycache__`, run with
+  `PYTHONDONTWRITEBYTECODE=1`: a same-length edit within a second reuses the previous `.pyc`), and
+  failed naming the object you changed.
 
 ## 3. Local run on a tiny subset
 

@@ -1,5 +1,9 @@
 # Required check. Mirrors muffin-deployment's `quality.yml` in spirit: it does not ask whether the
 # code is tidy, it asks whether the rules that keep this pipeline honest still hold.
+#
+# The workspace has two environments and the split between these jobs IS one of those rules: the
+# library must build and pass with no orchestrator installed, and the code location must load with
+# no provider hub installed. Each job proves its half by having nothing else available.
 name: Quality
 
 on:
@@ -12,47 +16,45 @@ concurrency:
   # NEVER cancel on main. Two merges seconds apart used to kill the first one's verification run.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  # The resolver is pinned with the lock it reads: a lockfile is a guarantee only if both are.
+  UV_VERSION: "0.12.15"
+  # Telemetry off for Dagster AND for `dg`, which asks the same question through this file.
+  DAGSTER_HOME: ${{ github.workspace }}/deployments/local/dagster_home
+
 jobs:
   checks:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: libs/muffin-ingest-lib
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
+      - name: Install (the library and its dev group; uv fetches the interpreter it needs)
+        run: uv sync --frozen
 
-      # The dev extra only — the runtime pulls openbb and dagster, which are minutes of resolution
-      # and irrelevant to the pure-logic suite. The image build is where the full set is proven.
-      - name: Install
+      # NO DAGSTER AND NO HUB, AND BOTH ABSENCES ARE THE POINT. The ledger takes a PROTOCOL
+      # (`DbConn`) rather than a driver, the library imports no orchestrator, and `providers/openbb`
+      # imports the hub inside a function — so this job passing is what proves all three rather
+      # than a comment asserting them.
+      - name: The library depends on no orchestrator
         run: |
-          python -m pip install --upgrade pip
-          # NO psycopg AND NO DAGSTER, and both absences are the point. The ledger takes a
-          # PROTOCOL (`DbConn`) rather than a driver, and the library imports no orchestrator, so
-          # this job passing is what proves both rather than a comment asserting them.
-          #
-          # httpx and prometheus-client ARE imported — one provider call is one place that is
-          # counted, paced and bounded — so they are installed rather than stubbed.
-          pip install ruff mypy pytest pytest-cov pydantic httpx prometheus-client
+          if uv run python -c "import dagster" 2>/dev/null; then
+            echo "::error::dagster is installed in the library environment — the split has broken"
+            exit 1
+          fi
+          echo "  ok  no dagster in this environment"
 
       - name: Lint
-        run: ruff check src tests && ruff format --check src tests
-
+        run: uv run ruff check src tests && uv run ruff format --check src tests
       - name: Types
         # Strict. The classifier decides whether thousands of securities get negative-cached, and a
         # `str | None` slipping through is exactly how that goes wrong quietly.
-        #
-        # THE LIBRARY ONLY. `muffin_ingest` imports no Dagster by design, and checking it without
-        # one installed is what proves that rather than asserting it — `src/muffin_ingest_dagster`
-        # is typed in the `definitions` job, where Dagster is present.
-        #
-        # `tests/unit` rather than `tests`, for the same reason: `tests/dagster` exercises the assets
-        # and necessarily imports an orchestrator. Pointing this job at all of `tests` would fail on
-        # that, and the tempting fix — installing dagster here — would quietly delete the guarantee
-        # this job exists for.
-        run: mypy --strict src/muffin_ingest tests/unit
-
+        run: uv run mypy --strict src/muffin_ingest tests
       - name: Tests
-        run: PYTHONPATH=src pytest tests/unit -q
+        run: uv run pytest -q
 
   # SEPARATE, because `muffin_ingest` deliberately imports no Dagster and its suite must not need
   # one. This job is the other half of that rule: it proves the code location actually LOADS, which
@@ -61,46 +63,69 @@ jobs:
   # restart-loops with the reason only in `docker service logs`.
   definitions:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: projects/muffin-ingest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      - name: Install (dagster and what the assets touch; no provider extras)
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
+      - name: Install (the code location WITHOUT the `hub` extra)
+        run: uv sync --frozen
+      - name: The code location loads with no provider hub installed
         run: |
-          python -m pip install --upgrade pip
-          pip install "dagster>=1.11,<1.13" "psycopg[binary]" pyarrow pydantic httpx \
-            duckdb mypy pytest
+          if uv run python -c "import openbb" 2>/dev/null; then
+            echo "::error::openbb is installed here — this job can no longer prove the lazy import"
+            exit 1
+          fi
+          echo "  ok  no openbb in this environment"
       - name: The code location loads
-        # `dagster definitions validate` is the same load the gRPC server performs at startup, so a
-        # green here means the service can start.
-        run: PYTHONPATH=src dagster definitions validate -m muffin_ingest_dagster.definitions
+        # The same load the gRPC server performs at startup, so a green here means it can start.
+        run: uv run dagster definitions validate -m muffin_ingest_dagster.definitions
+      - name: Every definition resolves through dg
+        run: uv run dg check defs
       - name: Types
-        run: PYTHONPATH=src mypy --strict src/muffin_ingest_dagster tests/dagster
+        run: uv run mypy --strict src/muffin_ingest_dagster tests
+      - name: Lint
+        run: uv run ruff check src tests && uv run ruff format --check src tests
       - name: Tests
         # The assets driven end to end against a fake provider and a fake database — which is the
         # only way the things that actually break here are visible: which partition a file lands on,
         # and whether a symbol omitted from a batched answer is recorded as empty rather than dead.
-        run: PYTHONPATH=src pytest tests/dagster -q
+        # `test_definitions_snapshot` is the one that fails on a rename: names are state.
+        run: uv run pytest -q
 
   image:
     # arm64, because the Oracle node is aarch64 and an amd64-only image cannot schedule there.
     runs-on: ubuntu-24.04-arm
-    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
+    # IT BUILDS ON A PR AND PUSHES ONLY FROM `main`. Until 2026-09-19 this job was `main`-only, so
+    # the Dockerfile was first exercised AFTER the merge that could break it — the same shape as a
+    # native build that no pull-request check ever ran. Building without pushing costs one arm
+    # runner and makes the three checks below a gate rather than a post-mortem.
+    env:
+      # The same reference either way: on a PR it names the image loaded into the runner's daemon,
+      # on `main` the one just pushed — so the checks below are one set of commands, not two.
+      IMAGE: ghcr.io/gururafiki/muffin-ingest:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
       - uses: docker/login-action@v3
+        if: github.ref == 'refs/heads/main'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/build-push-action@v6
         with:
+          # THE WORKSPACE ROOT IS THE CONTEXT: the code location installs the library from
+          # `libs/muffin-ingest-lib` as a path source, so both trees must be in it.
           context: .
-          push: true
+          file: projects/muffin-ingest/Dockerfile
+          push: ${{ github.ref == 'refs/heads/main' }}
+          # On a PR the image stays in the runner's daemon, which is what the checks below need.
+          load: ${{ github.ref != 'refs/heads/main' }}
           platforms: linux/arm64
           tags: |
             ghcr.io/gururafiki/muffin-ingest:latest
@@ -112,16 +137,27 @@ jobs:
         # `exec: "dagster-webserver": executable file not found in $PATH`, which reads as a broken
         # image rather than a missing dependency, and cost a deploy to find.
         #
-        # One image runs all three Swarm services, so it must carry all three entrypoints. Run
-        # against the PUSHED tag, not a local build: what the node pulls is the thing worth
-        # checking.
+        # One image runs all three Swarm services, so it must carry all three entrypoints. It runs
+        # against the image this job just built — the same bytes the node will pull once `main`
+        # pushes them — never a separate local build of its own.
         run: |
-          docker run --rm --entrypoint sh ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} -c '
+          docker run --rm --entrypoint sh $IMAGE -c '
             set -e
             for bin in dagster dagster-webserver dagster-daemon; do
               command -v "$bin" >/dev/null || { echo "::error::$bin is not in the image PATH"; exit 1; }
               echo "ok  $bin"
             done'
+
+      - name: The code location loads INSIDE the image, as the runtime user
+        # The two environment jobs above prove the code loads where the tooling is; this proves it
+        # loads where it will run — as uid 10001, against a root-owned venv, with the hub present
+        # and its extension map already built. `load_from_defs_folder` finds the project by walking
+        # up to `pyproject.toml`, so this also catches an install layout that leaves it behind.
+        run: |
+          docker run --rm $IMAGE sh -c '
+            set -e
+            test "$(id -u)" = 10001 || { echo "::error::image does not run as uid 10001"; exit 1; }
+            dagster definitions validate -m muffin_ingest_dagster.definitions'
 
       - name: Every namespace we call exists on the real hub
         # WHAT THIS CHECKS, AND WHAT IT CANNOT — both measured, after two attempts that claimed more.
@@ -152,7 +188,7 @@ jobs:
         # Reaching the check at all is the other half: as the runtime user a rebuild of the
         # extension map raises PermissionError, so a clean import proves the map shipped built.
         run: |
-          docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} python -c '
+          docker run --rm $IMAGE python -c '
           import sys
           from openbb import obb
 

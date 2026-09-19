@@ -1,0 +1,1017 @@
+{
+  "asset_checks": {
+    "ledger_health:every_symbol_keyed_facet_retracts": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "raw_price_bars:every_askable_security_was_asked": {
+      "additional_deps": [],
+      "blocking": false
+    }
+  },
+  "assets": {
+    "discovered_security": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 20,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_nport_filing": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 3888000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "nport_filing"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "fund_holding": {
+      "automation_condition": "eager",
+      "backfill_policy": {
+        "max_partitions_per_run": 20,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "discovered_security": "IdentityPartitionMapping",
+        "raw_nport_filing": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 3888000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "nport_filing"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "fx_rate": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_fx_spot": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "fx",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "fx_rate_history": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 43,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_fx_history": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "fx",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "currency"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "index_return": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_index_bars": "TimeWindowPartitionMapping",
+        "raw_sector_performance": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "indices",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "ledger_health": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 10800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "ledger",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [],
+      "tags": {}
+    },
+    "price_bar": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_price_bars": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "prices",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "price_bar_history": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 25,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_price_history": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "prices",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "raw_exchange_sweep": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 4,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2592000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "openfigi",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "exchange_sweep"
+      },
+      "pools": [
+        "openfigi_filter"
+      ],
+      "tags": {}
+    },
+    "raw_figi_local_symbol": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 200,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "symbology",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "openfigi",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "openfigi_mapping"
+      ],
+      "tags": {}
+    },
+    "raw_figi_ticker": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 200,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "symbology",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "openfigi",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "openfigi_mapping"
+      ],
+      "tags": {}
+    },
+    "raw_fund_directory": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 604800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
+    "raw_fx_history": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 43,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "fx",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "currency"
+      },
+      "pools": [
+        "yahoo"
+      ],
+      "tags": {}
+    },
+    "raw_fx_spot": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "fx",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "yahoo"
+      ],
+      "tags": {}
+    },
+    "raw_index_bars": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "indices",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yfinance"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
+    "raw_nport_filing": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 20,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 3888000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "nport_filing"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
+    "raw_nse_equity_list": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 1382400.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "registries",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "nse",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "nse"
+      ],
+      "tags": {}
+    },
+    "raw_price_bars": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "prices",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yfinance"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
+    "raw_price_history": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 25,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "prices",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yfinance"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
+    "raw_sec_cik_map": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 1382400.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "registries",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
+    "raw_sector_performance": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "indices",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "finviz",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "finviz"
+      ],
+      "tags": {}
+    },
+    "raw_yahoo_symbol": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 200,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "symbology",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "yahoo"
+      ],
+      "tags": {}
+    },
+    "security_cik": {
+      "automation_condition": "eager",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "raw_sec_cik_map": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 1382400.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "registries",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_nse_filer": {
+      "automation_condition": "eager",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "raw_nse_equity_list": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 1382400.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "registries",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_return": {
+      "automation_condition": "eager",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "price_bar": null,
+        "price_bar_history": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "prices",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_symbology": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 200,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_figi_local_symbol": "IdentityPartitionMapping",
+        "raw_figi_ticker": "IdentityPartitionMapping",
+        "raw_yahoo_symbol": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "symbology",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "venue_listing": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 4,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_exchange_sweep": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2592000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "exchange_sweep"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    }
+  },
+  "jobs": {
+    "__anonymous_asset_job_fund_directory_schedule": {
+      "assets": [
+        "raw_fund_directory"
+      ],
+      "ops": [],
+      "partitions": null
+    },
+    "__anonymous_asset_job_ledger_heartbeat": {
+      "assets": [
+        "ledger_health"
+      ],
+      "ops": [],
+      "partitions": null
+    },
+    "__anonymous_asset_job_new_currencies_need_history": {
+      "assets": [
+        "raw_fx_history"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "currency"
+      }
+    },
+    "__anonymous_asset_job_new_exchange_sweeps": {
+      "assets": [
+        "raw_exchange_sweep"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "exchange_sweep"
+      }
+    },
+    "__anonymous_asset_job_new_nport_filings": {
+      "assets": [
+        "raw_nport_filing"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "nport_filing"
+      }
+    },
+    "__anonymous_asset_job_new_securities_need_history": {
+      "assets": [
+        "raw_price_history"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      }
+    },
+    "__anonymous_asset_job_new_symbols_needed": {
+      "assets": [
+        "raw_figi_ticker"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      }
+    },
+    "__anonymous_asset_job_weekly_registries": {
+      "assets": [
+        "raw_nse_equity_list",
+        "raw_sec_cik_map",
+        "security_cik",
+        "security_nse_filer"
+      ],
+      "ops": [],
+      "partitions": null
+    },
+    "daily_fx": {
+      "assets": [
+        "fx_rate",
+        "raw_fx_spot"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
+    "daily_indices": {
+      "assets": [
+        "index_return",
+        "raw_index_bars",
+        "raw_sector_performance"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
+    "daily_prices": {
+      "assets": [
+        "price_bar",
+        "raw_price_bars"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-09-01T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
+    "prune_dagster_storage": {
+      "assets": [],
+      "ops": [
+        "prune_run_history"
+      ],
+      "partitions": null
+    }
+  },
+  "resources": {
+    "parquet_io": "ParquetIOManager",
+    "postgres": "Postgres",
+    "postgres_io": "PostgresIOManager"
+  },
+  "schedules": {
+    "daily_fx_schedule": {
+      "cron_schedule": "0 0 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "daily_fx"
+    },
+    "daily_indices_schedule": {
+      "cron_schedule": "0 0 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "daily_indices"
+    },
+    "daily_prices_schedule": {
+      "cron_schedule": "0 0 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "daily_prices"
+    },
+    "fund_directory_schedule": {
+      "cron_schedule": "0 5 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "__anonymous_asset_job_fund_directory_schedule"
+    },
+    "ledger_heartbeat": {
+      "cron_schedule": "7 * * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "__anonymous_asset_job_ledger_heartbeat"
+    },
+    "prune_dagster_storage": {
+      "cron_schedule": "40 3 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "prune_dagster_storage"
+    },
+    "weekly_registries": {
+      "cron_schedule": "0 4 * * 1",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "__anonymous_asset_job_weekly_registries"
+    }
+  },
+  "sensors": {
+    "default_automation_condition_sensor": {
+      "default_status": "RUNNING",
+      "jobs": [],
+      "minimum_interval_seconds": 30,
+      "type": "AUTO_MATERIALIZE"
+    },
+    "new_currencies_need_history": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "__anonymous_asset_job_new_currencies_need_history"
+      ],
+      "minimum_interval_seconds": 3600,
+      "type": "STANDARD"
+    },
+    "new_exchange_sweeps": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "__anonymous_asset_job_new_exchange_sweeps"
+      ],
+      "minimum_interval_seconds": 604800,
+      "type": "STANDARD"
+    },
+    "new_nport_filings": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "__anonymous_asset_job_new_nport_filings"
+      ],
+      "minimum_interval_seconds": 21600,
+      "type": "STANDARD"
+    },
+    "new_securities_need_history": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "__anonymous_asset_job_new_securities_need_history"
+      ],
+      "minimum_interval_seconds": 3600,
+      "type": "STANDARD"
+    },
+    "new_symbols_needed": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "__anonymous_asset_job_new_symbols_needed"
+      ],
+      "minimum_interval_seconds": 21600,
+      "type": "STANDARD"
+    }
+  }
+}
