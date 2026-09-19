@@ -98,13 +98,21 @@ jobs:
   image:
     # arm64, because the Oracle node is aarch64 and an amd64-only image cannot schedule there.
     runs-on: ubuntu-24.04-arm
-    if: github.ref == 'refs/heads/main'
     permissions:
       contents: read
       packages: write
+    # IT BUILDS ON A PR AND PUSHES ONLY FROM `main`. Until 2026-09-19 this job was `main`-only, so
+    # the Dockerfile was first exercised AFTER the merge that could break it — the same shape as a
+    # native build that no pull-request check ever ran. Building without pushing costs one arm
+    # runner and makes the three checks below a gate rather than a post-mortem.
+    env:
+      # The same reference either way: on a PR it names the image loaded into the runner's daemon,
+      # on `main` the one just pushed — so the checks below are one set of commands, not two.
+      IMAGE: ghcr.io/gururafiki/muffin-ingest:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
       - uses: docker/login-action@v3
+        if: github.ref == 'refs/heads/main'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -115,7 +123,9 @@ jobs:
           # `libs/muffin-ingest-lib` as a path source, so both trees must be in it.
           context: .
           file: projects/muffin-ingest/Dockerfile
-          push: true
+          push: ${{ github.ref == 'refs/heads/main' }}
+          # On a PR the image stays in the runner's daemon, which is what the checks below need.
+          load: ${{ github.ref != 'refs/heads/main' }}
           platforms: linux/arm64
           tags: |
             ghcr.io/gururafiki/muffin-ingest:latest
@@ -127,11 +137,11 @@ jobs:
         # `exec: "dagster-webserver": executable file not found in $PATH`, which reads as a broken
         # image rather than a missing dependency, and cost a deploy to find.
         #
-        # One image runs all three Swarm services, so it must carry all three entrypoints. Run
-        # against the PUSHED tag, not a local build: what the node pulls is the thing worth
-        # checking.
+        # One image runs all three Swarm services, so it must carry all three entrypoints. It runs
+        # against the image this job just built — the same bytes the node will pull once `main`
+        # pushes them — never a separate local build of its own.
         run: |
-          docker run --rm --entrypoint sh ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} -c '
+          docker run --rm --entrypoint sh $IMAGE -c '
             set -e
             for bin in dagster dagster-webserver dagster-daemon; do
               command -v "$bin" >/dev/null || { echo "::error::$bin is not in the image PATH"; exit 1; }
@@ -144,7 +154,7 @@ jobs:
         # and its extension map already built. `load_from_defs_folder` finds the project by walking
         # up to `pyproject.toml`, so this also catches an install layout that leaves it behind.
         run: |
-          docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} sh -c '
+          docker run --rm $IMAGE sh -c '
             set -e
             test "$(id -u)" = 10001 || { echo "::error::image does not run as uid 10001"; exit 1; }
             dagster definitions validate -m muffin_ingest_dagster.definitions'
@@ -178,7 +188,7 @@ jobs:
         # Reaching the check at all is the other half: as the runtime user a rebuild of the
         # extension map raises PermissionError, so a clean import proves the map shipped built.
         run: |
-          docker run --rm ghcr.io/gururafiki/muffin-ingest:${{ github.sha }} python -c '
+          docker run --rm $IMAGE python -c '
           import sys
           from openbb import obb
 
