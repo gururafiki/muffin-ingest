@@ -1,0 +1,14 @@
+# The environment `dg` commands run in across the workspace (`dg dev`, `dg list defs`). It is not
+# shipped and not what the image installs: the project below carries the runtime pins.
+[project]
+name = "muffin_ingest_local"
+requires-python = ">=3.13,<3.14"
+version = "0.1.0"
+dependencies = [
+    "dagster==1.13.22",
+    "dagster-dg-cli==1.13.22",
+    "dagster-webserver==1.13.22",
+]
+
+[tool.dg]
+directory_type = "deployment"

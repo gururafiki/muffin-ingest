@@ -1,0 +1,99 @@
+[project]
+name = "muffin-ingest"
+version = "0.1.0"
+description = "The Dagster code location: Muffin's ingestion assets, checks, schedules and sensors."
+readme = "README.md"
+license = { text = "AGPL-3.0-or-later" }
+requires-python = ">=3.13,<3.14"
+
+dependencies = [
+  # Orchestration. PINNED EXACTLY, because an asset/check API change is a silent behaviour change —
+  # and because `.agents/skills/dagster-expert` is vendored at the matching tag (`skills-lock.json`).
+  # A range would let a lock refresh move the version the skill no longer describes.
+  "dagster==1.13.22",
+  "dagster-postgres==0.29.22",
+  # THE WEBSERVER IS A SEPARATE DISTRIBUTION AND `dagster` DOES NOT PULL IT IN. Without it the
+  # image builds, the code location loads and `dagster definitions validate` passes — and the
+  # webserver service then crash-loops with `exec: "dagster-webserver": executable file not found
+  # in $PATH`, which reads as a broken image rather than a missing dependency. One image runs all
+  # three services, so it carries all three entrypoints.
+  "dagster-webserver==1.13.22",
+  # The database, DIRECTLY. Not PostgREST: this writer needs transactions spanning claim -> write ->
+  # complete, `for update skip locked`, COPY, and a role with its own statement timeout. PostgREST
+  # is the READ path for muffin-ui and stays that way.
+  "psycopg[binary,pool]>=3.2,<4",
+  # Parquet for the raw layer. pyarrow ALONE, not polars: both acquisition lanes are chunked by
+  # construction (a day of the cross-section, or a batch of ten securities' history), so the largest
+  # frame either holds is ~73k rows — four orders of magnitude below the 88 M that justified a lazy
+  # scan. `UPathIOManager` and `upath` come with dagster, so the whole raw path costs one wheel.
+  "pyarrow>=18,<26",
+  # The library. A path source below, so the image builds it from this checkout, never an index.
+  "muffin-ingest-lib",
+]
+
+[project.optional-dependencies]
+# THE HUB IS AN EXTRA SO CI CAN PROVE WHAT PRODUCTION RELIES ON: `providers/openbb.py` imports it
+# inside a function, so the code location must load, validate and pass its tests with ~250 MB of
+# provider code absent. The image installs `--extra hub`; the `definitions` job deliberately does
+# not, which is what keeps that lazy import honest rather than asserted in a comment.
+hub = ["muffin-ingest-lib[hub,filings]"]
+
+[dependency-groups]
+dev = [
+  "dagster-dg-cli==1.13.22",
+  "ruff>=0.8",
+  "mypy>=1.13",
+  "pytest>=8.3",
+  "pytest-cov>=6.0",
+  # The assertion engine for the offline replay, NOT an I/O manager: raw already lands as Parquet
+  # and DuckDB reads Parquet directly, so the real graph runs with the real I/O manager and the
+  # questions are asked of the files it wrote.
+  "duckdb>=1.1,<2",
+]
+
+[tool.uv.sources]
+muffin-ingest-lib = { path = "../../libs/muffin-ingest-lib", editable = true }
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/muffin_ingest_dagster"]
+# `load_from_defs_folder` walks up from the package to find the project's configuration, so the
+# file has to travel with a non-editable install too. This is the create-dagster template's own
+# line, kept verbatim.
+force-include = { "pyproject.toml" = "pyproject.toml" }
+
+[tool.dg]
+directory_type = "project"
+
+[tool.dg.project]
+root_module = "muffin_ingest_dagster"
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["src", "tests"]
+
+# pyarrow ships no py.typed marker. Narrow rather than blanket: a DIFFERENT import error in this
+# file still fails the build.
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["openbb", "openbb.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: drives a real provider; excluded from CI"]
+addopts = "-m 'not live'"

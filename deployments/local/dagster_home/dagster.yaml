@@ -1,0 +1,11 @@
+# `DAGSTER_HOME` for local runs and for CI. Point at this directory before running anything:
+#
+#     export DAGSTER_HOME=$PWD/deployments/local/dagster_home
+#
+# TELEMETRY OFF, AND THIS FILE IS THE ONLY SWITCH THAT COVERS BOTH. Dagster reads it here, and
+# `dg` asks the same question through `get_telemetry_enabled_from_dagster_yaml` — its own
+# `[cli.telemetry]` setting is read ONLY from the user-level config (`~/.config/dg.toml`), never
+# from this repo's `dg.toml`, so a setting committed there would look right and do nothing.
+# The deployed instance disables it separately in `muffin-deployment/stack/dagster/dagster.yaml`.
+telemetry:
+  enabled: false
