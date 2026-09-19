@@ -908,13 +908,6 @@
         "start": "2026-09-01T00:00:00+00:00",
         "timezone": "UTC"
       }
-    },
-    "prune_dagster_storage": {
-      "assets": [],
-      "ops": [
-        "prune_run_history"
-      ],
-      "partitions": null
     }
   },
   "resources": {
@@ -952,12 +945,6 @@
       "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "__anonymous_asset_job_ledger_heartbeat"
-    },
-    "prune_dagster_storage": {
-      "cron_schedule": "40 3 * * *",
-      "default_status": "RUNNING",
-      "execution_timezone": "UTC",
-      "job": "prune_dagster_storage"
     },
     "weekly_registries": {
       "cron_schedule": "0 4 * * 1",

@@ -111,3 +111,107 @@ def test_the_updatable_columns_are_derived_from_the_rows() -> None:
 def test_every_column_being_part_of_the_key_leaves_nothing_to_update() -> None:
     """`writers.upsert` then raises rather than emitting a DO NOTHING nobody asked for."""
     assert _updatable([{"a": 1, "b": 2}], ["a", "b"]) == []
+
+
+# ── merging partitions: extend what is stored rather than replace it ───────────────────────────
+
+
+def merging_seam(
+    tmp_path: Path,
+    runs: list[list[dict[str, Any]]],
+    merge_on: list[str],
+    key: str = "2026-09-02",
+) -> list[dict[str, Any]]:
+    """Materialise ONE merging asset once per entry in `runs`, and return what downstream last saw.
+
+    The same asset twice, not two assets: a merging partition is only interesting across
+    re-materialisations of itself, which is exactly what a lane extending a subject does.
+    """
+    seen: list[dict[str, Any]] = []
+    fetched: list[list[dict[str, Any]]] = list(runs)
+
+    @dg.asset(
+        partitions_def=DAY,
+        io_manager_key="parquet_io",
+        name="raw_thing",
+        metadata={"merge_on": merge_on},
+    )
+    def raw_thing() -> list[dict[str, Any]]:
+        return fetched.pop(0)
+
+    @dg.asset(partitions_def=DAY, name="downstream")
+    def downstream(raw_thing: list[dict[str, Any]]) -> None:
+        seen.clear()
+        seen.extend(raw_thing)
+
+    manager = ParquetIOManager(base_path=str(tmp_path))
+    for _ in runs:
+        dg.materialize(
+            [raw_thing, downstream], partition_key=key, resources={"parquet_io": manager}
+        )
+    return seen
+
+
+def test_a_merging_partition_keeps_what_an_earlier_run_stored(tmp_path: Path) -> None:
+    """The whole point: a run that fetched only the extension must not lose the history.
+
+    Without the merge this returns the second run's one row, which is a lane re-asking for ten
+    years to gain a day, or a resumed night deleting the half that succeeded.
+    """
+    seen = merging_seam(
+        tmp_path,
+        [
+            [{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}],
+            [{"symbol": "AAPL", "date": "2026-09-02", "close": 2.0}],
+        ],
+        merge_on=["symbol", "date"],
+    )
+    assert sorted(r["date"] for r in seen) == ["2026-09-01", "2026-09-02"]
+
+
+def test_a_re_asked_row_is_superseded_rather_than_duplicated(tmp_path: Path) -> None:
+    """Newest wins per key, and "newest" is this run — a re-ask is the provider restating itself."""
+    seen = merging_seam(
+        tmp_path,
+        [
+            [{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}],
+            [{"symbol": "AAPL", "date": "2026-09-01", "close": 9.0}],
+        ],
+        merge_on=["symbol", "date"],
+    )
+    assert seen == [{"symbol": "AAPL", "date": "2026-09-01", "close": 9.0}]
+
+
+def test_an_empty_fetch_keeps_the_history_rather_than_erasing_it(tmp_path: Path) -> None:
+    """For a MERGING asset an empty answer means "no extension", never "there is nothing".
+
+    A replacing asset writes the zero-row marker here, deliberately, to record that it collected
+    and found nothing. Doing that on a merging partition would delete the history to record a
+    market holiday.
+    """
+    seen = merging_seam(
+        tmp_path,
+        [[{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}], []],
+        merge_on=["symbol", "date"],
+    )
+    assert seen == [{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}]
+
+
+def test_merging_on_a_column_the_rows_do_not_carry_is_refused(tmp_path: Path) -> None:
+    """`row.get` returns None for a missing column, so an unkeyable set collapses onto one key and
+    one row survives — silently, on data that is perfectly good. Refuse rather than drop."""
+    with pytest.raises(dg.DagsterInvariantViolationError, match="do not carry"):
+        merging_seam(
+            tmp_path,
+            [
+                [{"symbol": "AAPL", "date": "2026-09-01"}],
+                [{"symbol": "AAPL", "close": 2.0}],
+            ],
+            merge_on=["symbol", "date"],
+        )
+
+
+def test_an_asset_without_merge_on_still_replaces(tmp_path: Path) -> None:
+    """The default is unchanged, so no existing lane silently starts accumulating."""
+    assert through_the_seam(tmp_path, [{"symbol": "AAPL", "n": 1}]) == [{"symbol": "AAPL", "n": 1}]
+    assert through_the_seam(tmp_path, [{"symbol": "MSFT", "n": 2}]) == [{"symbol": "MSFT", "n": 2}]

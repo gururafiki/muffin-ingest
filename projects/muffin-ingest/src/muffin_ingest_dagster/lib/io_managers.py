@@ -39,10 +39,23 @@ Rows = Sequence[Mapping[str, Any]]
 class ParquetIOManager(dg.UPathIOManager):
     """Raw: exactly what the provider said, one file per partition.
 
-    A partition's file is REPLACED, not appended to. Raw is immutable in the sense that we never
-    edit a row — but a partition re-materialises when we re-ask, and the newer answer is the one the
-    provider now gives. Appending would make a re-run silently double the data, which is the
-    upsert-cannot-retract failure moved to the filesystem.
+    BY DEFAULT a partition's file is REPLACED, not appended to. Raw is immutable in the sense that
+    we never edit a row — but a partition re-materialises when we re-ask, and the newer answer is
+    the one the provider now gives. Appending blindly would make a re-run silently double the data,
+    which is the upsert-cannot-retract failure moved to the filesystem.
+
+    AN ASSET MAY DECLARE `merge_on` INSTEAD, and then the file means something different: not "the
+    latest answer, replacing the last" but "every answer we hold for this subject, newest winning
+    per key". That is what lets a run ask only for the extension — a day, not ten years — without
+    destroying what earlier runs stored, and it is the difference between resuming a refused night
+    and losing its first half. The key is declared beside the asset rather than assumed here,
+    because every family keys its rows differently and a wrong key silently collapses them.
+
+    Say which it is at the asset:
+
+        @dg.asset(io_manager_key="parquet_io", metadata={"merge_on": ["symbol", "date"]})
+
+    Without `merge_on` the behaviour is exactly as before, so no existing lane changes.
     """
 
     extension: str | None = ".parquet"
@@ -107,6 +120,9 @@ class ParquetIOManager(dg.UPathIOManager):
         import pyarrow.parquet as pq
 
         rows = list(obj)
+        merge_on = [str(c) for c in ((context.definition_metadata or {}).get("merge_on") or ())]
+        if merge_on:
+            rows = self._merge_with_stored(context, rows, path, merge_on)
         path.parent.mkdir(parents=True, exist_ok=True)
         if not rows:
             # AN EMPTY PARTITION IS A RESULT, AND IT IS WRITTEN. A market holiday produces no bars,
@@ -131,6 +147,88 @@ class ParquetIOManager(dg.UPathIOManager):
         columns = sorted({key for row in rows for key in row})
         table = pa.table({column: [row.get(column) for row in rows] for column in columns})
         pq.write_table(table, path.path if hasattr(path, "path") else str(path))
+
+    def _merge_with_stored(
+        self, context: dg.OutputContext, rows: Rows, path: UPath, merge_on: list[str]
+    ) -> list[Mapping[str, Any]]:
+        """What this run fetched, on top of what the partition already held.
+
+        NEWEST WINS PER KEY, and "newest" is this run by construction — a re-ask of a subject is the
+        provider restating it, so the stored copy goes. Anything the run did NOT re-ask about is
+        kept, which is the whole point: the asset fetches an extension and the partition still holds
+        the history.
+
+        AN EMPTY RESULT IS NOT AN EMPTY PARTITION HERE. For a replacing asset, no rows means "we
+        collected and there was nothing", and the zero-row file records it. For a merging asset it
+        means "no extension today" — a market holiday, a symbol with no new bar — so returning the
+        stored rows unchanged is the honest outcome. Writing the marker instead would delete the
+        history to record a quiet day.
+        """
+        stored = self._stored_rows(path)
+        if not stored:
+            return list(rows)
+
+        def key(row: Mapping[str, Any]) -> tuple[Any, ...]:
+            return tuple(row.get(column) for column in merge_on)
+
+        # A ROW THE RUN CANNOT KEY WOULD COLLAPSE EVERY OTHER UNKEYED ROW ONTO IT. `row.get` returns
+        # None for a missing column, so a `merge_on` naming a field the provider does not send makes
+        # every row share the key `(None, ...)` — one row would survive and the rest would be
+        # dropped, silently, on data that is perfectly good. Refuse instead.
+        missing = sorted({c for row in rows for c in merge_on if c not in row})
+        if missing:
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} declares merge_on={merge_on} but its rows "
+                f"do not carry {missing}. Every row must carry every merge column, or rows that "
+                f"lack it all collapse onto one key and only one survives."
+            )
+
+        try:
+            fresh_keys = {key(row) for row in rows}
+        except TypeError as exc:  # a provider field that is a list or a dict
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} declares merge_on={merge_on}, but one of "
+                f"those columns holds an unhashable value. Merge on scalars the provider keys its "
+                f"own answer by."
+            ) from exc
+
+        # UNKEYABLE STORED ROWS ARE KEPT, NEVER DROPPED. A file written before the key existed, or
+        # by an older shape, cannot be compared — and "I cannot tell whether this was superseded"
+        # must resolve to keeping it. Counted so a non-zero value is visible rather than inferred.
+        kept: list[Mapping[str, Any]] = []
+        unkeyable = 0
+        for row in stored:
+            if any(column not in row for column in merge_on):
+                kept.append(row)
+                unkeyable += 1
+                continue
+            if key(row) not in fresh_keys:
+                kept.append(row)
+
+        merged = kept + list(rows)
+        context.add_output_metadata(
+            {
+                "merged_on": ", ".join(merge_on),
+                "rows_fetched": len(rows),
+                "rows_kept": len(kept),
+                "rows_superseded": len(stored) - len(kept),
+                "rows_unkeyable": unkeyable,
+                "rows_total": len(merged),
+            }
+        )
+        return merged
+
+    def _stored_rows(self, path: UPath) -> Sequence[Mapping[str, Any]]:
+        """What the partition already holds, or nothing if it holds nothing yet."""
+        import pyarrow.parquet as pq
+
+        if not path.exists():
+            return []
+        table = pq.read_table(path.path if hasattr(path, "path") else str(path))
+        if table.column_names == ["collected_nothing"]:
+            return []
+        stored: list[dict[str, Any]] = table.to_pylist()
+        return stored
 
     def load_from_path(self, context: dg.InputContext, path: UPath) -> list[dict[str, Any]]:
         import pyarrow.parquet as pq
