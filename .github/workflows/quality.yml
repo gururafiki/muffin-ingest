@@ -29,7 +29,7 @@ jobs:
       run:
         working-directory: libs/muffin-ingest-lib
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
       - name: Install (the library and its dev group; uv fetches the interpreter it needs)
@@ -67,7 +67,7 @@ jobs:
       run:
         working-directory: projects/muffin-ingest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
       - name: Install (the code location WITHOUT the `hub` extra)
@@ -110,7 +110,7 @@ jobs:
       # on `main` the one just pushed — so the checks below are one set of commands, not two.
       IMAGE: ghcr.io/gururafiki/muffin-ingest:${{ github.sha }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: The uv pin in the Dockerfile is the one this workflow resolves with
         # THE SAME FACT IN TWO PLACES WILL DRIFT, AND DEPENDABOT CAN ONLY SEE ONE OF THEM. It
         # watches the Dockerfile, so it would propose `ghcr.io/astral-sh/uv:<new>` while
@@ -125,13 +125,13 @@ jobs:
             exit 1
           }
           echo "uv $pinned in both"
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: github.ref == 'refs/heads/main'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@v7
         with:
           # THE WORKSPACE ROOT IS THE CONTEXT: the code location installs the library from
           # `libs/muffin-ingest-lib` as a path source, so both trees must be in it.
