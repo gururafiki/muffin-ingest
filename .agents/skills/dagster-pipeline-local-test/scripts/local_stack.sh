@@ -9,14 +9,25 @@ set -euo pipefail
 NAME=muffin-local-pg
 PORT=55432
 PASS=muffin-local
-# The committed migrations live in the muffin-deployment submodule, which is a SIBLING of this repo
-# inside the umbrella. Derived rather than hardcoded, with an override for a standalone clone.
-HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-MIG=${MUFFIN_MIGRATIONS:-$(cd "$HERE/../../../.." && pwd)/../muffin-deployment/stack/supabase/migrations}
-if [ ! -d "$MIG" ]; then
-  echo "migrations not found at $MIG — set MUFFIN_MIGRATIONS to muffin-deployment/stack/supabase/migrations" >&2
-  exit 2
-fi
+# The committed migrations live in the muffin-deployment submodule. This skill is committed TWICE —
+# canonically in muffin-ingest and mirrored at the umbrella root — so the two copies sit at
+# different depths and a fixed number of `..` is right for exactly one of them. Walk UP until the
+# directory is found instead, and resolve it only where it is needed, so `down` still works from
+# anywhere.
+find_migrations() {
+  if [ -n "${MUFFIN_MIGRATIONS:-}" ]; then echo "$MUFFIN_MIGRATIONS"; return 0; fi
+  local d
+  d=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+  while [ "$d" != "/" ]; do
+    if [ -d "$d/muffin-deployment/stack/supabase/migrations" ]; then
+      echo "$d/muffin-deployment/stack/supabase/migrations"; return 0
+    fi
+    d=$(dirname "$d")
+  done
+  echo "no muffin-deployment/stack/supabase/migrations above $(dirname "${BASH_SOURCE[0]}")" >&2
+  echo "set MUFFIN_MIGRATIONS to point at it" >&2
+  return 1
+}
 psql_() { docker exec -i -e PGPASSWORD=$PASS $NAME psql -U postgres -d muffin "$@"; }
 
 case "${1:-}" in
@@ -50,7 +61,8 @@ fix)
   psql_ -v ON_ERROR_STOP=1 -qc "create role ingest_rw nologin; create role metrics_ro nologin;"
   echo "created ingest_rw, metrics_ro" ;;
 apply)
-  for f in $(ls $MIG/*.sql | sort); do
+  MIG=$(find_migrations) || exit 2
+  for f in $(ls "$MIG"/*.sql | sort); do
     printf '%-52s ' "$(basename "$f")"
     if out=$(psql_ -v ON_ERROR_STOP=1 -q < "$f" 2>&1); then echo OK
     else echo "FAILED"; echo "$out" | grep -E 'ERROR|LINE' | head -3; exit 1; fi
