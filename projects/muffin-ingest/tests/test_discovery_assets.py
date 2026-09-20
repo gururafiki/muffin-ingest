@@ -411,6 +411,8 @@ def test_the_exchange_sweep_resumes_from_the_cursor_inside_its_own_file(
 
     saved = figi_provider.filter_exchange
     figi_provider.filter_exchange = sweeper
+    saved_pacing = discovery_raw.SWEEP_PACING  # see `_sweep`: a test does not pay 12 s a page
+    discovery_raw.SWEEP_PACING = 0.0
     try:
         result = dg.materialize(
             [discovery_raw.raw_exchange_sweep],
@@ -423,6 +425,7 @@ def test_the_exchange_sweep_resumes_from_the_cursor_inside_its_own_file(
         )
     finally:
         figi_provider.filter_exchange = saved
+        discovery_raw.SWEEP_PACING = saved_pacing
 
     assert result.success
     # First request starts fresh; the second carries the first page's own cursor, and the venue
@@ -474,6 +477,11 @@ def _sweep(
 
     saved = figi_provider.filter_exchange
     figi_provider.filter_exchange = sweeper
+    # A TEST MUST NOT PAY THE PROVIDER'S PACING. `SWEEP_PACING` is 12 s because OpenFIGI allows
+    # ~5 requests a minute; sleeping that between scripted pages would put minutes on the suite to
+    # wait for a provider nobody is calling.
+    saved_pacing = discovery_raw.SWEEP_PACING
+    discovery_raw.SWEEP_PACING = 0.0
     try:
         result = dg.materialize(
             [discovery_raw.raw_exchange_sweep],
@@ -486,6 +494,7 @@ def _sweep(
         )
     finally:
         figi_provider.filter_exchange = saved
+        discovery_raw.SWEEP_PACING = saved_pacing
     return result, asked
 
 

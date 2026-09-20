@@ -18,17 +18,32 @@ from muffin_ingest_dagster.defs.discovery.partitions import (
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.io_managers import RawStore
 
-#: How many `/v3/filter` pages one venue may fetch in a run. 25/min anonymous is the ceiling; each
-#: page is 100 rows, and a mid-size venue is ~22 pages (the AU capture reports 2,117 rows). A
-#: venue that needs more is resumed by the next run, whose partition file carries the cursor.
+#: How many `/v3/filter` pages one venue may fetch in a run. Each page is 100 rows and a mid-size
+#: venue is ~22 pages (AU measured at 2,124 listings), so 40 finishes most venues in one run — at
+#: `SWEEP_PACING` that is ~8 minutes holding the `openfigi_filter` pool, which nothing else wants.
+#: A venue needing more is resumed by the next run, whose partition file carries the cursor.
 SWEEP_MAX_PAGES = 40
 
 
-#: The anonymous rate limit is 25 requests per minute, so consecutive pages must be ~2.4 s apart —
-#: the MEASURED 429 arrived on request 21 of a paced sweep, and an unpaced loop would hit it on
-#: every mid-size venue. A pool bounds concurrency (one process touches openfigi_filter at once);
-#: this bounds the MINUTE, which a pool cannot express.
-SWEEP_PACING = 2.5
+#: SECONDS BETWEEN PAGES, AND THE NUMBER IT USED TO BE IS THE POINT.
+#:
+#: This was 2.5 s, derived from "the anonymous rate limit is 25 requests per minute" — a ceiling
+#: measured on `/v3/mapping` and no longer true of `/v3/filter`. MEASURED 2026-09-20 from this
+#: machine, after 65 s of silence each time:
+#:
+#:     paced 2.5 s   5 pages in 14.6 s, then 429 on request 6
+#:     paced 12 s    7 pages in 74.3 s, no 429 at all
+#:
+#: So the allowance is ~5 requests a minute, and at 2.5 s a run spent four fifths of its page
+#: budget being refused: two consecutive sweeps of AU each got exactly 5 pages, and a third
+#: launched ~35 s later was refused on its FIRST request. The lane recovered correctly every time
+#: — that is what the cursor and the merge are for — but a 429 on every run is not a resumption
+#: mechanism working, it is a pacing constant that has stopped being true.
+#:
+#: A pool bounds CONCURRENCY (one process touches `openfigi_filter` at a time); this bounds the
+#: MINUTE, which a pool cannot express. An API key would raise the allowance and is a credential
+#: decision, not one to take here.
+SWEEP_PACING = 12.0
 
 #: What a page fetched with no cursor records as the cursor it was fetched WITH. A string rather
 #: than NULL so every page carries a hashable merge key — see `merge_on` on `raw_exchange_sweep`.
