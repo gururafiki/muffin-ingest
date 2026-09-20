@@ -24,7 +24,7 @@ from muffin_ingest.providers import sec_nport
 from muffin_ingest.providers.documents import Document
 
 from muffin_ingest_dagster.defs.discovery import partitions as discovery_partitions
-from muffin_ingest_dagster.lib.io_managers import ParquetIOManager
+from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import FIXTURES
 
@@ -416,7 +416,10 @@ def test_the_exchange_sweep_resumes_from_the_cursor_inside_its_own_file(
             [discovery_raw.raw_exchange_sweep],
             partition_key="AU",
             instance=instance,
-            resources={"parquet_io": ParquetIOManager(str(tmp_path))},
+            resources={
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "raw_store": RawStore(base_path=str(tmp_path)),
+            },
         )
     finally:
         figi_provider.filter_exchange = saved
@@ -432,3 +435,195 @@ def test_the_exchange_sweep_resumes_from_the_cursor_inside_its_own_file(
     assert len(rows) == 2
     assert rows[-1]["cursor_at"] is None
     assert bytes(rows[0]["body"]) == page1  # the response body is stored whole
+
+
+# --- the walk: resume merges, a refresh replaces -------------------------------------------------
+
+
+def _page(*, figi: str, next_cursor: str | None, total: int = 2117) -> bytes:
+    return json.dumps(
+        {
+            "data": [{"figi": figi, "ticker": figi[-4:], "securityType2": "Common Stock"}],
+            "next": next_cursor,
+            "total": total,
+        }
+    ).encode()
+
+
+def _sweep(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    pages: dict[str | None, bytes],
+    *,
+    venue: str = "AU",
+    throttle_after: int | None = None,
+) -> tuple[Any, list[str | None]]:
+    """Materialise the venue once against a scripted provider; return the result and the cursors
+    it asked with. `throttle_after` refuses the Nth request, which is the 429 case."""
+    from muffin_ingest.providers.openfigi import OpenFigiThrottled
+
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    asked: list[str | None] = []
+
+    def sweeper(exch_code: str, *, cursor: str | None = None, **kw: Any) -> Document:
+        asked.append(cursor)
+        if throttle_after is not None and len(asked) > throttle_after:
+            raise OpenFigiThrottled("429")
+        return _doc(pages[cursor])
+
+    saved = figi_provider.filter_exchange
+    figi_provider.filter_exchange = sweeper
+    try:
+        result = dg.materialize(
+            [discovery_raw.raw_exchange_sweep],
+            partition_key=venue,
+            instance=instance,
+            resources={
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "raw_store": RawStore(base_path=str(tmp_path)),
+            },
+        )
+    finally:
+        figi_provider.filter_exchange = saved
+    return result, asked
+
+
+def _stored(tmp_path: Path, venue: str = "AU") -> list[dict[str, Any]]:
+    from pyarrow import parquet as pq
+
+    path = tmp_path / "raw_exchange_sweep" / f"{venue}.parquet"
+    if not path.exists():
+        return []
+    table = pq.read_table(str(path))
+    if table.column_names == ["collected_nothing"]:
+        return []
+    rows: list[dict[str, Any]] = table.to_pylist()
+    return rows
+
+
+def test_a_resumed_sweep_keeps_the_pages_it_already_stored(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """THE DEFECT THIS EXISTS FOR: the asset returns only the pages of the CURRENT run, so without
+    `merge_on` the manager replaced the file and a resumed venue kept the tail while silently
+    losing everything before it — while `_last_cursor`'s own docstring claimed the file was
+    "REBUILT … with every page fetched since the beginning".
+
+    The fixture makes the two rules disagree: the first run is cut off after one page, so a
+    replacing manager would leave the venue at one row and a merging one at two.
+    """
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU"])
+    pages = {
+        None: _page(figi="BBG0000000P1", next_cursor="c1"),
+        "c1": _page(figi="BBG0000000P2", next_cursor=None),
+    }
+
+    first, asked = _sweep(tmp_path, instance, pages, throttle_after=1)
+    assert first.success
+    assert asked == [None, "c1"]  # asked for page two and was refused
+    stored = _stored(tmp_path)
+    assert len(stored) == 1, "a throttled first run files the page it did get"
+    assert stored[-1]["cursor_at"] == "c1", "and says the walk has more to fetch"
+
+    second, asked = _sweep(tmp_path, instance, pages)
+    assert second.success
+    assert asked == ["c1"], "the resume starts from the file's own cursor, not from the beginning"
+
+    stored = _stored(tmp_path)
+    assert len(stored) == 2, f"the resumed venue lost its earlier page: {stored}"
+    assert [row["cursor_from"] for row in stored] == ["", "c1"]
+    assert [row["page"] for row in stored] == [0, 1], "page numbering continues across the resume"
+    assert stored[-1]["cursor_at"] is None, "and the walk is now finished"
+
+
+def test_a_finished_venue_is_re_walked_and_replaces_rather_than_accumulating(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """OPENFIGI HAS NO AS-OF, so refreshing a venue means walking it again — and the second walk's
+    pages are the whole answer, not an extension. Keeping both would grow the partition on every
+    refresh and leave nobody able to say which listings are current.
+
+    THE TWO WALKS USE DIFFERENT CURSORS ON PURPOSE. The first version of this fixture reused `c1`,
+    so the second walk's pages superseded the first's by key and merging produced the same two rows
+    replacing does — the guard passed with `complete=` deleted, which is this repo's most-repeated
+    trap. With distinct cursors the rules disagree: merging keeps the orphaned first-walk page and
+    leaves three, replacing leaves two.
+    """
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU"])
+    first_walk = {
+        None: _page(figi="BBG0000000P1", next_cursor="c1"),
+        "c1": _page(figi="BBG0000000P2", next_cursor=None),
+    }
+    result, asked = _sweep(tmp_path, instance, first_walk)
+    assert result.success and asked == [None, "c1"]
+    assert [row["page"] for row in _stored(tmp_path)] == [0, 1]
+
+    second_walk = {
+        None: _page(figi="BBG0000000Q1", next_cursor="d1"),
+        "d1": _page(figi="BBG0000000Q2", next_cursor=None),
+    }
+    result, asked = _sweep(tmp_path, instance, second_walk)
+    assert result.success
+    assert asked == [None, "d1"], "a finished walk is re-walked from the beginning, not resumed"
+
+    stored = _stored(tmp_path)
+    assert len(stored) == 2, f"the refresh accumulated a second generation of pages: {stored}"
+    assert all(b"BBG0000000Q" in bytes(row["body"]) for row in stored), stored
+    assert [row["cursor_from"] for row in stored] == ["", "d1"]
+    # A NEW WALK STARTS AT PAGE ZERO. Continuing the old walk's numbering would make `page` say
+    # this venue has more pages than the provider ever served it.
+    assert [row["page"] for row in stored] == [0, 1], stored
+
+
+def test_a_venue_refused_on_its_first_page_keeps_what_it_holds(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """AN EMPTY WALK REPLACES NOTHING. A finished venue re-walked and refused immediately returns
+    no rows, and writing that over the stored directory would delete a venue to record a 429."""
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU"])
+    pages: dict[str | None, bytes] = {None: _page(figi="BBG0000000P1", next_cursor=None)}
+    result, _ = _sweep(tmp_path, instance, pages)
+    assert result.success and len(_stored(tmp_path)) == 1
+
+    result, asked = _sweep(tmp_path, instance, pages, throttle_after=0)
+    assert result.success, "a refusal is not a failed run"
+    assert asked == [None]
+    assert len(_stored(tmp_path)) == 1, "the stored walk survived a refused refresh"
+
+
+def test_the_check_names_the_venues_an_operator_must_resume(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """RESUMING IS AN OPERATOR ACTION, so the only thing missing was being able to see WHICH.
+
+    A half-swept venue is an ordinary materialized partition and its freshness policy is satisfied
+    the moment it stops, so nothing else in the system can tell it from a finished one.
+    """
+    from muffin_ingest_dagster.defs.discovery.checks import venue_sweep_reached_its_last_page
+
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU", "LN"])
+    stalled: dict[str | None, bytes] = {None: _page(figi="BBG0000000P1", next_cursor="c1")}
+    finished: dict[str | None, bytes] = {None: _page(figi="BBG0000000R1", next_cursor=None)}
+    _sweep(tmp_path, instance, stalled, venue="AU", throttle_after=1)
+    _sweep(tmp_path, instance, finished, venue="LN")
+
+    # EVALUATED OVER THE WHOLE GRID, which is the question an operator asks — "which venues do I
+    # re-materialise?". Run inside a partitioned run it answers for that run's partitions instead;
+    # either way the rule is the same one line.
+    evaluation = venue_sweep_reached_its_last_page(
+        dg.build_asset_check_context(instance=instance), RawStore(base_path=str(tmp_path))
+    )
+    assert isinstance(evaluation, dg.AssetCheckResult)
+
+    assert evaluation.passed is False
+    assert evaluation.metadata["venues"].value == 2
+    assert evaluation.metadata["unfinished"].value == 1
+    assert evaluation.metadata["never_swept"].value == 0
+    # NAMED, NOT JUST COUNTED. A check reporting "1 venue is unfinished" cannot be acted on; this
+    # assertion is what makes the count and the names disagree if only the count is kept.
+    assert evaluation.metadata["resume_these"].value == "AU"
