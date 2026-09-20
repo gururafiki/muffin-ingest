@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -724,10 +724,15 @@ def test_security_return_rebuilds_when_daily_bars_land_whatever_else_is_missing(
     and `price_bar_history` has unfilled `security` keys by design — so the condition waited for a
     state Lane B never reaches.
 
-    Decided 2026-09-17: rebuild whenever the daily bars land, whatever is missing, and let the
-    history lane neither trigger nor block (a multi-day history backfill counts as in progress for
-    its whole length). The sequence below is production's: built once by hand, earlier days
-    missing, a history key unfilled, then one new day of bars.
+    Decided 2026-09-17: rebuild whenever bars land, whatever is missing. The sequence below is
+    production's: built once by hand, earlier days missing, a history key unfilled, then new bars.
+
+    AMENDED BY THE 2026-09-19 CUTOVER. The security lane used to be IGNORED, so only the day lane
+    triggered a rebuild. `nightly_prices` replaced that lane and `daily_prices_schedule` is
+    stopped, so `price_bar` is no longer materialised — an ignored security lane would now leave
+    this asset with no trigger whatsoever, and returns would stop rebuilding with every run still
+    green. Both lanes trigger it now; the day lane's leg below is kept because that lane is the
+    rollback and must still work if it is started.
     """
 
     instance = dg.DagsterInstance.ephemeral()
@@ -764,8 +769,10 @@ def test_security_return_rebuilds_when_daily_bars_land_whatever_else_is_missing(
         )
     )
     after_history = tick(settled.cursor)
-    assert after_history.get_num_requested(key) == 0, (
-        "the history lane is ignored: its bars reach returns with the next daily rebuild"
+    assert after_history.get_num_requested(key) == 1, (
+        "the security lane must TRIGGER returns since the cutover — it is the only lane that "
+        "collects, so ignoring it would leave this asset with nothing to fire on at all and "
+        "returns would silently stop rebuilding while every run stayed green"
     )
 
 
@@ -790,13 +797,23 @@ def test_every_collection_schedule_is_running() -> None:
     step a runbook loses.
     """
 
-    collecting = {"daily_prices_schedule", "daily_fx_schedule", "daily_indices_schedule"}
+    collecting = {"nightly_prices", "daily_fx_schedule", "daily_indices_schedule"}
     running = {
         s.name
         for s in (loaded_defs().schedules or [])
         if s.default_status is dg.DefaultScheduleStatus.RUNNING
     }
     assert collecting <= running, f"not running: {sorted(collecting - running)}"
+
+    # AND EXACTLY ONE PRICE LANE COLLECTS. `daily_prices_schedule` is kept as the rollback — the
+    # assets, their checks and the offline replay suite are all still in place — but running BOTH
+    # would ask the provider for the same securities twice a night, against an allowance measured
+    # at ~2,740 requests. Which one is live is the whole cutover, so it is asserted rather than
+    # left to a default nobody re-reads.
+    assert "daily_prices_schedule" not in running, (
+        "the day lane is the rollback, not a second collector; starting it means stopping "
+        "nightly_prices in the same breath"
+    )
 
 
 def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
@@ -990,3 +1007,82 @@ def test_extending_a_partition_keeps_the_bars_it_already_held(tmp_path: Path) ->
         prices_raw.raw_price_history.key, SUBJECTS[1][0]
     )
     assert sorted(str(r["date"]) for r in held) == ["2026-09-17", "2026-09-18"]
+
+
+# ── the nightly sweep: a contiguous slice, rotating by date ───────────────────────────────────
+
+
+def sweep(instance: dg.DagsterInstance, when: datetime) -> Any:
+    from muffin_ingest_dagster.defs.prices.automation import nightly_prices
+
+    return nightly_prices(
+        dg.build_schedule_context(instance=instance, scheduled_execution_time=when)
+    )
+
+
+def test_the_sweep_asks_for_a_contiguous_slice_and_moves_on_the_next_night(tmp_path: Path) -> None:
+    """One RunRequest covering a RANGE, because 2,500 single-partition requests is 2,500 runs.
+
+    The range tags are the only way Dagster expresses "this run covers many partitions", and the
+    slice must be contiguous in the partition list — which is exactly why the sweep is a rotation
+    rather than weight-ordered.
+    """
+    from dagster._core.storage.tags import (
+        ASSET_PARTITION_RANGE_END_TAG,
+        ASSET_PARTITION_RANGE_START_TAG,
+    )
+
+    from muffin_ingest_dagster.defs.prices import automation as prices_automation
+
+    keys = [f"sec-{i:03d}" for i in range(10)]
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
+        held = prices_automation.SWEEP_SLICE
+        prices_automation.SWEEP_SLICE = 4
+        try:
+            first = sweep(instance, datetime(2026, 9, 19, tzinfo=UTC))
+            second = sweep(instance, datetime(2026, 9, 20, tzinfo=UTC))
+        finally:
+            prices_automation.SWEEP_SLICE = held
+
+    def span(req: Any) -> tuple[str, str]:
+        return (
+            req.tags[ASSET_PARTITION_RANGE_START_TAG],
+            req.tags[ASSET_PARTITION_RANGE_END_TAG],
+        )
+
+    assert span(first) != span(second), (
+        "consecutive nights asked for the same securities; the rotation does not advance"
+    )
+    for req in (first, second):
+        start, end = span(req)
+        assert keys.index(end) - keys.index(start) == 3, "the slice must be contiguous"
+
+
+def test_the_sweep_covers_the_whole_universe_within_a_cycle(tmp_path: Path) -> None:
+    """A rotation that clamps, or that strides past securities, starves whatever it skips."""
+    from dagster._core.storage.tags import ASSET_PARTITION_RANGE_START_TAG
+
+    from muffin_ingest_dagster.defs.prices import automation as prices_automation
+
+    keys = [f"sec-{i:03d}" for i in range(10)]
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
+        held = prices_automation.SWEEP_SLICE
+        prices_automation.SWEEP_SLICE = 4
+        try:
+            starts = {
+                sweep(instance, datetime(2026, 9, 19, tzinfo=UTC) + timedelta(days=n)).tags[
+                    ASSET_PARTITION_RANGE_START_TAG
+                ]
+                for n in range(10)
+            }
+        finally:
+            prices_automation.SWEEP_SLICE = held
+
+    assert len(starts) > 1, "every night started at the same place"
+
+
+def test_the_sweep_skips_rather_than_failing_before_any_security_exists() -> None:
+    with dg.instance_for_test() as instance:
+        assert isinstance(sweep(instance, datetime(2026, 9, 19, tzinfo=UTC)), dg.SkipReason)

@@ -4,6 +4,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "price_bar_history:no_security_is_far_behind_the_sweep": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "raw_price_bars:every_askable_security_was_asked": {
       "additional_deps": [],
       "blocking": false
@@ -42,7 +46,7 @@
       "tags": {}
     },
     "fund_holding": {
-      "automation_condition": "eager",
+      "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
         "max_partitions_per_run": 20,
         "type": "MULTI_RUN"
@@ -649,7 +653,7 @@
       "tags": {}
     },
     "security_cik": {
-      "automation_condition": "eager",
+      "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": null,
       "code_version": null,
       "deps": {
@@ -674,7 +678,7 @@
       "tags": {}
     },
     "security_nse_filer": {
-      "automation_condition": "eager",
+      "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": null,
       "code_version": null,
       "deps": {
@@ -699,7 +703,7 @@
       "tags": {}
     },
     "security_return": {
-      "automation_condition": "eager",
+      "automation_condition": "eager (b561cc032c71)",
       "backfill_policy": null,
       "code_version": null,
       "deps": {
@@ -908,6 +912,17 @@
         "start": "2026-09-01T00:00:00+00:00",
         "timezone": "UTC"
       }
+    },
+    "nightly_prices": {
+      "assets": [
+        "price_bar_history",
+        "raw_price_history"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      }
     }
   },
   "resources": {
@@ -931,7 +946,7 @@
     },
     "daily_prices_schedule": {
       "cron_schedule": "0 0 * * *",
-      "default_status": "RUNNING",
+      "default_status": "STOPPED",
       "execution_timezone": "UTC",
       "job": "daily_prices"
     },
@@ -946,6 +961,12 @@
       "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "__anonymous_asset_job_ledger_heartbeat"
+    },
+    "nightly_prices": {
+      "cron_schedule": "0 0 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": null,
+      "job": "nightly_prices"
     },
     "weekly_registries": {
       "cron_schedule": "0 4 * * 1",

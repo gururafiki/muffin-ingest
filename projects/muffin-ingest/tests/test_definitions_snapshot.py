@@ -21,12 +21,14 @@ happens to its history first.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
 from typing import Any
 
 import dagster as dg
+from dagster._serdes import serialize_value
 
 from tests import loaded_defs
 
@@ -75,6 +77,28 @@ def _freshness(policy: Any) -> dict[str, Any] | None:
     return {"kind": type(policy).__name__, "repr": repr(policy)}
 
 
+def _condition(condition: Any) -> str | None:
+    """A condition's LABEL IS NOT ITS BEHAVIOUR, and the label alone let a real change through.
+
+    Measured 2026-09-19: `eager().without(~any_deps_missing())` and the same condition with
+    `.ignore(<a lane>)` both return the label `"eager"`, so this fingerprint could not see the
+    difference between "rebuild when either lane lands" and "rebuild only when the day lane lands".
+    That is precisely the change the price cutover made to `security_return`, and getting it wrong
+    silently stops returns rebuilding while every run stays green — it was caught by a behaviour
+    test, which is luck rather than a gate.
+
+    `get_snapshot()` DOES distinguish them (the difference lives in the operand, not in the node
+    labels, so rendering the tree does not help either). It is serialised and hashed rather than
+    stored whole: the full structure is hundreds of lines per asset and would bury every other
+    change in this file. A moved hash means "the condition changed — read it", which is what this
+    snapshot is for.
+    """
+    if condition is None:
+        return None
+    digest = hashlib.sha256(serialize_value(condition.get_snapshot()).encode()).hexdigest()[:12]
+    return f"{condition.get_label() or 'unlabelled'} ({digest})"
+
+
 def fingerprint(definitions: dg.Definitions) -> dict[str, Any]:
     graph = definitions.resolve_asset_graph()
 
@@ -96,7 +120,7 @@ def fingerprint(definitions: dg.Definitions) -> dict[str, Any]:
                 }
             ),
             "pools": sorted(node.pools or ()),
-            "automation_condition": None if condition is None else condition.get_label(),
+            "automation_condition": _condition(condition),
             "freshness_policy": _freshness(node.freshness_policy),
             "io_manager_key": node.io_manager_key,
             "code_version": node.code_version,
