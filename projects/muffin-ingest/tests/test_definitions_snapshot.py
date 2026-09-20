@@ -13,7 +13,7 @@ across the workspace move AND the version bump.
 
 To accept a deliberate change, regenerate and read the diff before committing it:
 
-    MUFFIN_UPDATE_SNAPSHOT=1 pytest tests/dagster/test_definitions_snapshot.py
+    MUFFIN_UPDATE_SNAPSHOT=1 pytest tests/test_definitions_snapshot.py
 
 An ADDED name is ordinary. A REMOVED or CHANGED one is a rename or a behaviour change — decide what
 happens to its history first.
@@ -214,5 +214,5 @@ def test_the_code_location_keeps_every_name_and_setting_state_is_keyed_on() -> N
         "the definitions differ from definitions.snapshot.json:\n"
         + _describe(expected, actual)
         + "\n\nIf deliberate: MUFFIN_UPDATE_SNAPSHOT=1 pytest "
-        "tests/dagster/test_definitions_snapshot.py, then read the diff."
+        "tests/test_definitions_snapshot.py, then read the diff."
     )

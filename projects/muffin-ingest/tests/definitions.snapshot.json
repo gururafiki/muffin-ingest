@@ -8,6 +8,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "raw_exchange_sweep:venue_sweep_reached_its_last_page": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "raw_price_bars:every_askable_security_was_asked": {
       "additional_deps": [],
       "blocking": false
