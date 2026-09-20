@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from muffin_ingest.facets import symbology
 
 FIX = Path(__file__).parent.parent / "fixtures"
@@ -171,3 +173,44 @@ def test_plan_symbols_records_a_hit_and_a_miss_as_observations() -> None:
     )
     assert identifiers == [] and symbols == []
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss"), ("symbol", "miss")]
+
+
+# --- who the ladder asks about -------------------------------------------------------------------
+
+
+def test_a_population_query_anti_joins_over_the_entity_not_over_rows() -> None:
+    """THE SHAPE, NOT THE TEXT. A backlog written as "join the evidence table and filter where it
+    is null" keeps every security whose OWN ISIN row survives the join, so the queue never drains —
+    that defect ran for months on `pending_industry`, reporting progress the whole time, and this
+    schema has recorded it as its most expensive recurring shape.
+
+    Asserted structurally because the alternative needs a database: `not exists` scoped to the
+    security is the only form that asks the question about the ENTITY.
+    """
+    for sql in (symbology.SUBJECTS_NEEDING_TICKER, symbology.SUBJECTS_NEEDING_SYMBOL):
+        flat = " ".join(sql.split())
+        assert "not exists" in flat, flat
+        assert "left join" not in flat, f"a left-join-and-filter cannot drain: {flat}"
+        # The subquery must be tied to the security under test, or it asks "does ANY security have
+        # one", which is true from the first row onward and excludes the whole universe.
+        assert ".security_id = s.security_id" in flat, flat
+
+
+def test_a_rung_must_name_the_evidence_it_supplies() -> None:
+    """An unknown evidence name is refused rather than silently answering the other rung's
+    question — two rungs sharing one grid makes a typo look like a working filter."""
+    with pytest.raises(ValueError, match="unknown evidence"):
+        symbology.subjects_needing(object(), "figi")
+
+
+def test_the_populations_are_scoped_to_equities() -> None:
+    """A BOND IS NOT A SYMBOLOGY SUBJECT. The population these rungs shipped with was
+    `security.is_tradeable = false` — 23,341 securities of which 15,159 were bonds, aimed at
+    OpenFIGI's US *equity* lookup and at Yahoo's search, neither of which can serve one."""
+    for sql in (symbology.SUBJECTS_NEEDING_TICKER, symbology.SUBJECTS_NEEDING_SYMBOL):
+        flat = " ".join(sql.split())
+        assert "s.security_type_code = 'equity'" in flat, flat
+        assert "is_tradeable" not in flat, (
+            "is_tradeable is set by promotion, not by symbol resolution — it is false by default, "
+            "so it selects almost the whole universe and says nothing about needing a symbol"
+        )

@@ -306,3 +306,108 @@ def _now() -> str:
     from datetime import UTC, datetime
 
     return datetime.now(UTC).isoformat()
+
+
+# --- who the ladder is for ----------------------------------------------------------------------
+#
+# WHAT A RUNG ASKS ABOUT IS A QUESTION FOR THE DATABASE, NOT FOR THE ASSET, and it is asked per
+# rung because the rungs cost different amounts. OpenFIGI's `/v3/mapping` takes ten jobs a request,
+# so a subject that does not need it costs a tenth of a request; Yahoo's search is ONE REQUEST PER
+# SUBJECT, so asking it about a security whose symbol we already hold is a whole request spent on a
+# known answer.
+#
+# MEASURED 2026-09-20, which is why this exists. The population these rungs shipped with was
+# `security.is_tradeable = false` — 23,341 securities, **15,159 of them bonds**, with no clause
+# excluding a security that already holds the identifier the rung supplies. `is_tradeable` is not a
+# symbol-resolution marker: it is false by default and set true by promotion, so the population was
+# "almost everything", ordered by nothing, aimed at a provider whose US equity lookup cannot serve a
+# bond at all. Against the same database the honest populations are **5,697** and **1,618**.
+#
+# ANTI-JOIN OVER THE ENTITY, never a `where … is null` over rows: a security's OWN ISIN row would
+# survive a join-and-filter against the identifier table and the backlog would never drain. That
+# defect cost this schema months on `pending_industry`.
+
+_EQUITY_WITH_ISIN = """
+  from market.security_identifier i
+  join market.security s on s.security_id = i.security_id
+ where i.kind_code = 'isin'
+   and s.security_type_code = 'equity'
+"""
+
+SUBJECTS_NEEDING_TICKER = f"""
+select distinct i.security_id::text
+{_EQUITY_WITH_ISIN}
+   and not exists (select 1 from market.security_identifier t
+                    where t.security_id = s.security_id and t.kind_code = %s)
+"""
+
+SUBJECTS_NEEDING_SYMBOL = f"""
+select distinct i.security_id::text
+{_EQUITY_WITH_ISIN}
+   and not exists (select 1 from market.security_provider_symbol p
+                    where p.security_id = s.security_id and p.provider_code = %s)
+"""
+
+#: What each rung is for, so a caller names the EVIDENCE rather than repeating a query.
+NEEDS_TICKER = "ticker"
+NEEDS_SYMBOL = "symbol"
+
+
+def subjects_needing(conn: Any, evidence: str) -> set[str]:
+    """The security_ids a rung supplying `evidence` still has something to say about."""
+    if evidence == NEEDS_TICKER:
+        sql, params = SUBJECTS_NEEDING_TICKER, (TICKER_KIND,)
+    elif evidence == NEEDS_SYMBOL:
+        sql, params = SUBJECTS_NEEDING_SYMBOL, (SYMBOL_PROVIDER,)
+    else:
+        raise ValueError(f"unknown evidence {evidence!r}; expected one of ticker, symbol")
+    with conn.cursor() as cur:
+        cur.execute(sql, params)
+        return {row[0] for row in cur.fetchall()}
+
+
+ATTRIBUTES_FOR = """
+select i.security_id::text, min(i.value), min(s.country_iso2)
+  from market.security_identifier i
+  join market.security s on s.security_id = i.security_id
+ where i.kind_code = 'isin' and i.security_id::text = any(%s)
+ group by i.security_id
+"""
+
+
+def attributes_for(conn: Any, security_ids: Sequence[str]) -> dict[str, dict[str, Any]]:
+    """security_id → {isin, country_iso2}, for the subjects named.
+
+    NARROWED TO THE RUN rather than reading the whole identifier table and filtering in Python —
+    27,652 securities carry an ISIN and a run covers 200.
+
+    `min(i.value)` because `security_identifier` is keyed `(kind_code, value)`, so a security MAY
+    carry two ISINs; picking by row order made which one the ladder asked with depend on the
+    planner. Deterministic is not the same as right, but it is the difference between a stable
+    answer and one that changes under an index.
+    """
+    if not security_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(ATTRIBUTES_FOR, (list(security_ids),))
+        return {
+            sid: {"isin": isin, "country_iso2": country} for sid, isin, country in cur.fetchall()
+        }
+
+
+STALE_MISSES = """
+select distinct security_id::text from market.identifier_probe
+ where outcome = 'miss' and observed_at < now() - make_interval(days => %s)
+"""
+
+
+def stale_misses(conn: Any, *, older_than_days: int) -> set[str]:
+    """Securities whose recorded answer was "the provider has nothing" and is old enough to re-ask.
+
+    NOT NEVER, AND NOT SOON. A security can gain a US listing, and a pair Yahoo does not index
+    today may be indexed next quarter — but re-asking a known absence on every run is how a
+    rate-limited provider gets spent on answers already written down.
+    """
+    with conn.cursor() as cur:
+        cur.execute(STALE_MISSES, (older_than_days,))
+        return {row[0] for row in cur.fetchall()}

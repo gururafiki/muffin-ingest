@@ -296,7 +296,7 @@
       "tags": {}
     },
     "raw_figi_local_symbol": {
-      "automation_condition": null,
+      "automation_condition": "never asked, or a stale miss (cd6c999f33c1)",
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"
@@ -314,7 +314,7 @@
       "owners": [],
       "partitions": {
         "kind": "dynamic",
-        "name": "security"
+        "name": "symbology_subject"
       },
       "pools": [
         "openfigi_mapping"
@@ -322,7 +322,7 @@
       "tags": {}
     },
     "raw_figi_ticker": {
-      "automation_condition": null,
+      "automation_condition": "never asked, or a stale miss (cd6c999f33c1)",
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"
@@ -340,7 +340,7 @@
       "owners": [],
       "partitions": {
         "kind": "dynamic",
-        "name": "security"
+        "name": "symbology_subject"
       },
       "pools": [
         "openfigi_mapping"
@@ -631,7 +631,7 @@
       "tags": {}
     },
     "raw_yahoo_symbol": {
-      "automation_condition": null,
+      "automation_condition": "never asked, or a stale miss (cd6c999f33c1)",
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"
@@ -649,7 +649,7 @@
       "owners": [],
       "partitions": {
         "kind": "dynamic",
-        "name": "security"
+        "name": "symbology_subject"
       },
       "pools": [
         "yahoo"
@@ -733,7 +733,7 @@
       "tags": {}
     },
     "security_symbology": {
-      "automation_condition": null,
+      "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"
@@ -754,7 +754,7 @@
       "owners": [],
       "partitions": {
         "kind": "dynamic",
-        "name": "security"
+        "name": "symbology_subject"
       },
       "pools": [
         "sql"
@@ -855,7 +855,7 @@
       "ops": [],
       "partitions": {
         "kind": "dynamic",
-        "name": "security"
+        "name": "symbology_subject"
       }
     },
     "__anonymous_asset_job_weekly_registries": {
