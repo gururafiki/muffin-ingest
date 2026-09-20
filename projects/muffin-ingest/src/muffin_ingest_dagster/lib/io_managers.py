@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import dagster as dg
 from muffin_ingest.writers import WriteResult, replace_scope, upsert
 
+from muffin_ingest_dagster.lib.partitioned import Complete
 from muffin_ingest_dagster.lib.resources import Postgres
 
 if TYPE_CHECKING:
@@ -121,7 +122,27 @@ class ParquetIOManager(dg.UPathIOManager):
 
         rows = list(obj)
         merge_on = [str(c) for c in ((context.definition_metadata or {}).get("merge_on") or ())]
-        if merge_on:
+        # A COMPLETE ANSWER REPLACES; AN EXTENSION MERGES. The asset knows which it asked for and
+        # says so per partition (`partitioned.Complete`), because one run holds both: the price
+        # sweep loads a never-collected security in full and extends its neighbour, in the same run.
+        #
+        # AND AN EMPTY ONE REPLACES NOTHING, enforced here rather than trusted of every caller. No
+        # rows means a dead symbol, a refusal or a holiday — writing that over a stored history
+        # would delete it to record a quiet day, which is the failure the merge exists to prevent.
+        if merge_on and isinstance(obj, Complete) and rows:
+            stored = self._stored_rows(path)
+            context.add_output_metadata(
+                {
+                    "merged_on": ", ".join(merge_on),
+                    "rows_fetched": len(rows),
+                    "rows_kept": 0,
+                    "rows_superseded": len(stored),
+                    "rows_unkeyable": 0,
+                    "rows_total": len(rows),
+                    "replaced_because": "the run fetched this subject's whole history",
+                }
+            )
+        elif merge_on:
             rows = self._merge_with_stored(context, rows, path, merge_on)
         path.parent.mkdir(parents=True, exist_ok=True)
         if not rows:

@@ -11,7 +11,7 @@ paid. Nobody has run one yet, which is the only reason it has not been seen.
 A rule written at one call site is not a rule. This is the call site.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from dagster import AssetExecutionContext
@@ -20,11 +20,37 @@ Row = dict[str, Any]
 Rows = list[Row]
 
 
+class Complete(list[Row]):
+    """A partition's rows that are the WHOLE answer for it, not an extension of what is stored.
+
+    ONLY THE MERGING WRITE PATH NOTICES THIS, and it is a list everywhere else, so nothing
+    downstream has to know it exists. A merging asset (`merge_on`) normally writes its rows ON TOP
+    of the partition's stored ones, because it asked only for what was missing. When it asked for
+    the subject's entire history instead, the stored rows are not extra knowledge — they are the
+    same facts from an older run, and keeping them beside a fresh full answer grows the file
+    without ever superseding anything.
+
+    Measured 2026-09-20, which is why this exists. Every `raw_price_history` partition was written
+    before the raw layer stopped adding `trade_date`, so none carries the provider's `date` that
+    `merge_on` keys on. The merge could not key a single stored row, kept all 4,496 of them beside
+    a freshly fetched 4,502, and the file went to 8,998 rows — a doubling per partition, across
+    12,016 partitions, with `rows_unkeyable` permanently non-zero and therefore useless as a signal.
+    Published bars were correct throughout (stage 2 drops a row with no usable date), so nothing but
+    the raw file could show it.
+
+    THE SUBJECT MUST HAVE ANSWERED. An empty `Complete` is not a replacement — a dead symbol, a
+    provider that refused, a market holiday all produce no rows, and writing that over a stored
+    history would delete it to record a quiet day. The manager enforces this rather than each
+    caller remembering it.
+    """
+
+
 def by_partition(
     context: AssetExecutionContext,
     rows: Rows,
     *,
     key: Callable[[Row], str],
+    complete: Collection[str] = (),
 ) -> Rows | dict[str, Rows]:
     """One object per partition when a run covers several; the rows themselves when it covers one.
 
@@ -42,12 +68,27 @@ def by_partition(
     `key` maps a row to the partition it belongs to. It is a parameter rather than a convention
     because the three lanes key on three different columns (`trade_date`, `security_id`,
     `currency_code`) — and inlining it per lane is exactly how the two broken copies happened.
+
+    `complete` names the partitions whose rows are the WHOLE answer rather than an extension of
+    what is stored — see `Complete`. It is per partition because a single run holds both kinds: the
+    price sweep loads a never-collected security in full and extends its neighbour from that
+    security's own watermark, in the same 2,500-partition run.
     """
+    marked = frozenset(complete)
+
+    def wrap(partition_key: str, partition_rows: Rows) -> Rows:
+        # AN EMPTY ANSWER NEVER REPLACES — see `Complete`. Marking it here rather than in the
+        # manager would still be correct, and doing BOTH is deliberate: the caller says what it
+        # asked for, the manager decides what may overwrite stored rows.
+        if partition_key in marked and partition_rows:
+            return Complete(partition_rows)
+        return partition_rows
+
     # `has_asset_partitions` is an OutputContext attribute, not an asset one — reaching for it here
     # fails with a bare AttributeError inside the op. `has_partition_key` is true for exactly one
     # key; a run covering a range sets `has_partition_key_range` instead.
     if context.has_partition_key or not context.has_partition_key_range:
-        return rows
+        return wrap(context.partition_key, rows) if context.has_partition_key else rows
 
     keys = list(context.partition_keys)
     # A RANGE OF EXACTLY ONE IS NOT A RANGE, AND THE I/O MANAGER DISAGREES ABOUT WHICH IT IS.
@@ -62,7 +103,7 @@ def by_partition(
     # naming neither the partition nor the shape. Measured in production: 250 requested partitions
     # became 250 single-partition runs and the first three all failed this way.
     if len(keys) == 1:
-        return rows
+        return wrap(keys[0], rows)
 
     # EVERY KEY IN THE RANGE GETS AN ENTRY, including the ones that produced nothing — the I/O
     # manager writes an empty file for those, and that is what makes "we collected that slice and
@@ -81,7 +122,7 @@ def by_partition(
         # furthest forward, and it keeps its own date so stage 2 can see it does not belong.
         # The I/O manager rejects a key outside the range, so there is nowhere else it could go.
         out[placed if placed in known else keys[-1]].append(row)
-    return out
+    return {k: wrap(k, v) for k, v in out.items()}
 
 
 def loaded_rows(loaded: Any) -> Rows:

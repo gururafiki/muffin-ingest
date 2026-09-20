@@ -94,6 +94,23 @@ Re-asking for a whole history to gain a day is the most expensive mistake availa
   self-describing and does not depend on stage 2 having succeeded.
 - A resumed run must not overwrite what an earlier one stored. If the manager replaces, "resume"
   and "lose the first half" are the same operation.
+- **A merge cannot converge on rows it cannot key, so say per partition which kind of answer this
+  is.** Keeping an unkeyable stored row is right when the run fetched an EXTENSION — "I cannot tell
+  whether this was superseded" must resolve to keeping it — and wrong when the run fetched the
+  subject's WHOLE history, where the stored rows are the same facts from an older run. Keeping them
+  then grows the file without ever superseding anything.
+  Measured 2026-09-20 on the first live run of the price sweep: every one of 12,016 partitions had
+  been written before raw stopped adding `trade_date`, so none carried the `date` the key names.
+  The watermark read nothing, every subject took the full-history path, and one partition went
+  4,496 → **8,998 rows** — the same history twice. Published data was correct throughout (stage 2
+  drops a row with no usable date), so nothing but the raw file could show it.
+  The asset marks the partitions it asked for in full (`partitioned.Complete`); the manager
+  replaces those and merges the rest. **An EMPTY complete answer replaces nothing** — a dead
+  symbol, a refusal and a market holiday all return no rows, and writing that over a stored history
+  would delete it to record a quiet day. Enforce that in the manager, not in each caller.
+- **A counter that can never return to zero is not a signal.** `rows_unkeyable` was going to be
+  permanently non-zero across the whole lane, which is how a real shape mismatch would have become
+  invisible. If a "something is wrong here" count has a standing population, fix the population.
 
 ## Choosing a refresh trigger
 

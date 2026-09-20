@@ -534,7 +534,22 @@ def raw_price_history(
             **stats,
         }
     )
-    return _by_partition(context, rows, key=lambda r: str(r["security_id"]))
+    # A SUBJECT ASKED FOR EVERYTHING REPLACES ITS PARTITION; ONE ASKED FOR AN EXTENSION MERGES INTO
+    # IT. Both happen in the same run, which is why this is a set of partition keys and not a flag.
+    #
+    # Measured 2026-09-20, on the first live run of this lane. Every partition on disk was written
+    # before raw stopped adding `trade_date`, so none carried the `date` that `merge_on` keys on:
+    # the watermark read nothing, every security took the full-history path, and the merge then
+    # kept all 4,496 stored rows beside the 4,502 just fetched — the same history twice, in a file
+    # that would have doubled for each of 12,016 partitions. Without this the merge cannot converge
+    # on a partition whose stored shape predates its key; `rows_unkeyable` would stay non-zero for
+    # ever and stop being a signal that anything is wrong.
+    return _by_partition(
+        context,
+        rows,
+        key=lambda r: str(r["security_id"]),
+        complete={s.security_id for s in loading},
+    )
 
 
 def _earliest(watermarks: dict[str, date], end: date) -> date:

@@ -1009,6 +1009,66 @@ def test_extending_a_partition_keeps_the_bars_it_already_held(tmp_path: Path) ->
     assert sorted(str(r["date"]) for r in held) == ["2026-09-17", "2026-09-18"]
 
 
+def test_a_partition_stored_in_an_older_shape_is_replaced_rather_than_doubled(
+    tmp_path: Path,
+) -> None:
+    """The live case, measured 2026-09-20 on the first real run of this lane.
+
+    Every raw price partition on disk was written before raw stopped adding `trade_date`, so none
+    carries the provider `date` that `merge_on` keys on. The watermark therefore reads nothing, the
+    asset asks for the subject's WHOLE history, and the merge — which keeps a stored row it cannot
+    key, deliberately — kept all 4,496 of them beside the 4,502 just fetched. One partition went to
+    8,998 rows; across 12,016 partitions that is raw doubling, with `rows_unkeyable` non-zero for
+    ever and therefore useless as a signal that something is wrong.
+
+    A run that fetched everything supersedes everything, so the partition is REPLACED. Without that
+    rule this file holds five rows rather than three.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    security_id = SUBJECTS[1][0]
+    legacy = tmp_path / "raw_price_history"
+    legacy.mkdir(parents=True, exist_ok=True)
+    pq.write_table(
+        pa.table(
+            {
+                "security_id": [security_id, security_id],
+                # THE OLD SHAPE: the placement column, and no provider `date` at all.
+                "trade_date": [date(2026, 9, 15), date(2026, 9, 16)],
+                "close": [1.0, 2.0],
+            }
+        ),
+        str(legacy / f"{security_id}.parquet"),
+    )
+
+    windows: list[tuple[Any, Any]] = []
+    base = {"symbol": "005930.KS", "close": 3.0, "volume": 1}
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [security_id])
+        result = _history_run(
+            tmp_path,
+            instance,
+            windows,
+            [{**base, "date": date(2026, 9, d)} for d in (16, 17, 18)],
+        )
+        assert result.success
+
+    assert windows[0][0] == prices_partitions.HISTORY_START, (
+        "a partition whose stored rows carry no usable date has no watermark, so the run must ask "
+        "for the whole history — that is what makes replacing it honest"
+    )
+    assert meta(result, prices_raw.raw_price_history)["loading_full_history"] == 1
+
+    held = RawStore(base_path=str(tmp_path)).stored_rows_for(
+        prices_raw.raw_price_history.key, security_id
+    )
+    assert sorted(str(r["date"]) for r in held) == ["2026-09-16", "2026-09-17", "2026-09-18"]
+    assert not [r for r in held if r.get("trade_date") is not None], (
+        "the older shape survived beside the history that supersedes it"
+    )
+
+
 # ── the nightly sweep: a contiguous slice, rotating by date ───────────────────────────────────
 
 
