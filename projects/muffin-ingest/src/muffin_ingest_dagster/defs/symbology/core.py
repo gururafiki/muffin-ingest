@@ -8,10 +8,9 @@ from dagster import AssetExecutionContext
 from muffin_ingest.facets import symbology as sym
 from muffin_ingest.writers import upsert
 
-from muffin_ingest_dagster.defs.prices.partitions import security_partitions
-from muffin_ingest_dagster.defs.symbology.partitions import SYMBOLOGY_PER_RUN
-from muffin_ingest_dagster.defs.symbology.raw import (
-    _security_attributes,
+from muffin_ingest_dagster.defs.symbology.partitions import (
+    SYMBOLOGY_PER_RUN,
+    symbology_subjects,
 )
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.resources import Postgres
@@ -32,11 +31,16 @@ def _venues(conn: Any) -> dict[str, list[tuple[str, str]]]:
 
 
 @dg.asset(
-    partitions_def=security_partitions,
+    partitions_def=symbology_subjects,
     backfill_policy=dg.BackfillPolicy.multi_run(SYMBOLOGY_PER_RUN),
     pool="sql",
     group_name="symbology",
     kinds={"postgres"},
+    # EAGER, SO THE LADDER CLOSES ITSELF. The three rungs are requested independently (each
+    # holds a different pool), so this waits until all three of a subject's partitions have
+    # landed — which is what `eager()`'s no-upstream-partition-missing clause means here, and
+    # a skipped rung still materializes its partition, so a skip does not block it.
+    automation_condition=dg.AutomationCondition.eager(),
     description="The securities a rung resolved, adopted into the identity tables.",
 )
 def security_symbology(
@@ -66,7 +70,10 @@ def security_symbology(
     yahoo = partitioned.rows_per_partition(context, raw_yahoo_symbol)
 
     with postgres.connect() as conn:
-        attributes = _security_attributes(conn)
+        # EVERY SUBJECT IN THE RUN, not just the ones a rung still needed: this stage reads the
+        # evidence already on disk, so a security whose ticker landed last week is exactly the
+        # one whose local symbol is being adopted now.
+        attributes = sym.attributes_for(conn, list(context.partition_keys))
         venues = _venues(conn)
 
     for sid in context.partition_keys:
