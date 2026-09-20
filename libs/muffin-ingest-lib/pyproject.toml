@@ -65,7 +65,7 @@ hub = [
 filings = [
   "edgartools>=4.14,<5",
   "pdfplumber>=0.11,<0.12",
-  "lxml>=5.3,<6",
+  "lxml>=5.3,<7",
 ]
 
 [dependency-groups]
