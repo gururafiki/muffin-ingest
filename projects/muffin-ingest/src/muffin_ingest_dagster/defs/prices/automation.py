@@ -1,9 +1,13 @@
 """Jobs, schedules and sensors of the prices family."""
 
 import dagster as dg
+from dagster._core.storage.tags import (
+    ASSET_PARTITION_RANGE_END_TAG,
+    ASSET_PARTITION_RANGE_START_TAG,
+)
 from muffin_ingest.facets import prices
 
-from muffin_ingest_dagster.defs.prices.core import price_bar
+from muffin_ingest_dagster.defs.prices.core import price_bar, price_bar_history
 from muffin_ingest_dagster.defs.prices.partitions import (
     PROVIDER,
     SECURITY_PARTITION,
@@ -41,23 +45,85 @@ def new_securities_need_history(
     )
 
 
-# THE DAILY CROSS-SECTION, AND IT SHIPS STOPPED.
+#: HOW MANY SECURITIES ONE NIGHT ASKS FOR. The universe is ~12,000 and the provider's allowance is
+#: not a constant — measured, it served 12,021 requests on 2026-09-18 and refused after ~2,740 the
+#: very next night — so a slice sized against either number is wrong on the other. 2,500 covers the
+#: universe in about five nights, and a night that is refused simply leaves its partitions
+#: unmaterialised for a later run to collect.
+SWEEP_SLICE = 2500
+
+
+nightly_prices_job = dg.define_asset_job(
+    "nightly_prices",
+    selection=dg.AssetSelection.assets(raw_price_history, price_bar_history),
+    partitions_def=security_partitions,
+)
+
+
+@dg.schedule(
+    job=nightly_prices_job,
+    cron_schedule="0 0 * * *",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+    description="The next slice of the universe, extended from each security's own watermark.",
+)
+def nightly_prices(context: dg.ScheduleEvaluationContext) -> dg.RunRequest | dg.SkipReason:
+    """A ROUND-ROBIN OVER A CONTIGUOUS SLICE, because that is the only shape Dagster can express.
+
+    A `RunRequest` covers one partition or one CONTIGUOUS RANGE — there is no way to name an
+    arbitrary set. Weight order is uncorrelated with position in the partition list, so a
+    weight-ordered batch is never contiguous, and asking for it would mean either one run per
+    security (~12,000 runs a night) or re-creating the partition list in weight order and
+    maintaining it as weights move each quarter. Both are the hand-kept subject table this
+    project's rules exist to avoid.
+
+    WEIGHT PRIORITY SURVIVES WHERE IT MATTERS ANYWAY. `askable_subjects` orders by fund weight and
+    the asset filters that order to the partitions its run was given, so a run refused half-way has
+    collected the heaviest securities in its slice first. What is given up is ordering ACROSS
+    nights, and the cost is bounded: every security is asked every few nights whatever its size.
+
+    THE POSITION IS DERIVED FROM THE DATE, NOT FROM A CURSOR, AND NOT BY CHOICE. **A Dagster
+    schedule has no cursor** — `ScheduleEvaluationContext` exposes none and
+    `build_schedule_context` takes no `cursor` argument; cursors belong to sensors. Turning this
+    into a sensor to gain one would trade a cron for a polling interval on a job that genuinely
+    runs once a night. Counting days since the epoch is stateless, survives a redeploy, and
+    advances by exactly one slice a night on its own.
+    """
+    keys = context.instance.get_dynamic_partitions(SECURITY_PARTITION)
+    if not keys:
+        return dg.SkipReason("no securities have a price partition yet")
+
+    day = context.scheduled_execution_time.date().toordinal()
+    start = (day * SWEEP_SLICE) % len(keys)
+    end = min(start + SWEEP_SLICE, len(keys))
+
+    context.log.info("sweeping securities %s..%s of %s", start, end - 1, len(keys))
+    return dg.RunRequest(
+        # THE RANGE TAGS ARE HOW ONE RUN COVERS MANY PARTITIONS. `partition_key` names exactly one,
+        # and a slice of 2,500 single-partition run requests would be 2,500 runs a night.
+        tags={
+            ASSET_PARTITION_RANGE_START_TAG: keys[start],
+            ASSET_PARTITION_RANGE_END_TAG: keys[end - 1],
+        },
+    )
+
+
+# THE DAY LANE, KEPT AND STOPPED — this is the rollback, not dead code.
 #
-# The assets are complete and can be driven by hand from the UI; what has NOT happened yet is the
-# dual-run parity comparison against what `security-prices` currently serves. Starting a schedule
-# that asks yfinance for the whole universe every night before that comparison would be spending the
-# provider budget on numbers nobody has checked, and would make the first real disagreement look
-# like a production incident rather than a finding.
+# `nightly_prices` above replaced it on 2026-09-19 because the provider is asked once per TICKER
+# whatever we batch (measured: four symbols, six `/v8/finance/chart/<ticker>` requests), so a
+# day-partitioned cross-section was one partition standing for ~12,000 independent requests — all
+# or nothing, and a refusal mid-way left a materialised partition whose completeness claim was
+# false.
 #
-# Turning it on is a deliberate act after parity, which is why it is a line in this file rather than
-# a default.
+# IT IS DEFINED RATHER THAN DELETED SO THE CUTOVER IS REVERSIBLE BY FLIPPING A SWITCH. Starting
+# this schedule and stopping the other restores the previous behaviour with no deploy — which is
+# what expand/contract means here, and is why the assets, their checks and the whole offline replay
+# suite over captured provider bytes are all still in place. It goes, with them, once the sweep has
+# proven itself live.
 daily_prices = dg.build_schedule_from_partitioned_job(
     dg.define_asset_job(
         "daily_prices",
         selection=dg.AssetSelection.assets(raw_price_bars, price_bar),
     ),
-    # RUNNING AS OF THE CUTOVER. It shipped STOPPED deliberately — a schedule spending the provider
-    # budget on numbers nobody had compared was the wrong default — and the comparison has now
-    # happened. The old resources stop in the same change, so if this does not run, nothing does.
-    default_status=dg.DefaultScheduleStatus.RUNNING,
+    default_status=dg.DefaultScheduleStatus.STOPPED,
 )

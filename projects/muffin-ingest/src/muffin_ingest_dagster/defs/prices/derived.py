@@ -37,13 +37,21 @@ class ReturnsRun(dg.Config):
     # production materialisation of this asset was a hand-run. The daemon's evaluation on
     # 2026-09-17 named `~any_deps_missing` as the false branch.
     #
-    # The history lane is IGNORED rather than merely allowed: a multi-day history backfill counts
-    # as "in progress" for its whole length and would hold every nightly rebuild. Its bars still
-    # arrive, because this asset reads the whole table and the next daily rebuild picks them up.
-    # Lineage keeps both dependencies. Decided 2026-09-17.
-    automation_condition=dg.AutomationCondition.eager()
-    .without(~dg.AutomationCondition.any_deps_missing())
-    .ignore(dg.AssetSelection.assets(price_bar_history)),
+    # THE `.ignore(price_bar_history)` THAT SAT HERE WAS REMOVED WITH THE CUTOVER, 2026-09-19, and
+    # removing it was not optional. It existed so a multi-day history backfill could not hold the
+    # nightly rebuild, back when `price_bar` — the DAY lane — was what triggered this asset. Since
+    # `nightly_prices` replaced that lane, `daily_prices_schedule` is stopped and `price_bar` is no
+    # longer materialised at all: ignoring the security lane would have left this asset with
+    # nothing whatsoever to fire on, and returns would have silently stopped rebuilding while every
+    # run stayed green. That is the same defect the 09-17 decision fixed, arrived at from the other
+    # side.
+    #
+    # Waiting for the nightly sweep to finish is now the CORRECT behaviour rather than a cost:
+    # returns computed halfway through a sweep are returns off half a night's bars. Lineage keeps
+    # both dependencies, so a rollback to the day lane needs no change here.
+    automation_condition=dg.AutomationCondition.eager().without(
+        ~dg.AutomationCondition.any_deps_missing()
+    ),
     pool="sql",
     io_manager_key="postgres_io",
     group_name="prices",
