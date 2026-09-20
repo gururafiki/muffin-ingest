@@ -54,10 +54,11 @@ on conflict (code) do nothing;
 ```
 
 **And some are authored reference data the baseline dropped, which is a defect rather than a
-fixture.** `market.data_source` is 0 locally against 24 in production, `index_scope` 0 against 73 —
-see `docs/deferred/2026-09-19-a-rebuilt-database-has-no-reference-data.md`. Until that closes, a
-local run needs the row the lane writes (`insert into market.data_source values ('yfinance', …)`),
-and hitting the foreign key is the harness working:
+fixture.** Four found so far, all 0 locally: `data_source` (24 in production), `index_scope` (73),
+`identifier_kind` (7) and `exchange` (59) — see
+`docs/deferred/2026-09-19-a-rebuilt-database-has-no-reference-data.md`. Until that closes, seed the
+rows the lane needs, and note **they carry NOT NULL `name` columns**, so a bare list of codes is
+refused. Hitting the foreign key is the harness working:
 
 ```
 ForeignKeyViolation: insert or update on table "fx_rate" violates "fx_rate_source_code_fkey"
@@ -82,6 +83,20 @@ uv run dagster asset materialize --select fx_rate --partition 2026-09-18 \
 
 - **`dagster asset materialize`, not `dg launch`** — in 1.13.22 `dg launch --help` prints six lines
   and does not take a config.
+- **AND IT CANNOT RANGE A `multi_run` ASSET, which is most of them.** `--partition-range a...b`
+  refuses outright:
+
+  > Partition ranges with the CLI require all selected assets to have a `BackfillPolicy.single_run()`
+  > policy. […] Assets without this policy would require creating a backfill with separate runs per
+  > partition, which needs a running daemon process.
+
+  One partition at a time works and is usually enough — but it exercises the SINGLE-PARTITION path,
+  and the seam that breaks is the MAPPING one a range takes. Drive that from a short script with
+  `dg.materialize(..., tags={"dagster/asset_partition_range_start": …, "…_end": …})`, the same way
+  the tests do. **A stage-2 asset also needs its upstreams IN THE GRAPH as sources** — passing it
+  alone fails with `Input asset "raw_figi_local_symbol" is not produced by any of the provided
+  asset ops` — so pass every asset and narrow with `selection=`. Their raw files are already on
+  disk, so this costs no provider request, which is the two-stage split being real.
 - **The config key is the OP name**, which equals the asset name: `{"ops": {"<asset>": {"config":
   {...}}}}`. Every lane's `Config` carries a `limit` precisely so a local run is three subjects
   rather than twelve thousand.
@@ -110,6 +125,16 @@ SQL
 A successful run is not a correct one: the 2026-09-18 FX run above published EUR 1.1476, GBP 1.3358,
 JPY 0.0064 USD per unit — plausible is the point, and a JPY near 1.0 would have been a units defect
 the exit code could never show.
+
+**And a counter is not a row count until you have compared them.** The first run of
+`security_symbology` reported `symbols: 4, probes: 6` against 2 and 4 rows in the database: it was
+counting what it ASSEMBLED, and the upsert collapsed the duplicates. Query the table.
+
+**4. What the run did NOT reach.** A local run is a superuser against a database no resource has
+ever written, so two live gates go unexercised: the `ingest_rw` grant and the RLS policy beside it
+(independent gates — a correct grant hides a missing policy), and the provider's real rate limit
+under production's other callers. Check the first with `has_table_privilege` and `rolbypassrls` on
+the node; the second only the live run answers.
 
 ## 5. Tear it down
 
