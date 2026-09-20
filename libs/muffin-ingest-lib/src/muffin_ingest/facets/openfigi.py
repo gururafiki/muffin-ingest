@@ -66,8 +66,16 @@ def parse_filter(
                 "name": str(r["name"]) if r.get("name") else None,
                 # THE COARSE BUCKET IS WHAT A STOCK SWEEP FILTERS ON; THE FINE ONE IS WHAT NAMES AN
                 # ETF OR AN ADR. Kept side by side so the directory never has to choose.
+                #
+                # `figi_security_type` IS THE COLUMN'S NAME IN THE DATABASE AND THIS ONCE SAID
+                # `security_type_detail`. Nothing could catch it: the writer takes its columns from
+                # the row's keys, so the disagreement only exists at the moment of the INSERT, and
+                # this lane had never run — the first real write died with `column
+                # "security_type_detail" of relation "venue_listing" does not exist`. The database's
+                # spelling wins: it is the live `exchange_listing`'s, it carries the comment
+                # explaining why this is the only column naming a fund, and it has an index.
                 "security_type": str(r["securityType2"]) if r.get("securityType2") else None,
-                "security_type_detail": str(r["securityType"]) if r.get("securityType") else None,
+                "figi_security_type": str(r["securityType"]) if r.get("securityType") else None,
             }
         )
     return rows, parsed.get("next"), parsed.get("total")
