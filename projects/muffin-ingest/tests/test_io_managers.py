@@ -15,6 +15,7 @@ import dagster as dg
 import pytest
 
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, PostgresIOManager, _updatable
+from muffin_ingest_dagster.lib.partitioned import Complete
 from muffin_ingest_dagster.lib.resources import Postgres
 
 DAY = dg.DailyPartitionsDefinition(start_date="2026-09-01")
@@ -195,6 +196,60 @@ def test_an_empty_fetch_keeps_the_history_rather_than_erasing_it(tmp_path: Path)
         merge_on=["symbol", "date"],
     )
     assert seen == [{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}]
+
+
+def test_a_complete_answer_replaces_a_stored_shape_that_predates_the_key(tmp_path: Path) -> None:
+    """The merge cannot converge on rows it cannot key, and keeping them for ever is not a fix.
+
+    THIS IS THE PRODUCTION CASE, measured 2026-09-20. Every `raw_price_history` partition was
+    written before raw stopped adding `trade_date`, so none carried the `date` the key names. The
+    watermark then read nothing, the asset fetched the subject's WHOLE history, and the merge kept
+    all 4,496 unkeyable stored rows beside the 4,502 just fetched: the same history twice, in a
+    file that would have doubled for each of 12,016 partitions.
+
+    Without `Complete` this returns SIX rows — the three stored and the three fetched.
+    """
+    seen = merging_seam(
+        tmp_path,
+        [
+            [{"symbol": "AAPL", "trade_date": f"2026-09-0{n}", "close": float(n)} for n in (1, 2)],
+            Complete(
+                [{"symbol": "AAPL", "date": f"2026-09-0{n}", "close": float(n)} for n in (1, 2, 3)]
+            ),
+        ],
+        merge_on=["symbol", "date"],
+    )
+    assert sorted(r["date"] for r in seen) == ["2026-09-01", "2026-09-02", "2026-09-03"]
+    assert not [r for r in seen if r.get("date") is None], "a superseded shape survived"
+
+
+def test_an_empty_complete_answer_replaces_nothing(tmp_path: Path) -> None:
+    """A dead symbol, a refusal and a market holiday all return no rows.
+
+    Letting an empty claim replace would delete a stored history to record a quiet day — the very
+    failure the merge exists to prevent, reached through the mechanism that bypasses it. The rule
+    lives in the manager, not in each caller, because the callers are the ones who forget.
+    """
+    seen = merging_seam(
+        tmp_path,
+        [[{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}], Complete([])],
+        merge_on=["symbol", "date"],
+    )
+    assert seen == [{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}]
+
+
+def test_a_complete_answer_without_merge_on_is_an_ordinary_replacement(tmp_path: Path) -> None:
+    """The marker only means anything to a merging asset; it must not start a new behaviour of its
+    own on a replacing one, which already replaces."""
+    seen = merging_seam(
+        tmp_path,
+        [
+            [{"symbol": "AAPL", "date": "2026-09-01", "close": 1.0}],
+            Complete([{"symbol": "AAPL", "date": "2026-09-02", "close": 2.0}]),
+        ],
+        merge_on=[],
+    )
+    assert seen == [{"symbol": "AAPL", "date": "2026-09-02", "close": 2.0}]
 
 
 def test_merging_on_a_column_the_rows_do_not_carry_is_refused(tmp_path: Path) -> None:
