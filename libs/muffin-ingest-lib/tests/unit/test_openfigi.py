@@ -35,8 +35,44 @@ def test_the_columns_are_openfigi_s_fields_with_the_fine_type_beside_the_coarse(
     assert row["figi"].startswith("BBG")
     assert row["composite_figi"] == row["figi"]  # a home-market row IS its composite
     assert row["security_type"] == "Common Stock"  # the coarse bucket we swept on
-    assert row["security_type"] is not row.get("security_type_detail")
+    # THE NAME IS THE ASSERTION, AND THE PREVIOUS VERSION HAD NEITHER HALF OF IT. It read
+    # `row["security_type"] is not row.get("security_type_detail")`, which is true when the key is
+    # ABSENT — `.get` returns None and a string is not None — so it passed while the parser emitted
+    # a column no table has. The writer takes its columns from the row's keys, so the mismatch only
+    # exists at the INSERT, and this lane had never run: the first real write died with
+    # `column "security_type_detail" of relation "venue_listing" does not exist`.
+    assert "security_type_detail" not in row, (
+        "the database's column is `figi_security_type`; a second spelling here reaches no table"
+    )
+    assert row["figi_security_type"], row
     assert rows[0]["ticker"]
+
+
+def test_the_fine_type_is_read_from_securityType_not_from_the_coarse_bucket() -> None:
+    """THE TWO COINCIDE FOR A PLAIN COMMON STOCK, which is why the captured page cannot tell the
+    rules apart — every row there reads `Common Stock` twice. An ETF is where they diverge, and it
+    is the case the column exists for: `ETP` inside `Mutual Fund`, the only thing in this response
+    that distinguishes an exchange-traded fund from an open-end one."""
+    body = json.dumps(
+        {
+            "data": [
+                {
+                    "figi": "BBG000BDTBL9",
+                    "ticker": "STW",
+                    "name": "SPDR S&P/ASX 200 FUND",
+                    "securityType": "ETP",
+                    "securityType2": "Mutual Fund",
+                }
+            ],
+            "next": None,
+            "total": 1,
+        }
+    ).encode()
+    rows, _, _ = openfigi.parse_filter(body, exch_code="AU")
+    assert rows[0]["security_type"] == "Mutual Fund"
+    assert rows[0]["figi_security_type"] == "ETP", (
+        "reading securityType2 into both columns loses the only field that names a fund"
+    )
 
 
 def test_a_row_without_a_figi_or_ticker_is_dropped_not_stored() -> None:
