@@ -129,25 +129,29 @@ def security_symbology(
         symbol_rows += symbols
         probe_rows += probes
 
+    written: dict[str, int] = {}
+    collapsed = 0
     with postgres.connect() as conn:
         with conn.cursor() as cur:
             if identifier_rows:
-                upsert(
+                result = upsert(
                     cur,
                     "market.security_identifier",
                     identifier_rows,
                     conflict=["kind_code", "value"],
                     update=None,
                 )
+                written["identifiers"], collapsed = result.written, collapsed + result.collapsed
             if symbol_rows:
-                upsert(
+                result = upsert(
                     cur,
                     "market.security_provider_symbol",
                     symbol_rows,
                     conflict=["security_id", "provider_code"],
                 )
+                written["symbols"], collapsed = result.written, collapsed + result.collapsed
             if probe_rows:
-                upsert(
+                result = upsert(
                     cur,
                     "market.identifier_probe",
                     probe_rows,
@@ -156,14 +160,25 @@ def security_symbology(
                     # exactly what turns a 30-day-old miss into a fresh probe.
                     update=["asked_with", "value", "outcome", "observed_at"],
                 )
+                written["probes"], collapsed = result.written, collapsed + result.collapsed
         conn.commit()
 
+    # WHAT LANDED, NOT WHAT WAS BUILT. These read `len(...)` of the lists, and the first real run
+    # reported `symbols: 4, probes: 6` against 2 and 4 rows in the database — because the local
+    # pick is merged in beside `plan_symbols`' own row and the upsert collapses the pair on its
+    # conflict key. Nothing was wrong; the numbers simply described a different thing from the one
+    # a reader checking the run would assume, which is how a counter stops being evidence.
+    #
+    # `collapsed` is the difference, and it is reported rather than hidden: a non-zero value is a
+    # statement about the SOURCE. Two here is the local pick agreeing with itself; a number that
+    # grows means this asset is building the same row twice for a reason nobody intended.
     return dg.MaterializeResult(
         metadata={
             "securities": len(context.partition_keys),
-            "identifiers": len(identifier_rows),
-            "symbols": len(symbol_rows),
-            "probes": len(probe_rows),
+            "identifiers": written.get("identifiers", 0),
+            "symbols": written.get("symbols", 0),
+            "probes": written.get("probes", 0),
+            "collapsed": collapsed,
         }
     )
 
