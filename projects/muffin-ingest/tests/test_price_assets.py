@@ -1080,65 +1080,161 @@ def sweep(instance: dg.DagsterInstance, when: datetime) -> Any:
     )
 
 
-def test_the_sweep_asks_for_a_contiguous_slice_and_moves_on_the_next_night(tmp_path: Path) -> None:
-    """One RunRequest covering a RANGE, because 2,500 single-partition requests is 2,500 runs.
+def _run_keys(requests: Any) -> list[str]:
+    return [str(r.run_key) for r in requests]
 
-    The range tags are the only way Dagster expresses "this run covers many partitions", and the
-    slice must be contiguous in the partition list — which is exactly why the sweep is a rotation
-    rather than weight-ordered.
-    """
+
+def _spans(requests: Any, keys: list[str]) -> list[tuple[int, int]]:
+    """Each run request's slice, as index positions in the partition list."""
     from dagster._core.storage.tags import (
         ASSET_PARTITION_RANGE_END_TAG,
         ASSET_PARTITION_RANGE_START_TAG,
     )
 
+    return [
+        (
+            keys.index(r.tags[ASSET_PARTITION_RANGE_START_TAG]),
+            keys.index(r.tags[ASSET_PARTITION_RANGE_END_TAG]),
+        )
+        for r in requests
+    ]
+
+
+def test_no_run_covers_more_partitions_than_the_measured_memory_budget(tmp_path: Path) -> None:
+    """THE DEFECT THIS EXISTS FOR, AND IT REACHED PRODUCTION.
+
+    The sweep asked for its whole slice in ONE RunRequest, and the first scheduled night died:
+    2026-09-21 00:06:57, `Killed process (python) anon-rss 2,199,804 kB` against the container's
+    2.5 GiB, the run failing at 00:07:08 with `ChildProcessCrashException`. No bars were published
+    for three days.
+
+    `raw_price_history` declares `BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN)` precisely
+    to bound that — 96 securities of full history measured 683,391 bars and OOM at 2.4 GB, 25
+    measured ~178k rows and ~600 MB. **A backfill policy does not apply to a schedule's
+    RunRequest**, so naming a wide range walks straight past the one number that was measured to
+    stop this, and nothing warns.
+
+    The fixture makes the two rules disagree: a slice FOUR TIMES the run width, so a schedule
+    emitting one request per slice yields a 12-partition run and one emitting per width yields
+    four of 3.
+
+    THE GRID IS EXACTLY ONE SLICE WIDE ON PURPOSE. The rotation is `(day * SWEEP_SLICE) % len(keys)`
+    and CLAMPS at the end of the list, so with a longer grid the slice a given date lands on is a
+    function of the date — the first version of this test asked for 12 and got 4, and failed for a
+    reason that had nothing to do with run width. With `len(keys) == SWEEP_SLICE` the slice is the
+    whole grid whatever the date.
+    """
+    from muffin_ingest_dagster.defs.prices import automation as prices_automation
+
+    keys = [f"sec-{i:03d}" for i in range(12)]
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
+        held_slice = prices_automation.SWEEP_SLICE
+        held_width = prices_partitions.HISTORY_PARTITIONS_PER_RUN
+        prices_automation.SWEEP_SLICE = 12
+        prices_partitions.HISTORY_PARTITIONS_PER_RUN = 3
+        try:
+            requests = sweep(instance, datetime(2026, 9, 19, tzinfo=UTC))
+        finally:
+            prices_automation.SWEEP_SLICE = held_slice
+            prices_partitions.HISTORY_PARTITIONS_PER_RUN = held_width
+
+    spans = _spans(requests, keys)
+    assert len(spans) == 4, f"the slice was not cut into runs of the width: {spans}"
+    for lo, hi in spans:
+        assert hi - lo + 1 <= 3, (
+            f"a run covers {hi - lo + 1} partitions against a measured budget of 3 — this is the "
+            f"shape that OOM-killed the first scheduled night"
+        )
+    # AND THE SLICE IS STILL WHOLE. Bounding the runs must not silently collect less: cutting a
+    # slice into runs that skip securities would look identical in every counter.
+    covered = {i for lo, hi in spans for i in range(lo, hi + 1)}
+    assert covered == set(range(12)), f"the runs do not tile the slice: {sorted(covered)}"
+
+
+def test_each_run_of_a_night_is_asked_for_once(tmp_path: Path) -> None:
+    """A re-tick of the same night must not launch a second copy of the sweep, and two different
+    nights must not collide — which is what `run_key` decides.
+
+    THE GRID IS ONE SLICE WIDE SO THE ROTATION RETURNS TO THE SAME POSITION, and that is the whole
+    fixture. With a longer grid each night starts at a different index, so a run key built from the
+    index alone already differs and the date prefix is redundant — the first version of this test
+    used 20 keys and PASSED with the prefix deleted. Here every night starts at 0, so without the
+    date the second night's keys equal the first's and Dagster would skip that night's sweep
+    entirely: a schedule that silently stops collecting, which is the failure worth catching.
+    """
+    from muffin_ingest_dagster.defs.prices import automation as prices_automation
+
+    keys = [f"sec-{i:03d}" for i in range(12)]
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
+        held_slice = prices_automation.SWEEP_SLICE
+        held_width = prices_partitions.HISTORY_PARTITIONS_PER_RUN
+        prices_automation.SWEEP_SLICE = 12
+        prices_partitions.HISTORY_PARTITIONS_PER_RUN = 3
+        try:
+            first = sweep(instance, datetime(2026, 9, 19, tzinfo=UTC))
+            again = sweep(instance, datetime(2026, 9, 19, tzinfo=UTC))
+            next_night = sweep(instance, datetime(2026, 9, 20, tzinfo=UTC))
+        finally:
+            prices_automation.SWEEP_SLICE = held_slice
+            prices_partitions.HISTORY_PARTITIONS_PER_RUN = held_width
+
+    assert len(set(_run_keys(first))) == len(first), "two runs of one night share a run key"
+    assert _run_keys(first) == _run_keys(again), "the same night must produce the same run keys"
+    assert not set(_run_keys(first)) & set(_run_keys(next_night)), (
+        "a later night reuses a run key, so Dagster would skip that part of the sweep"
+    )
+
+
+def test_the_sweep_asks_for_a_contiguous_slice_and_moves_on_the_next_night(tmp_path: Path) -> None:
+    """The slice must be contiguous in the partition list — which is exactly why the sweep is a
+    rotation rather than weight-ordered — and it must advance each night."""
     from muffin_ingest_dagster.defs.prices import automation as prices_automation
 
     keys = [f"sec-{i:03d}" for i in range(10)]
     with dg.instance_for_test() as instance:
         instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
-        held = prices_automation.SWEEP_SLICE
+        held_slice = prices_automation.SWEEP_SLICE
+        held_width = prices_partitions.HISTORY_PARTITIONS_PER_RUN
         prices_automation.SWEEP_SLICE = 4
+        prices_partitions.HISTORY_PARTITIONS_PER_RUN = 4
         try:
             first = sweep(instance, datetime(2026, 9, 19, tzinfo=UTC))
             second = sweep(instance, datetime(2026, 9, 20, tzinfo=UTC))
         finally:
-            prices_automation.SWEEP_SLICE = held
+            prices_automation.SWEEP_SLICE = held_slice
+            prices_partitions.HISTORY_PARTITIONS_PER_RUN = held_width
 
-    def span(req: Any) -> tuple[str, str]:
-        return (
-            req.tags[ASSET_PARTITION_RANGE_START_TAG],
-            req.tags[ASSET_PARTITION_RANGE_END_TAG],
-        )
-
-    assert span(first) != span(second), (
+    assert _spans(first, keys) != _spans(second, keys), (
         "consecutive nights asked for the same securities; the rotation does not advance"
     )
-    for req in (first, second):
-        start, end = span(req)
-        assert keys.index(end) - keys.index(start) == 3, "the slice must be contiguous"
+    for requests in (first, second):
+        ((lo, hi),) = _spans(requests, keys)
+        assert hi - lo == 3, "the slice must be contiguous"
 
 
 def test_the_sweep_covers_the_whole_universe_within_a_cycle(tmp_path: Path) -> None:
     """A rotation that clamps, or that strides past securities, starves whatever it skips."""
-    from dagster._core.storage.tags import ASSET_PARTITION_RANGE_START_TAG
-
     from muffin_ingest_dagster.defs.prices import automation as prices_automation
 
     keys = [f"sec-{i:03d}" for i in range(10)]
     with dg.instance_for_test() as instance:
         instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
-        held = prices_automation.SWEEP_SLICE
+        held_slice = prices_automation.SWEEP_SLICE
+        held_width = prices_partitions.HISTORY_PARTITIONS_PER_RUN
         prices_automation.SWEEP_SLICE = 4
+        prices_partitions.HISTORY_PARTITIONS_PER_RUN = 4
         try:
             starts = {
-                sweep(instance, datetime(2026, 9, 19, tzinfo=UTC) + timedelta(days=n)).tags[
-                    ASSET_PARTITION_RANGE_START_TAG
-                ]
+                _spans(
+                    sweep(instance, datetime(2026, 9, 19, tzinfo=UTC) + timedelta(days=n)), keys
+                )[0][0]
                 for n in range(10)
             }
         finally:
-            prices_automation.SWEEP_SLICE = held
+            prices_automation.SWEEP_SLICE = held_slice
+            prices_partitions.HISTORY_PARTITIONS_PER_RUN = held_width
 
     assert len(starts) > 1, "every night started at the same place"
 
