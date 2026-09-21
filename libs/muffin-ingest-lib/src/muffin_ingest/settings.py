@@ -22,6 +22,22 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def openfigi_api_key() -> str:
+    """OpenFIGI's key, which was in this container's environment and never sent.
+
+    `OPENFIGI_API_KEY` has been rendered into the stack for both the edge functions and this
+    service since the service existed, and `providers/openfigi.py` described the API as "the free,
+    KEYLESS symbology API" and sent only a `Content-Type`. Every budget this repo measured for
+    OpenFIGI — the ~5 requests a minute that set `SWEEP_PACING`, the 10-job batch that decided the
+    rungs are partitioned per security — was therefore the ANONYMOUS budget, measured while
+    holding a key.
+
+    Empty is a legitimate configuration, not a fault: the API works without one, more slowly, and
+    every caller here reads the budget rather than assuming the faster path.
+    """
+    return _env("OPENFIGI_API_KEY", "").strip()
+
+
 def database_url() -> str:
     """The DIRECT Postgres connection, not PostgREST.
 
