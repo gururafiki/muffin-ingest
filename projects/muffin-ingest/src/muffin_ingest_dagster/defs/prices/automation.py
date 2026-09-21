@@ -1,5 +1,7 @@
 """Jobs, schedules and sensors of the prices family."""
 
+from collections.abc import Sequence
+
 import dagster as dg
 from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_END_TAG,
@@ -7,6 +9,7 @@ from dagster._core.storage.tags import (
 )
 from muffin_ingest.facets import prices
 
+from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
 from muffin_ingest_dagster.defs.prices.core import price_bar, price_bar_history
 from muffin_ingest_dagster.defs.prices.partitions import (
     PROVIDER,
@@ -66,8 +69,10 @@ nightly_prices_job = dg.define_asset_job(
     default_status=dg.DefaultScheduleStatus.RUNNING,
     description="The next slice of the universe, extended from each security's own watermark.",
 )
-def nightly_prices(context: dg.ScheduleEvaluationContext) -> dg.RunRequest | dg.SkipReason:
-    """A ROUND-ROBIN OVER A CONTIGUOUS SLICE, because that is the only shape Dagster can express.
+def nightly_prices(
+    context: dg.ScheduleEvaluationContext,
+) -> Sequence[dg.RunRequest] | dg.SkipReason:
+    """A ROUND-ROBIN OVER A CONTIGUOUS SLICE, in runs of `HISTORY_PARTITIONS_PER_RUN`.
 
     A `RunRequest` covers one partition or one CONTIGUOUS RANGE — there is no way to name an
     arbitrary set. Weight order is uncorrelated with position in the partition list, so a
@@ -96,15 +101,46 @@ def nightly_prices(context: dg.ScheduleEvaluationContext) -> dg.RunRequest | dg.
     start = (day * SWEEP_SLICE) % len(keys)
     end = min(start + SWEEP_SLICE, len(keys))
 
-    context.log.info("sweeping securities %s..%s of %s", start, end - 1, len(keys))
-    return dg.RunRequest(
-        # THE RANGE TAGS ARE HOW ONE RUN COVERS MANY PARTITIONS. `partition_key` names exactly one,
-        # and a slice of 2,500 single-partition run requests would be 2,500 runs a night.
-        tags={
-            ASSET_PARTITION_RANGE_START_TAG: keys[start],
-            ASSET_PARTITION_RANGE_END_TAG: keys[end - 1],
-        },
+    # THE SLICE IS CUT INTO RUNS OF THE MEASURED WIDTH, AND THAT IS THE WHOLE FIX.
+    #
+    # This asked for the entire slice in ONE run, and the first scheduled night died:
+    # 2026-09-21 00:06:57, `Killed process (python) anon-rss 2,199,804 kB` against the container's
+    # 2.5 GiB, and the run failed at 00:07:08 with `ChildProcessCrashException`. The price lane has
+    # published nothing since.
+    #
+    # `raw_price_history` carries `BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN)` precisely
+    # to bound that memory — 96 securities of full history measured 683,391 bars and OOM-killed at
+    # 2.4 GB, 25 measured ~178k rows and ~600 MB. **A backfill policy does not apply to a
+    # schedule's RunRequest.** It governs how a BACKFILL is split, so naming a 2,500-key range in a
+    # RunRequest walks straight past the one number that was measured to stop this, and nothing
+    # warns. Every partition is also still in the pre-2026-09-12 shape, so every subject takes the
+    # FULL-HISTORY path rather than fetching a day — the worst case, not the steady state.
+    #
+    # The earlier docstring weighed one run against 2,500 single-partition ones and took the first.
+    # The middle was always there, and it is the number the asset already declares: ~100 runs of 25
+    # a night, each inside the budget, the round-robin and the slice unchanged.
+    # READ THROUGH THE MODULE THAT DEFINES IT, not bound at import. One number governs both the
+    # asset's backfill policy and this schedule, and a copy here would be free to drift from the
+    # measurement it came from — which is how the run width stopped being enforced in the first
+    # place. (It is also what makes it patchable in a test: mypy refuses a re-exported attribute.)
+    width = prices_partitions.HISTORY_PARTITIONS_PER_RUN
+    context.log.info(
+        "sweeping securities %s..%s of %s in runs of %s", start, end - 1, len(keys), width
     )
+    return [
+        dg.RunRequest(
+            # UNIQUE PER NIGHT AND PER SUB-RANGE, so a re-tick of the same night is idempotent
+            # rather than a second copy of the sweep.
+            run_key=f"{day}-{lo}",
+            # THE RANGE TAGS ARE HOW ONE RUN COVERS MANY PARTITIONS. `partition_key` names exactly
+            # one, and a slice of 2,500 single-partition run requests would be 2,500 runs a night.
+            tags={
+                ASSET_PARTITION_RANGE_START_TAG: keys[lo],
+                ASSET_PARTITION_RANGE_END_TAG: keys[min(lo + width, end) - 1],
+            },
+        )
+        for lo in range(start, end, width)
+    ]
 
 
 # THE DAY LANE, KEPT AND STOPPED — this is the rollback, not dead code.
