@@ -71,6 +71,17 @@ own call.
 - **Backfill policy:** time partitions → `BackfillPolicy.single_run()` (one batched sweep); subject
   partitions → `BackfillPolicy.multi_run(N)`, with N set by measured memory. N trades run overhead
   against per-run memory and **never** changes provider spend.
+- **A BACKFILL POLICY DOES NOT APPLY TO A SCHEDULE'S `RunRequest`.** It governs how a *backfill* is
+  split, so a schedule naming a wide partition range in `dagster/asset_partition_range_{start,end}`
+  gets ONE run over every key in it — walking straight past the number measured to bound the
+  memory, with no warning anywhere. Measured 2026-09-21: the nightly price sweep asked for its
+  whole 2,500-key slice in one `RunRequest` and the first scheduled night was OOM-killed
+  (`anon-rss 2,199,804 kB` against a 2.5 GiB container, `ChildProcessCrashException`), publishing
+  nothing for three days. **A schedule that covers a slice emits one `RunRequest` per run width**,
+  reading that width from the module that defines it so the policy and the schedule cannot
+  disagree, with a `run_key` carrying the tick so a re-tick is idempotent and two ticks cannot
+  collide. Assert the width in a test: the fixture needs a grid exactly one slice wide, or the
+  rotation clamps and the test fails for an unrelated reason.
 
 **Measure the grain on the wire, because a wrapper hides it.** openbb's yfinance adapter calls
 `yf.download(..., threads=False)`, which loops per ticker and issues `/v8/finance/chart/{ticker}`
@@ -131,6 +142,22 @@ would cost more than the fetch it saves.
 
 Freshness policies stay descriptive: Dagster OSS does not alert on them, and alerting here is
 Grafana's.
+
+**`on_missing()` is "newly missing", and that is the wrong rule for a lane being switched on.**
+Measured on 1.13.22: it requested **0 of 2** partitions that were already in the grid when the first
+tick ran, and 2 of 2 added between ticks. A lane whose sensor seeds the grid before the condition is
+live therefore does nothing at all, silently. `missing()` requests both. Use `on_missing()` only
+where the grid is known to predate nothing.
+
+**A custom `AutomationCondition` is viable and was driven before being relied on.** Subclass it,
+implement `evaluate`, and return `AutomationResult(context, true_subset=…)`;
+`context.candidate_subset` is an `EntitySubset` with `compute_intersection_with_partition_keys`. Its
+identity is its CLASS NAME (`get_node_unique_id` hashes `self.name`), so renaming it is a state
+change like any other rename. It gets no resources, so it opens its own connection — gate it behind
+`cron_tick_passed(...) &` and return early on an empty candidate subset, or it queries once per
+daemon tick. Reach for it only when a sensor cannot express the same thing: a sensor can request a
+partition or a contiguous RANGE, so a scattered subject set becomes one run per subject, which turns
+a ten-per-request bulk API into one per request.
 
 ## Pools and rates
 
