@@ -225,12 +225,20 @@ def _sweep_venue(
         if not next_cursor:
             break
         cursor = next_cursor
+    # THE RESUME POINT IS THE STORED ROW'S, NOT THE LOOP VARIABLE'S. `cursor` is only advanced
+    # when the provider hands back a next cursor, so a walk that finishes naturally leaves it
+    # holding the cursor the LAST page was fetched with — and the first live AU sweep therefore
+    # logged "resumes at 'QW9Fc1FrSkhNREl6UjB...'" for a venue that had reached its last page and
+    # whose check correctly passed. A message that says the opposite of the truth is worse than no
+    # message: it sends a reader to re-walk a directory that is complete. Read the same field the
+    # check reads, so the two cannot disagree.
+    resumes_at = rows[-1]["cursor_at"] if rows else cursor
     context.log.info(
-        "venue %s: %s pages from page %s, resumes at %r",
+        "venue %s: %s pages from page %s, %s",
         exch_code,
         len(rows),
         first_page,
-        cursor,
+        f"resumes at {resumes_at!r}" if resumes_at else "reached its last page",
     )
     return rows
 
