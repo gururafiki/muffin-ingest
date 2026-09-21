@@ -16,9 +16,14 @@ from muffin_ingest_dagster.defs.symbology.partitions import (
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.resources import Postgres
 
-#: OpenFIGI's anonymous batch. 200 partitions therefore cost 20 requests, which is why the rungs
-#: are partitioned per security and batched inside the run rather than partitioned per batch.
-MAPPING_JOBS_PER_REQUEST = 10
+
+#: OpenFIGI's batch, READ PER RUN because a key changes it tenfold. The provider states both
+#: ceilings in its own 413 (10 unkeyed, 100 keyed), and this repo had been sending no key while
+#: holding one — so 200 partitions cost 20 requests where they now cost 2. The rungs stay
+#: partitioned per SECURITY rather than per batch precisely so this number can change without
+#: re-keying the grid.
+def mapping_jobs_per_request() -> int:
+    return figi.mapping_jobs_per_request()
 
 
 def _subjects(context: AssetExecutionContext, postgres: Postgres, evidence: str) -> Any:
@@ -160,8 +165,9 @@ def _map_in_batches(
     """
     subjects = list(attributes)
     rows: list[dict[str, Any]] = []
-    for i in range(0, len(subjects), MAPPING_JOBS_PER_REQUEST):
-        chunk = subjects[i : i + MAPPING_JOBS_PER_REQUEST]
+    per_request = mapping_jobs_per_request()
+    for i in range(0, len(subjects), per_request):
+        chunk = subjects[i : i + per_request]
         doc = figi.mapping([jobs(attributes[s]["isin"]) for s in chunk])
         for position, sid in enumerate(chunk):
             row = doc.as_row(context.run.run_id)

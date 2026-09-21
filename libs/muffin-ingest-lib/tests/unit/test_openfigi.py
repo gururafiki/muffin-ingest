@@ -114,3 +114,74 @@ def test_an_exhausted_venue_has_no_next_cursor() -> None:
 def test_an_unparseable_body_is_refused() -> None:
     with pytest.raises(openfigi.OpenFigiUnreadable, match="not JSON"):
         openfigi.parse_filter(b"<html>banana</html>", exch_code="AU")
+
+
+# --- THE KEY -----------------------------------------------------------------------------------
+#
+# `OPENFIGI_API_KEY` was rendered into this service's environment from the day it existed, and the
+# provider sent only a `Content-Type` behind a docstring calling the API "keyless". Every OpenFIGI
+# budget this repo measured was therefore the anonymous one, measured while holding a key.
+
+
+def _captured_headers(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Drive the real `_post` over a mock transport and return the headers it actually sent."""
+    import httpx
+
+    from muffin_ingest.providers import openfigi as provider
+
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update({k.lower(): v for k, v in request.headers.items()})
+        return httpx.Response(200, json={"data": [], "total": 0})
+
+    transport = httpx.MockTransport(handler)
+    real_post = httpx.post
+
+    def posting(url: str, **kw: object) -> httpx.Response:
+        with httpx.Client(transport=transport) as client:
+            return client.post(url, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(httpx, "post", posting)
+    try:
+        provider.filter_exchange("AU")
+    finally:
+        monkeypatch.setattr(httpx, "post", real_post)
+    return seen
+
+
+def test_the_api_key_is_sent_when_one_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENFIGI_API_KEY", "a-test-key")
+    assert _captured_headers(monkeypatch).get("x-openfigi-apikey") == "a-test-key"
+
+
+def test_no_header_is_sent_when_no_key_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE OTHER HALF, and it is not symmetry for its own sake: sending an EMPTY credential is not
+    the same as sending none — OpenFIGI answers that with a 401, which would read as an outage on
+    a deployment that has deliberately not configured a key."""
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    assert "x-openfigi-apikey" not in _captured_headers(monkeypatch)
+
+
+def test_both_budgets_follow_the_key_rather_than_being_assumed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both ceilings are the provider's OWN 413 text (`Request may only contain N mapping jobs`),
+    measured 2026-09-21 at 11 jobs unkeyed and 101 keyed. A single constant would be wrong in one
+    of the two configurations, and wrong upward is a 413 that fails the whole run."""
+    from muffin_ingest.providers import openfigi as provider
+
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    assert provider.has_api_key() is False
+    assert provider.mapping_jobs_per_request() == 10
+    assert provider.sweep_pacing_s() == 12.0
+
+    monkeypatch.setenv("OPENFIGI_API_KEY", "a-test-key")
+    assert provider.has_api_key() is True
+    assert provider.mapping_jobs_per_request() == 100
+    assert provider.sweep_pacing_s() == 0.3
+
+    # WHITESPACE IS NOT A KEY. A secret rendered from an empty Jinja default arrives as "" or "\n",
+    # and treating that as configured sends an empty credential — the 401 above.
+    monkeypatch.setenv("OPENFIGI_API_KEY", "   \n ")
+    assert provider.has_api_key() is False

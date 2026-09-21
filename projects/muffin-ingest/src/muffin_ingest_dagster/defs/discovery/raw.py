@@ -20,30 +20,25 @@ from muffin_ingest_dagster.lib.io_managers import RawStore
 
 #: How many `/v3/filter` pages one venue may fetch in a run. Each page is 100 rows and a mid-size
 #: venue is ~22 pages (AU measured at 2,124 listings), so 40 finishes most venues in one run — at
-#: `SWEEP_PACING` that is ~8 minutes holding the `openfigi_filter` pool, which nothing else wants.
+#: the anonymous pacing that is ~8 minutes holding the `openfigi_filter` pool (~12 s keyed),
+#: which nothing else wants.
 #: A venue needing more is resumed by the next run, whose partition file carries the cursor.
 SWEEP_MAX_PAGES = 40
 
 
-#: SECONDS BETWEEN PAGES, AND THE NUMBER IT USED TO BE IS THE POINT.
+#: SECONDS BETWEEN PAGES — AND THE PROVIDER, NOT THIS MODULE, KNOWS WHICH NUMBER APPLIES.
 #:
-#: This was 2.5 s, derived from "the anonymous rate limit is 25 requests per minute" — a ceiling
-#: measured on `/v3/mapping` and no longer true of `/v3/filter`. MEASURED 2026-09-20 from this
-#: machine, after 65 s of silence each time:
+#: This was 2.5 s, from "the anonymous limit is 25 requests per minute" — a ceiling measured on
+#: `/v3/mapping`. Re-measured on `/v3/filter` 2026-09-20 it is ~5 a minute, so it became 12 s.
+#: Then, 2026-09-21: `OPENFIGI_API_KEY` was in this container's environment the whole time and the
+#: provider never sent it, so BOTH of those were the ANONYMOUS budget, measured while holding a
+#: key. Keyed, 15 pages sustained at 0.3 s with no 429.
 #:
-#:     paced 2.5 s   5 pages in 14.6 s, then 429 on request 6
-#:     paced 12 s    7 pages in 74.3 s, no 429 at all
-#:
-#: So the allowance is ~5 requests a minute, and at 2.5 s a run spent four fifths of its page
-#: budget being refused: two consecutive sweeps of AU each got exactly 5 pages, and a third
-#: launched ~35 s later was refused on its FIRST request. The lane recovered correctly every time
-#: — that is what the cursor and the merge are for — but a 429 on every run is not a resumption
-#: mechanism working, it is a pacing constant that has stopped being true.
-#:
-#: A pool bounds CONCURRENCY (one process touches `openfigi_filter` at a time); this bounds the
-#: MINUTE, which a pool cannot express. An API key would raise the allowance and is a credential
-#: decision, not one to take here.
-SWEEP_PACING = 12.0
+#: So the constant is gone and the budget is read per run. A pool bounds CONCURRENCY; this bounds
+#: the MINUTE, which a pool cannot express — that part was always right.
+def sweep_pacing() -> float:
+    return figi.sweep_pacing_s()
+
 
 #: What a page fetched with no cursor records as the cursor it was fetched WITH. A string rather
 #: than NULL so every page carries a hashable merge key — see `merge_on` on `raw_exchange_sweep`.
@@ -192,10 +187,11 @@ def _sweep_venue(
 
     from muffin_ingest.providers.openfigi import OpenFigiThrottled
 
+    pacing = sweep_pacing()
     rows: list[dict[str, Any]] = []
     for step in range(SWEEP_MAX_PAGES):
         if step:
-            time.sleep(SWEEP_PACING)
+            time.sleep(pacing)
         asked_with = cursor if cursor is not None else FIRST_PAGE_CURSOR
         try:
             doc = figi.filter_exchange(exch_code, cursor=cursor)
