@@ -50,7 +50,12 @@ once; a bad model is paid on every query, every guard and every UI section that 
 2. **Fill:** backfill from raw, or write both through Dagster.
 3. **Verify:** parity, with every difference explained.
 4. **Switch:** redefine the serving views on the new tables with the same names and columns, or ship
-   the muffin-ui PR that adopts a new surface.
+   the muffin-ui PR that adopts a new surface. **Never before a RUNNING lane fills the new base.**
+   `market.untracked_listing` was re-pointed onto `venue_listing` on 2026-09-13 and deployed on
+   09-17 while the OpenFIGI sweep that fills it had never run — its sensor ships STOPPED — so the
+   view returned **0 rows against the old table's 148,782** and the Markets search was dead for
+   three days with nothing reporting it. A migration can only see that the table exists. Before
+   switching, check the lane's materializations, not its code.
 5. **Keep the old tables** as a backup; stop writing them.
 6. **Contract later:** a deferred note carrying the drop date and the query that proves nothing reads
    them.
