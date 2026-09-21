@@ -636,3 +636,45 @@ def test_the_check_names_the_venues_an_operator_must_resume(
     # NAMED, NOT JUST COUNTED. A check reporting "1 venue is unfinished" cannot be acted on; this
     # assertion is what makes the count and the names disagree if only the count is kept.
     assert evaluation.metadata["resume_these"].value == "AU"
+
+
+def _sweep_messages(instance: dg.DagsterInstance, result: Any) -> list[str]:
+    return [
+        record.user_message
+        for record in instance.all_logs(result.run_id)
+        if record.user_message and record.user_message.startswith("venue ")
+    ]
+
+
+def test_a_finished_walk_does_not_report_a_cursor_to_resume_from(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """THE LOG MUST NOT CONTRADICT THE CHECK, and for one live run it did.
+
+    `cursor` is only advanced when the provider hands back a next cursor, so a walk that reaches
+    the last page leaves it holding the cursor the FINAL page was fetched with. The first live AU
+    sweep (2026-09-21, 22 pages, last `cursor_at` null) therefore logged `resumes at 'QW9Fc1Fr…'`
+    beside a `venue_sweep_reached_its_last_page` that correctly PASSED — and the reader believes
+    the sentence, not the check, so a complete directory reads as one to re-walk.
+
+    The two cases must disagree here or the fixture proves nothing: a finished venue and a
+    throttled one are materialised the same way and only the message separates them.
+    """
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU", "LN"])
+
+    finished: dict[str | None, bytes] = {
+        None: _page(figi="BBG0000000P1", next_cursor="c1"),
+        "c1": _page(figi="BBG0000000P2", next_cursor=None),
+    }
+    result, _ = _sweep(tmp_path, instance, finished, venue="AU")
+    assert result.success
+    assert _stored(tmp_path, "AU")[-1]["cursor_at"] is None, "the walk did reach its last page"
+    said = _sweep_messages(instance, result)
+    assert said == ["venue AU: 2 pages from page 0, reached its last page"], said
+
+    # THE OTHER HALF, so "never says resumes at" cannot pass by saying nothing.
+    result, _ = _sweep(tmp_path, instance, finished, venue="LN", throttle_after=1)
+    assert result.success
+    said = _sweep_messages(instance, result)
+    assert said == ["venue LN: 1 pages from page 0, resumes at 'c1'"], said

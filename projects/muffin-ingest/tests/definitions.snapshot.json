@@ -995,7 +995,7 @@
       "type": "STANDARD"
     },
     "new_exchange_sweeps": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "__anonymous_asset_job_new_exchange_sweeps"
       ],
@@ -1003,7 +1003,7 @@
       "type": "STANDARD"
     },
     "new_nport_filings": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "__anonymous_asset_job_new_nport_filings"
       ],

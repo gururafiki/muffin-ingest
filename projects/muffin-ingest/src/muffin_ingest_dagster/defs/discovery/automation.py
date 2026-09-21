@@ -55,9 +55,28 @@ def _directory_map() -> dict[str, tuple[str, str]]:
     return out
 
 
+#: WHY BOTH DISCOVERY SENSORS SHIP RUNNING, AND WHY THAT IS NOT A SPEND DECISION.
+#:
+#: Each of them returns `run_requests=[]` — they ADD PARTITION KEYS AND MATERIALISE NOTHING. So
+#: starting them makes outstanding work VISIBLE (a new filing, a newly enabled venue appears as an
+#: unmaterialised partition) and asks no provider for anything; the fetch stays an operator's call,
+#: which is what `new_exchange_sweeps`' own note below has always said.
+#:
+#: That distinction is the whole reason these two go on while `new_symbols_needed` does not. The
+#: symbology sensor seeds a grid whose rungs carry `AutomationCondition.missing()`, so the daemon
+#: would begin asking the provider the moment the keys existed. These cannot: there is no condition
+#: on the far side.
+#:
+#: Measured 2026-09-21 before the change: `dynamic_partitions` held ONE `exchange_sweep` key — the
+#: one added by hand to prove the lane live — so a backfill had nothing to select, and the lane had
+#: sat at zero materialisations since it was built. A sensor that ships STOPPED is a lane that does
+#: not exist.
+
+
 @dg.sensor(
     target=raw_nport_filing,
     minimum_interval_seconds=6 * 3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
     description="A tracked fund's newest NPORT-P filing the grid has not queued becomes a "
     "partition.",
 )
@@ -108,6 +127,7 @@ def new_nport_filings(context: dg.SensorEvaluationContext, postgres: Postgres) -
 @dg.sensor(
     target=raw_exchange_sweep,
     minimum_interval_seconds=7 * 24 * 3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
     description="The enabled venues become sweep partitions.",
 )
 def new_exchange_sweeps(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:
