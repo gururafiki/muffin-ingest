@@ -28,6 +28,7 @@ treat it differently from both a transport failure and an empty venue.
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any
 
@@ -49,12 +50,55 @@ REAL_ORIGIN = "https://api.openfigi.com"
 MAPPING_JOBS_ANONYMOUS = 10
 MAPPING_JOBS_KEYED = 100
 
-#: Seconds to wait between `/v3/filter` pages. The anonymous figure is the one measured on
-#: 2026-09-20 (12 s, after 2.5 s was refused on request 6); the keyed figure is 0.3 s, measured
-#: sustaining 15 pages with no 429 — deliberately slower than the key's documented allowance,
-#: because a sweep is a background job and nothing here is waiting for it.
+#: Seconds to wait between `/v3/filter` pages. The anonymous figure was measured on 2026-09-20
+#: (12 s, after 2.5 s was refused on request 6).
+#:
+#: THE KEYED FIGURE WAS 0.3 s AND THAT WAS MEASURED JUST UNDER A CLIFF. The probe that set it
+#: stopped, satisfied, at 15 pages; production then said what the ceiling actually was —
+#: `openfigi throttled US after 20 pages`, and `after 0 pages` on the pass relaunched immediately,
+#: so passes alternated 20/0. Re-measured 2026-09-22 by walking a 44-page venue until the provider
+#: REFUSED rather than until the probe was satisfied:
+#:
+#:     paced 1.0 s   REFUSED at page 21 in  33.1 s   (~38 req/min)
+#:     paced 2.0 s   REFUSED at page 21 in  50.9 s   (~25 req/min)
+#:     paced 3.0 s   44 pages, NO refusal in 151.7 s (~17 req/min)
+#:
+#: Refusing at page 21 under both 1 s and 2 s is a ~20-request bucket whose refill sits between 17
+#: and 25 a minute. 3 s is the measured-safe side of that, and still four times the anonymous rate.
+#: **Probe until the provider refuses, not until you are satisfied.**
 SWEEP_PACING_ANONYMOUS = 12.0
-SWEEP_PACING_KEYED = 0.3
+SWEEP_PACING_KEYED = 3.0
+
+
+#: An error body naming a FIELD OF OUR REQUEST is ours and is permanent — retrying cannot help,
+#: and a sweep that resumed for ever on it would hide a malformed request. Measured: OpenFIGI
+#: answers `{"error": "Invalid key 'includeEntitlements'."}` with HTTP 200 for a bad parameter.
+#:
+#: ANYTHING ELSE IS TREATED AS THEIRS, which is the safe default in this direction. A transient
+#: read as ours fails the run; ours read as a transient leaves the venue unfinished, and
+#: `venue_sweep_reached_its_last_page` NAMES an unfinished venue with the provider's exact words in
+#: the log. One needs a human at 3am, the other is on a dashboard.
+_OUR_FAULT = ("invalid ",)
+
+
+def _is_our_fault(message: str) -> bool:
+    return message.strip().lower().startswith(_OUR_FAULT)
+
+
+def _error_in(body: bytes) -> str | None:
+    """The error OpenFIGI reported inside a 200, or None for an ordinary answer.
+
+    THIS IS A TRANSPORT QUESTION, NOT A PARSE. It asks only "is this an answer at all?", the same
+    thing the status code is asked two lines above; the body is still stored whole and every
+    narrowing still belongs to stage 2.
+    """
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        return None
+    if isinstance(parsed, dict) and "error" in parsed and "data" not in parsed:
+        return str(parsed["error"])
+    return None
 
 
 def has_api_key() -> bool:
@@ -75,13 +119,23 @@ class OpenFigiRefused(RuntimeError):
     absence."""
 
 
+class OpenFigiUnavailable(RuntimeError):
+    """The provider answered, and its answer was that it could not answer.
+
+    OpenFIGI reports a transient server fault as **HTTP 200 with an error body**, so nothing about
+    the status line distinguishes it from a page of listings. The caller must treat it like a 429 —
+    stop, stay resumable, leave the subject unfinished — because it is the same fact: no answer
+    this time, try later. Raising instead would fail the run and need a human.
+    """
+
+
 class OpenFigiThrottled(RuntimeError):
     """The provider refused the MINUTE (HTTP 429). The caller must stop, resume later, and record
     the venue as UNFINISHED — a throttled sweep reading as complete is the 8,300-security mistake
     again, one venue at a time."""
 
 
-def _post(path: str, body: Any, timeout_s: float) -> Document:
+def _post(path: str, body: Any, timeout_s: float, *, bypass_cache: bool = False) -> Document:
     base = settings.provider_base("openfigi", REAL_ORIGIN)
     url = f"{base}{path}"
     headers = {"Content-Type": "application/json"}
@@ -96,6 +150,12 @@ def _post(path: str, body: Any, timeout_s: float) -> Document:
     api_key = settings.openfigi_api_key()
     if api_key:
         headers["X-OPENFIGI-APIKEY"] = api_key
+    if bypass_cache:
+        # http-cache maps this to `proxy_cache_bypass`, which SKIPS the stored entry and STORES
+        # the fresh answer over it. Both halves matter: OpenFIGI's transient error arrives as a
+        # cacheable 200, and `proxy_cache_valid 200 90d` then replays it for three months —
+        # measured 2026-09-21, two venues unsweepable until December off one bad second.
+        headers["X-Muffin-Cache-Bypass"] = "1"
     with metrics.request("openfigi") as outcome:
         try:
             response = httpx.post(
@@ -114,6 +174,19 @@ def _post(path: str, body: Any, timeout_s: float) -> Document:
         if response.status_code != 200:
             outcome["outcome"] = "refused"
             raise OpenFigiRefused(f"openfigi {response.status_code} on {path}")
+        error = _error_in(response.content)
+        if error is not None:
+            outcome["outcome"] = "refused"
+    if error is not None:
+        # OURS IS PERMANENT, so it is raised without spending a second request: the cache key
+        # contains the request body, so a corrected request cannot collide with this entry anyway.
+        if _is_our_fault(error):
+            raise OpenFigiRefused(f"openfigi {path} refused the request: {error}")
+        # THEIRS MIGHT BE A CACHED ONE SECOND OF TROUBLE. Ask exactly once more, past the cache —
+        # which also overwrites the stored error, so the next caller is not still reading it.
+        if not bypass_cache:
+            return _post(path, body, timeout_s, bypass_cache=True)
+        raise OpenFigiUnavailable(f"openfigi {path} could not answer: {error}")
     # THE REQUEST BODY IS THE PROVENANCE — the response says nothing about what it was asked, and
     # the two parameters (`exchCode`, `securityType2`, `start`) decide what a page even contains.
     return Document(

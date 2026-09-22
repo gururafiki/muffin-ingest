@@ -185,7 +185,7 @@ def _sweep_venue(
 ) -> list[dict[str, Any]]:
     import time
 
-    from muffin_ingest.providers.openfigi import OpenFigiThrottled
+    from muffin_ingest.providers.openfigi import OpenFigiThrottled, OpenFigiUnavailable
 
     pacing = sweep_pacing()
     rows: list[dict[str, Any]] = []
@@ -203,6 +203,20 @@ def _sweep_venue(
                 "openfigi throttled %s after %s pages; the venue resumes from its cursor next run",
                 exch_code,
                 len(rows),
+            )
+            break
+        except OpenFigiUnavailable as unavailable:
+            # THE SAME FACT IN A DIFFERENT COSTUME. OpenFIGI reports a transient server fault as
+            # HTTP 200 with an error body, and this used to raise and fail the whole run — twice,
+            # on SM and PM, because http-cache had STORED that 200 and was replaying it. The
+            # provider now retries once past the cache before giving up, so reaching here means it
+            # said the same thing twice. Its exact words are logged, because "could not answer" is
+            # the provider's sentence and paraphrasing it is how a vocabulary gets lost.
+            context.log.warning(
+                "openfigi could not answer %s after %s pages (%s); the venue resumes next run",
+                exch_code,
+                len(rows),
+                unavailable,
             )
             break
         # PARSING THE PAGE IS ALSO VALIDATING IT: an error-shaped 200 (`{"error": "…"}`) must
