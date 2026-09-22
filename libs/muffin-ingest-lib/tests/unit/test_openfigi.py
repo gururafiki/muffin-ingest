@@ -8,7 +8,9 @@ also real: `{"error": "Invalid key 'includeEntitlements'."}` is served with HTTP
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -210,9 +212,10 @@ def _drive(
     sent: list[dict[str, str]] = []
     queue = list(replies)
 
-    def posting(url: str, **kw: object) -> httpx.Response:
+    def posting(url: str, **kw: Any) -> httpx.Response:
         status, payload = queue.pop(0)
-        sent.append({k.lower(): v for k, v in dict(kw.get("headers") or {}).items()})
+        headers: Mapping[str, str] = kw.get("headers") or {}
+        sent.append({k.lower(): v for k, v in headers.items()})
         return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
 
     monkeypatch.setattr(httpx, "post", posting)
