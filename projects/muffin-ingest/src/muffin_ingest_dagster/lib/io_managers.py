@@ -18,6 +18,7 @@ path costs one wheel.
 
 from __future__ import annotations
 
+import contextvars
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
@@ -61,6 +62,60 @@ class ParquetIOManager(dg.UPathIOManager):
 
     extension: str | None = ".parquet"
 
+    #: PER-PARTITION TALLIES, EMITTED ONCE. `dump_to_path` runs once per partition, and
+    #: `add_output_metadata` may be called only ONCE per output — a second call with the same keys
+    #: raises `DagsterInvalidMetadata: Tried to add metadata for key(s) that already have
+    #: metadata`. So a range run failed on its SECOND partition, and only a range run could: every
+    #: test and every hand-run materialised one partition at a time, which is the one shape that
+    #: cannot reach the bug. Measured 2026-09-22 — the first night `nightly_prices` emitted its
+    #: bounded runs, all 66 failed this way and `market.price_bar` published nothing for four days.
+    #:
+    #: A ContextVar rather than an attribute because one manager instance serves concurrent steps;
+    #: an attribute would let two outputs' tallies merge into each other.
+    _tally: contextvars.ContextVar[list[dict[str, Any]] | None] = contextvars.ContextVar(
+        "parquet_io_tally", default=None
+    )
+
+    def _record(self, tally_entry: dict[str, Any]) -> None:
+        """Add one partition's counters to the run's tally, if a write is in progress.
+
+        A `dump_to_path` reached outside `handle_output` — there is no such caller today, and the
+        default of None rather than a fresh list is what makes a future one fail loudly here
+        instead of silently dropping its numbers.
+        """
+        tally = self._tally.get()
+        if tally is None:
+            raise dg.DagsterInvariantViolationError(
+                "ParquetIOManager wrote a partition outside handle_output, so its metadata has "
+                "nowhere to go."
+            )
+        tally.append(tally_entry)
+
+    @staticmethod
+    def _summarise(tally: list[dict[str, Any]]) -> dict[str, Any]:
+        """One metadata dict for however many partitions the run wrote.
+
+        THE COUNTS ARE SUMS AND SAY SO. A range run's `rows_total` is the range's, not any one
+        partition's — per-partition metadata is not expressible here, and a number that silently
+        described only the last partition would be worse than a total.
+        """
+        if not tally:
+            return {}
+        replaced = [t for t in tally if t.get("replaced")]
+        out: dict[str, Any] = {
+            "merged_on": tally[0]["merged_on"],
+            "rows_fetched": sum(int(t["rows_fetched"]) for t in tally),
+            "rows_kept": sum(int(t["rows_kept"]) for t in tally),
+            "rows_superseded": sum(int(t["rows_superseded"]) for t in tally),
+            "rows_unkeyable": sum(int(t["rows_unkeyable"]) for t in tally),
+            "rows_total": sum(int(t["rows_total"]) for t in tally),
+            "partitions_replaced": len(replaced),
+            "partitions_merged": len(tally) - len(replaced),
+        }
+        if replaced:
+            out["replaced_because"] = "the run fetched these subjects' whole history"
+        return out
+
     def __init__(self, base_path: str) -> None:
         # `UPathIOManager` wants a `UPath` and fails with `'str' object has no attribute
         # 'joinpath'` deep inside partition-path resolution when handed a string — a message that
@@ -89,6 +144,19 @@ class ParquetIOManager(dg.UPathIOManager):
         So a run covering several partitions returns a MAPPING of partition key to its rows, and
         each lands in its own file — which is what the partition means.
         """
+        tally: list[dict[str, Any]] = []
+        token = self._tally.set(tally)
+        try:
+            self._write(context, obj, tally)
+        finally:
+            self._tally.reset(token)
+
+    def _write(
+        self,
+        context: dg.OutputContext,
+        obj: Rows | Mapping[str, Rows],
+        tally: list[dict[str, Any]],
+    ) -> None:
         if context.has_asset_partitions and len(context.asset_partition_keys) > 1:
             paths = self._get_paths_for_partitions(context)
             if not isinstance(obj, Mapping):
@@ -111,10 +179,18 @@ class ParquetIOManager(dg.UPathIOManager):
                 # difference between "collected, and there was nothing" and "never collected", and
                 # it is the whole reason the cross-section is partitioned by date.
                 self.dump_to_path(context=context, obj=obj.get(key, []), path=path)
-            context.add_output_metadata({"partitions_written": len(paths)})
+            context.add_output_metadata(
+                {"partitions_written": len(paths), **self._summarise(tally)}
+            )
             return
 
         super().handle_output(context, obj)
+        # THE SINGLE-PARTITION PATH GOES THROUGH `UPathIOManager`, which calls `dump_to_path`
+        # itself — so its tally is emitted here rather than inside the write, for the same
+        # one-call-per-output reason.
+        summary = self._summarise(tally)
+        if summary:
+            context.add_output_metadata(summary)
 
     def dump_to_path(self, context: dg.OutputContext, obj: Rows, path: UPath) -> None:
         import pyarrow as pa
@@ -131,7 +207,7 @@ class ParquetIOManager(dg.UPathIOManager):
         # would delete it to record a quiet day, which is the failure the merge exists to prevent.
         if merge_on and isinstance(obj, Complete) and rows:
             stored = self._stored_rows(path)
-            context.add_output_metadata(
+            self._record(
                 {
                     "merged_on": ", ".join(merge_on),
                     "rows_fetched": len(rows),
@@ -139,7 +215,7 @@ class ParquetIOManager(dg.UPathIOManager):
                     "rows_superseded": len(stored),
                     "rows_unkeyable": 0,
                     "rows_total": len(rows),
-                    "replaced_because": "the run fetched this subject's whole history",
+                    "replaced": True,
                 }
             )
         elif merge_on:
@@ -227,7 +303,7 @@ class ParquetIOManager(dg.UPathIOManager):
                 kept.append(row)
 
         merged = kept + list(rows)
-        context.add_output_metadata(
+        self._record(
             {
                 "merged_on": ", ".join(merge_on),
                 "rows_fetched": len(rows),
@@ -235,6 +311,7 @@ class ParquetIOManager(dg.UPathIOManager):
                 "rows_superseded": len(stored) - len(kept),
                 "rows_unkeyable": unkeyable,
                 "rows_total": len(merged),
+                "replaced": False,
             }
         )
         return merged

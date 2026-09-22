@@ -270,3 +270,81 @@ def test_an_asset_without_merge_on_still_replaces(tmp_path: Path) -> None:
     """The default is unchanged, so no existing lane silently starts accumulating."""
     assert through_the_seam(tmp_path, [{"symbol": "AAPL", "n": 1}]) == [{"symbol": "AAPL", "n": 1}]
     assert through_the_seam(tmp_path, [{"symbol": "MSFT", "n": 2}]) == [{"symbol": "MSFT", "n": 2}]
+
+
+# --- A RANGE RUN, WHICH IS THE ONE SHAPE EVERY OTHER TEST HERE CANNOT REACH -----------------
+
+
+def test_a_range_run_over_merging_partitions_writes_them_all(tmp_path: Path) -> None:
+    """`add_output_metadata` MAY BE CALLED ONCE PER OUTPUT, and a range writes many partitions.
+
+    `dump_to_path` runs once per partition and each call was emitting the same seven merge keys,
+    so the SECOND partition to take a metadata-emitting path raised
+
+        DagsterInvalidMetadata: Tried to add metadata for key(s) that already have metadata:
+        {'merged_on', 'rows_fetched', 'rows_kept', 'rows_superseded', 'rows_unkeyable',
+         'rows_total', 'replaced_because'}
+
+    Every other test in this file materialises ONE partition, and a single-partition run is the
+    only shape that cannot reach it — so the suite was green while, measured 2026-09-22, all 66 of
+    `nightly_prices`' bounded runs failed this way and `market.price_bar` published nothing for
+    four days.
+
+    IT TAKES TWO PASSES, which is the part a smaller fixture would miss. On a FIRST write there is
+    nothing stored, so `_merge_with_stored` returns early and records nothing — only one partition
+    (the `Complete` one) emits, and one emit never collides. The shape that broke production is the
+    SECOND night: every partition in the range has history, so every one of them emits.
+    """
+    manager = ParquetIOManager(base_path=str(tmp_path))
+    keys = ["2026-09-02", "2026-09-03", "2026-09-04"]
+    mode: dict[str, str] = {"how": "complete"}
+
+    @dg.asset(
+        partitions_def=DAY,
+        io_manager_key="parquet_io",
+        name="raw_thing",
+        backfill_policy=dg.BackfillPolicy.single_run(),
+        metadata={"merge_on": ["symbol", "date"]},
+    )
+    # UNANNOTATED ON PURPOSE: this module is `from __future__ import annotations` and the asset is
+    # defined inside a function, so Dagster cannot resolve a stringified `AssetExecutionContext`
+    # from the local scope. Blank is explicitly allowed.
+    def raw_thing(context) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+        rows = {k: [{"symbol": "A", "date": k, "close": 1.0}] for k in context.partition_keys}
+        if mode["how"] == "complete":
+            return {k: Complete(v) for k, v in rows.items()}
+        # The extension a nightly sweep fetches: a NEW bar per subject, beside stored history.
+        return {
+            k: [{"symbol": "A", "date": k, "close": 2.0}, {"symbol": "B", "date": k, "close": 9.0}]
+            for k in rows
+        }
+
+    def run() -> Any:
+        return dg.materialize(
+            [raw_thing],
+            resources={"parquet_io": manager},
+            # A RANGE IS DRIVEN BY THE TWO TAGS, which is also how a schedule asks for one —
+            # `materialize()` has no `partition_key_range` parameter in 1.13.
+            tags={
+                "dagster/asset_partition_range_start": keys[0],
+                "dagster/asset_partition_range_end": keys[-1],
+            },
+        )
+
+    assert run().success, "the first range run populates the partitions"
+    mode["how"] = "extend"
+    result = run()
+    assert result.success, "a range run where EVERY partition merges must not fail at the write"
+
+    for k in keys:
+        assert (tmp_path / "raw_thing" / f"{k}.parquet").exists(), k
+
+    meta = result.asset_materializations_for_node("raw_thing")[0].metadata
+    assert meta["partitions_written"].value == 3
+    # THE COUNTS ARE SUMS ACROSS THE RANGE, and a summary that reported only the last partition's
+    # numbers would read as a third of the work with nothing to indicate it.
+    assert meta["partitions_merged"].value == 3
+    assert meta["partitions_replaced"].value == 0
+    assert meta["rows_fetched"].value == 6, "two fresh rows per partition, three partitions"
+    assert meta["rows_superseded"].value == 3, "each partition's stored A row was re-asked"
+    assert meta["rows_total"].value == 6
