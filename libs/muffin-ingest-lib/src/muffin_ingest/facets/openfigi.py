@@ -42,8 +42,14 @@ def parse_filter(
     except json.JSONDecodeError as exc:
         raise OpenFigiUnreadable(f"openfigi /v3/filter body is not JSON: {exc}") from exc
     if isinstance(parsed, dict) and "error" in parsed and "data" not in parsed:
-        # A REFUSAL WEARING A SUCCESS: OpenFIGI answers `{"error": "Invalid key '…'."}` with HTTP
-        # 200. That is a shape problem in OUR request, never a venue that has nothing.
+        # A REFUSAL WEARING A SUCCESS: OpenFIGI answers `{"error": "…"}` with HTTP 200.
+        #
+        # THIS COMMENT USED TO SAY "that is a shape problem in OUR request, never a venue that has
+        # nothing", and that was measured FALSE on 2026-09-21: `There was an error while processing
+        # this request.` is the provider's own transient fault, and SM and PM failed the backfill
+        # twice on a CACHED one while walking cleanly when asked directly. The live classification
+        # now happens in `providers/openfigi`, which can retry past the cache; a file reaching here
+        # was stored before that existed, so it is unreadable rather than re-askable.
         raise OpenFigiUnreadable(f"openfigi /v3/filter replied with an error: {parsed['error']}")
     if not isinstance(parsed, dict) or "data" not in parsed:
         shape = sorted(parsed.keys()) if isinstance(parsed, dict) else type(parsed).__name__

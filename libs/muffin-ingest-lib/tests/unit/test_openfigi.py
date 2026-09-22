@@ -179,9 +179,95 @@ def test_both_budgets_follow_the_key_rather_than_being_assumed(
     monkeypatch.setenv("OPENFIGI_API_KEY", "a-test-key")
     assert provider.has_api_key() is True
     assert provider.mapping_jobs_per_request() == 100
-    assert provider.sweep_pacing_s() == 0.3
+    # 3.0, NOT 0.3. The first keyed figure came from a probe that stopped at 15 pages, satisfied;
+    # re-measured by walking until the provider REFUSED, 1 s and 2 s both die at page 21 and 3 s
+    # completes a 44-page venue untouched.
+    assert provider.sweep_pacing_s() == 3.0
+    assert provider.SWEEP_PACING_KEYED < provider.SWEEP_PACING_ANONYMOUS
 
     # WHITESPACE IS NOT A KEY. A secret rendered from an empty Jinja default arrives as "" or "\n",
     # and treating that as configured sends an empty credential — the 401 above.
     monkeypatch.setenv("OPENFIGI_API_KEY", "   \n ")
     assert provider.has_api_key() is False
+
+
+# --- A 200 CARRYING AN ERROR ---------------------------------------------------------------
+#
+# OpenFIGI reports a transient server fault as HTTP 200 with an error body, so http-cache stores
+# it under `proxy_cache_valid 200 90d`. Measured 2026-09-21: two venues failed the backfill twice,
+# identically, on a CACHED `{"error":"There was an error while processing this request."}` while
+# walking cleanly when asked directly.
+
+
+def _drive(
+    monkeypatch: pytest.MonkeyPatch, replies: list[tuple[int, object]]
+) -> list[dict[str, str]]:
+    """Answer each successive request from `replies`; return the headers of every request sent."""
+    import httpx
+
+    from muffin_ingest.providers import openfigi as provider
+
+    sent: list[dict[str, str]] = []
+    queue = list(replies)
+
+    def posting(url: str, **kw: object) -> httpx.Response:
+        status, payload = queue.pop(0)
+        sent.append({k.lower(): v for k, v in dict(kw.get("headers") or {}).items()})
+        return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", posting)
+    provider.filter_exchange("AU")
+    return sent
+
+
+def test_a_transient_error_is_retried_once_past_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The retry is what un-poisons the entry: `proxy_cache_bypass` skips the stored answer AND
+    stores the fresh one over it, so the next caller is not still reading the error."""
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    sent = _drive(
+        monkeypatch,
+        [
+            (200, {"error": "There was an error while processing this request."}),
+            (200, {"data": [], "total": 0}),
+        ],
+    )
+    assert len(sent) == 2, "the transient must be asked again"
+    assert "x-muffin-cache-bypass" not in sent[0]
+    assert sent[1]["x-muffin-cache-bypass"] == "1", "the retry must go past the cache"
+
+
+def test_a_transient_that_persists_is_unavailable_rather_than_a_failed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`OpenFigiUnavailable` is the same FACT as a 429 — no answer this time — so the sweep stops,
+    files what it has and stays resumable. Raising `OpenFigiUnreadable` failed the whole run,
+    which is what happened to SM and PM."""
+    from muffin_ingest.providers.openfigi import OpenFigiUnavailable
+
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    body = {"error": "There was an error while processing this request."}
+    with pytest.raises(OpenFigiUnavailable):
+        _drive(monkeypatch, [(200, body), (200, body)])
+
+
+def test_an_error_naming_our_own_parameter_is_ours_and_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MAKE THE TWO RULES DISAGREE. A malformed request is permanent — retrying cannot help, and a
+    sweep that resumed for ever on it would hide the bad parameter. It must NOT spend a second
+    request, and it must raise a different exception from the transient."""
+    from muffin_ingest.providers.openfigi import OpenFigiRefused
+
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    with pytest.raises(OpenFigiRefused):
+        _drive(monkeypatch, [(200, {"error": "Invalid key 'includeEntitlements'."})])
+
+
+def test_an_ordinary_answer_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The control: a page of listings costs exactly one request, so the retry cannot be doubling
+    every call in the name of a fault that is not there."""
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    sent = _drive(monkeypatch, [(200, {"data": [{"figi": "X", "ticker": "T"}], "total": 1})])
+    assert len(sent) == 1
