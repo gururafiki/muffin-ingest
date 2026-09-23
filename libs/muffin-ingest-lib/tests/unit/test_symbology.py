@@ -175,6 +175,92 @@ def test_plan_symbols_records_a_hit_and_a_miss_as_observations() -> None:
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss"), ("symbol", "miss")]
 
 
+def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
+    """A REQUEST NEVER MADE AND A REQUEST THAT ANSWERED NOTHING ARE DIFFERENT FACTS — and on this
+    ladder "not asked" is the COMMON case, since a rung skips any subject whose evidence is already
+    held. Measured live 2026-09-22 on the first three subjects ever run: all three needed a ticker
+    and already had a symbol, their local and Yahoo raw files were correctly EMPTY, and
+    `identifier_probe` still gained three `scheme=symbol, outcome=miss` rows — a recorded answer to
+    a question nobody put, which `stale_misses` would then pay a provider to re-ask in 30 days.
+
+    THE FIXTURE MAKES THE TWO CANDIDATE RULES DISAGREE IN BOTH DIRECTIONS, because a rule of
+    "record whatever we can see" and a rule of "record what we asked" give the same answer whenever
+    a subject was asked — which is every case above this one.
+
+    * a value with no question: the TICKER rung's own hits name the local line, so `value` is real
+      while both symbol rungs were skipped. The symbol row is still written — it is a finding — and
+      the probe is not, because nothing observed it.
+    * no value and no question: the shape that was live. Nothing at all.
+    * the control, same inputs, asked: a miss. So the flag is the only thing separating them.
+    """
+    sec = "11111111-1111-1111-1111-111111111111"
+    entries = _mapping()
+
+    # A VALUE WITH NO QUESTION. AAPL's own mapping hit names the US line, so the ladder can see a
+    # symbol without either symbol rung having spent a request.
+    identifiers, symbols, probes = symbology.plan_symbols(
+        sec,
+        isin="US0378331005",
+        country_iso2="US",
+        mapping_entry=entries[0],
+        yahoo_hits=[],
+        venues=VENUES,
+        source="openfigi",
+        asked_symbol=False,
+    )
+    assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
+    assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "hit")]
+
+    # NO VALUE AND NO QUESTION — the shape that was live in production.
+    identifiers, symbols, probes = symbology.plan_symbols(
+        sec,
+        isin="ZZ0000000000",
+        country_iso2="US",
+        mapping_entry=entries[2],
+        yahoo_hits=[],
+        venues=VENUES,
+        source="openfigi",
+        asked_symbol=False,
+    )
+    assert identifiers == [] and symbols == []
+    assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss")]
+
+    # THE CONTROL: the very same inputs, asked. A miss is an observation and is recorded.
+    _, _, probes = symbology.plan_symbols(
+        sec,
+        isin="ZZ0000000000",
+        country_iso2="US",
+        mapping_entry=entries[2],
+        yahoo_hits=[],
+        venues=VENUES,
+        source="openfigi",
+        asked_symbol=True,
+    )
+    assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss"), ("symbol", "miss")]
+
+
+def test_the_ticker_rung_carries_its_own_question_and_needs_no_flag() -> None:
+    """`mapping_entry` IS the question: the caller reconstructs it from that rung's raw row, and
+    the rung appends a row for every subject it asks about. So `None` means "not asked" and there
+    is nothing a second flag could add — a guard that cannot fire reads as protection without
+    being it, which is why this one is absent rather than defaulted.
+
+    The symbol side is asked about here too, so the run is not silent: it is one rung skipped, not
+    a subject skipped."""
+    sec = "11111111-1111-1111-1111-111111111111"
+    _, symbols, probes = symbology.plan_symbols(
+        sec,
+        isin="US0378331005",
+        country_iso2="US",
+        mapping_entry=None,
+        yahoo_hits=symbology.parse_yahoo_search((FIX / "yahoo_search_aapl.json").read_bytes()),
+        venues=VENUES,
+        source="openfigi",
+    )
+    assert [(p["scheme"], p["outcome"]) for p in probes] == [("symbol", "hit")]
+    assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
+
+
 # --- who the ladder asks about -------------------------------------------------------------------
 
 

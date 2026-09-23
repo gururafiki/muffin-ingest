@@ -210,14 +210,39 @@ def plan_symbols(
     yahoo_hits: Sequence[dict[str, Any]],
     venues: dict[str, list[tuple[str, str]]],
     source: str,
+    asked_symbol: bool = True,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """One security's ladder evidence → the rows to write.
 
     THE LADDER: OpenFIGI's US ticker first (it is the identifier every non-provider consumer joins
     on), then the local symbol from OpenFIGI's own matches, then Yahoo's home-market hit. Each
     yields an `identifier_probe` observation; the adopted values become `security_identifier` /
-    `security_provider_symbol` rows. A security with NO usable evidence still yields its probe rows
-    (outcome 'miss') — that is what a materialised, empty run records.
+    `security_provider_symbol` rows. A security the rung ASKED about and got nothing for still
+    yields its probe row (outcome 'miss') — that is what a materialised, empty run records.
+
+    `asked_symbol` IS NOT OPTIONAL INFORMATION, AND OMITTING IT WROTE EVIDENCE FOR A QUESTION
+    NOBODY ASKED. A rung skips a subject whose evidence is already held — that is the whole reason
+    `_subjects` filters by `NEEDS_*`, since asking costs a provider request to be told what is
+    written down. This function used to emit a `symbol` probe unconditionally, so those
+    deliberately-skipped subjects were recorded as MISSES. Measured live 2026-09-22 on the first
+    three subjects ever run: all three needed a ticker and already had a symbol, their local and
+    Yahoo raw files were correctly EMPTY, and `identifier_probe` still gained three
+    `scheme=symbol, outcome=miss` rows.
+
+    That is this codebase's most-repeated rule — a request that was never made and a request that
+    answered nothing are different facts — and here it also costs money: `stale_misses` re-asks a
+    30-day-old miss, so a false one sends the lane back to the provider for an answer it holds.
+
+    THE TICKER RUNG NEEDS NO SUCH FLAG, because `mapping_entry` already carries the question: the
+    caller reconstructs it from that rung's own raw row, and `_map_in_batches` appends a row for
+    every subject it asks about — so `None` IS "not asked" and the branch cannot be reached
+    without one. A second flag beside it could never be false where the entry is present, and a
+    guard that cannot fire reads as protection without being it.
+
+    The symbol side is different, and that is why the flag is here: the value can come from the
+    TICKER rung's own hits naming a local line, so a subject whose symbol rungs were both skipped
+    still reaches this branch holding a real value. It is written — it is a finding — but nothing
+    observed it. The default stays True so a caller that genuinely asked reads unchanged.
     """
 
     probes: list[SymbolEvidence] = []
@@ -258,7 +283,14 @@ def plan_symbols(
     local = pick_local_symbol(country_iso2, mapping_entry.hits if mapping_entry else (), venues)
     home = pick_home_listing(country_iso2, yahoo_hits, venues)
     value = (local or {}).get("symbol") or home
-    if value:
+    if value and not asked_symbol:
+        # A VALUE WITHOUT A QUESTION IS STILL NOT AN OBSERVATION, and this branch is reachable:
+        # the ticker rung's own hits can name a local line. The adopted symbol is still written —
+        # it is a real finding — but no probe is recorded, because nothing asked.
+        symbol_rows.append(
+            {"security_id": security_id, "provider_code": SYMBOL_PROVIDER, "symbol": value}
+        )
+    elif value:
         probes.append(
             SymbolEvidence(
                 security_id=security_id,
@@ -276,7 +308,7 @@ def plan_symbols(
                 "symbol": value,
             }
         )
-    else:
+    elif asked_symbol:
         probes.append(
             SymbolEvidence(
                 security_id=security_id,

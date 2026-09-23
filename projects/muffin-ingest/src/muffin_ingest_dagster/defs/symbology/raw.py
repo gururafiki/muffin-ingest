@@ -125,15 +125,25 @@ def raw_figi_local_symbol(context: AssetExecutionContext, postgres: Postgres) ->
     io_manager_key="parquet_io",
     group_name="symbology",
     kinds={"yahoo", "parquet"},
-    automation_condition=SYMBOLOGY_AUTOMATION,
     description="Yahoo's ISIN search answer for each security, response whole.",
 )
 def raw_yahoo_symbol(context: AssetExecutionContext, postgres: Postgres) -> Any:
     """Per security, Yahoo's `/v1/finance/search?q=<ISIN>` body, response whole.
 
-    THE EXPENSIVE RUNG: one request per subject, where the mapping rungs get ten. It is also the
-    FALLBACK — it exists for the securities OpenFIGI cannot name a local line for — so asking it
-    about a security whose symbol we already hold is a whole request spent on a known answer.
+    THE EXPENSIVE RUNG: one request per subject, where the mapping rungs get a hundred. It is also
+    the FALLBACK — it exists for the securities OpenFIGI cannot name a local line for — so asking
+    it about a security whose symbol we already hold is a whole request spent on a known answer.
+
+    AND IT IS THE ONE RUNG WITH NO AUTOMATION CONDITION, ON PURPOSE. The other two spend OpenFIGI's
+    budget, which nothing else in this deployment competes for. This one spends YAHOO's, and that
+    is the budget the nightly price sweep lives on — measured 2026-09-19, the provider refused it
+    at call 138 of ~601, and a night that asks 46% of the universe is a night of missing bars. 1,618
+    subjects here is more than a whole night's price allowance.
+
+    So it stays an OPERATOR'S BACKFILL until that trade has been measured rather than assumed,
+    which is the same shape as `new_exchange_sweeps`: the work is VISIBLE as unmaterialised
+    partitions and costs nothing until someone asks for it. Giving it a condition is a one-line
+    change on the day the measurement says it is affordable.
     """
     keys, attributes = _subjects(context, postgres, sym.NEEDS_SYMBOL)
     rows: list[dict[str, Any]] = []
