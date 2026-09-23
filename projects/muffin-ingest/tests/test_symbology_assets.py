@@ -8,6 +8,7 @@ keeps "which entry answers THIS security" honest.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -33,6 +34,11 @@ SID = "11111111-1111-1111-1111-111111111111"
 OTHER_SID = "22222222-2222-2222-2222-222222222222"
 MAPPING_BODY = (FIX / "openfigi_mapping.json").read_bytes()
 YAHOO_BODY = (FIX / "yahoo_search_aapl.json").read_bytes()
+#: THE PROVIDERS ANSWERING WITH NOTHING, both captured rather than typed out. The mapping body is
+#: the third entry of the same capture — OpenFIGI's own refusal — sliced to a one-job answer, so
+#: the refusal wording stays the provider's. `yahoo_search_nothing.json` is a real empty `quotes`.
+NOTHING_MAPPING = json.dumps([json.loads(MAPPING_BODY)[2]]).encode()
+NOTHING_SEARCH = (FIX / "yahoo_search_nothing.json").read_bytes()
 
 
 class FakeCursor:
@@ -133,11 +139,19 @@ def _doc(body: bytes) -> Document:
     )
 
 
-def materialise(tmp_path: Path, instance: dg.DagsterInstance) -> dg.ExecuteInProcessResult:
+def materialise(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    *,
+    mapping_body: bytes = MAPPING_BODY,
+    search_body: bytes = YAHOO_BODY,
+) -> dg.ExecuteInProcessResult:
+    """The whole ladder for one subject. The bodies are arguments because "the providers answered
+    with nothing" is a case this family has to get right and cannot reach with the hit captures."""
     saved_map, saved_search = openfigi.mapping, yahoo_search.search
-    # The mapping rungs get the SAME three-entry body; `position` says who it answers.
-    openfigi.mapping = lambda jobs, **kw: _doc(MAPPING_BODY)
-    yahoo_search.search = lambda isin, **kw: _doc(YAHOO_BODY)
+    # The mapping rungs get the SAME body; `position` says who it answers.
+    openfigi.mapping = lambda jobs, **kw: _doc(mapping_body)
+    yahoo_search.search = lambda isin, **kw: _doc(search_body)
     try:
         return dg.materialize(
             [
@@ -181,6 +195,129 @@ def test_the_ladder_adopts_a_ticker_and_a_symbol_and_records_probes(
     assert probe_writes and "hit" in probe_writes[0][1], probe_writes
 
 
+def _probes(writes: list[tuple[str, tuple[Any, ...]]]) -> list[tuple[Any, Any]]:
+    """Every `identifier_probe` row a run wrote, as (scheme, outcome).
+
+    The upsert flattens its rows into one params tuple, so the rows are recovered by chunking on
+    the column count — and the column list is READ OUT OF THE STATEMENT rather than restated here.
+    `upsert` sorts its columns, which a hand-written list got wrong on the first run: it chunked
+    correctly and read `observed_at` as the scheme, so the assertion failed for a reason unrelated
+    to the rule. A second copy of another module's ordering is the shape that drifts.
+
+    Asserting on the SCHEME rather than on a substring is the other half: `"symbol" in params` is
+    also true of a ticker row whose value happens to contain it.
+    """
+    out: list[tuple[Any, Any]] = []
+    for sql, params in writes:
+        if "market.identifier_probe" not in sql:
+            continue
+        columns = [c.strip() for c in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
+        scheme, outcome = columns.index("scheme"), columns.index("outcome")
+        for i in range(0, len(params), len(columns)):
+            row = params[i : i + len(columns)]
+            out.append((row[scheme], row[outcome]))
+    return out
+
+
+def test_a_skipped_rung_writes_no_observation_and_the_asset_is_what_says_so(
+    tmp_path: Path,
+) -> None:
+    """THE LIVE DEFECT, AT THE CALL SITE. `plan_symbols` obeying `asked_symbol` is proven in the
+    library suite; nothing there can prove this asset PASSES it honestly, and a rule written at one
+    call site is not a rule — this codebase has paid for that distinction repeatedly.
+
+    Measured in production 2026-09-22 on the first three subjects ever run: each needed a ticker
+    and already held a symbol, so both symbol rungs correctly wrote EMPTY files — and
+    `identifier_probe` still gained three `scheme=symbol, outcome=miss` rows. `stale_misses` would
+    then have paid Yahoo, one request per subject, to re-ask each of them in 30 days.
+
+    THE FIXTURE MAKES THE TWO RULES DISAGREE by running the SAME subject and the same captured
+    bytes twice, changing only what the database says it still needs. A ladder recording whatever
+    it can see writes a symbol probe both times; one recording what it ASKED writes it once. The
+    adopted symbol row is written either way, because that is a finding rather than an observation.
+    """
+    # THE SYMBOL RUNGS SKIP IT: the database says this security already has a provider symbol.
+    STATE.needing_symbol = {OTHER_SID}
+    FakeCursor.writes.clear()
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
+            assert materialise(tmp_path, instance).success
+        skipped = _probes(FakeCursor.writes)
+        skipped_writes = list(FakeCursor.writes)
+    finally:
+        STATE.needing_symbol = {SID}
+
+    assert skipped == [("ticker", "hit")], (
+        f"recorded an answer to a question nobody asked: {skipped}"
+    )
+    # AND THE VALUE IS STILL ADOPTED. The ticker rung's own hits name the US line, so the ladder
+    # holds a real symbol — it is written, it is simply not claimed as an observation.
+    assert any("market.security_provider_symbol" in w for w, _ in skipped_writes), skipped_writes
+
+    # THE CONTROL IS THE NEXT TEST, NOT HERE, AND THE MUTATION IS WHY. Re-running this subject
+    # with the rungs asking DOES write a symbol hit — and it would write one with the flag pinned
+    # false too, because the local pick below `plan_symbols` records its own hit whenever the
+    # unfiltered rung names a line. That control passes through a different code path from the
+    # rule, so it proves nothing: pinning `asked_symbol=False` was MISSED by it.
+
+
+def test_a_rung_that_asked_and_got_nothing_still_records_the_miss(tmp_path: Path) -> None:
+    """THE OTHER HALF, AND THE ONLY CASE THE FLAG ALONE DECIDES. A miss is an observation: it is
+    what `stale_misses` reads to re-ask in 30 days, and a lane that stopped recording them would
+    never revisit a security that has since gained a listing.
+
+    Both provider answers here are captures of NOTHING, which is what makes the case discriminating
+    — with no hits anywhere, the local pick writes no probe of its own, so the flag is the only
+    thing left that can decide whether a row appears. Run twice on identical bytes, changing only
+    what the database says the subject still needs: asked earns a miss, skipped earns silence.
+    """
+    keys = {"asked": {SID}, "skipped": {OTHER_SID}}
+    seen: dict[str, list[tuple[Any, Any]]] = {}
+    for label, needing in keys.items():
+        STATE.needing_symbol = needing
+        FakeCursor.writes.clear()
+        try:
+            with dg.instance_for_test() as instance:
+                instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
+                assert materialise(
+                    tmp_path / label,
+                    instance,
+                    mapping_body=NOTHING_MAPPING,
+                    search_body=NOTHING_SEARCH,
+                ).success
+        finally:
+            STATE.needing_symbol = {SID}
+        seen[label] = _probes(FakeCursor.writes)
+
+    assert ("symbol", "miss") in seen["asked"], seen["asked"]
+    assert ("symbol", "miss") not in seen["skipped"], seen["skipped"]
+    # The ticker rung asked in both, and its own miss is recorded either way — so the difference
+    # above is the symbol rule rather than the run having done nothing.
+    assert ("ticker", "miss") in seen["asked"] and ("ticker", "miss") in seen["skipped"], seen
+
+
+def test_the_yahoo_rung_deliberately_carries_no_automation_condition() -> None:
+    """ITS ABSENCE IS A DECISION, AND AN ABSENCE CANNOT BE READ FROM THE CODE AS ONE — adding the
+    condition back is a one-line change that would look like completing an oversight.
+
+    The two mapping rungs spend OpenFIGI's budget, which nothing else in this deployment competes
+    for. Yahoo's search is one request per subject on the budget the NIGHTLY PRICE SWEEP lives on,
+    and that provider refused the sweep at call 138 of ~601 on 2026-09-19. 1,618 subjects is more
+    than a whole night's measured allowance, so this rung stays an operator's backfill until the
+    trade has been measured rather than assumed.
+
+    Asserted beside its siblings rather than alone: "no condition anywhere" would also pass if the
+    ladder stopped being automated at all, which is a different and much larger regression.
+    """
+    assert symbology_raw.raw_yahoo_symbol.automation_conditions_by_key == {}, (
+        "raw_yahoo_symbol spends the price lane's Yahoo budget; automating it is a measurement, "
+        "not a tidy-up"
+    )
+    for rung in (symbology_raw.raw_figi_ticker, symbology_raw.raw_figi_local_symbol):
+        assert rung.automation_conditions_by_key, rung.key
+
+
 def test_the_position_column_keeps_the_positional_guarantee_on_the_way_back_in() -> None:
     """The captured mapping body answers job 0 as AAPL and job 1 as ACN. A security whose evidence
     row sits at position 1 must resolve to ACN, never to AAPL — a reorder would attach one
@@ -196,9 +333,15 @@ def test_the_position_column_keeps_the_positional_guarantee_on_the_way_back_in()
 
 
 def _materialise_range(
-    tmp_path: Path, instance: dg.DagsterInstance, keys: list[str]
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    keys: list[str],
+    asset: Any = None,
 ) -> tuple[dg.ExecuteInProcessResult, list[str]]:
-    """Materialise the Yahoo rung over a partition RANGE, recording the ISINs it actually asked.
+    """Materialise a rung over a partition RANGE, recording the ISINs it actually asked.
+
+    Defaults to the Yahoo rung, which is what most of these tests are about. The re-ask test passes
+    a MAPPING rung instead, because the Yahoo one deliberately carries no automation condition.
 
     The recorder lives here rather than in the test because both patch the same module attribute,
     and a test that patched it around this call had its recorder silently replaced by this
@@ -216,7 +359,7 @@ def _materialise_range(
     yahoo_search.search = search
     try:
         result = dg.materialize(
-            [symbology_raw.raw_yahoo_symbol],
+            [asset or symbology_raw.raw_yahoo_symbol],
             instance=instance,
             resources={
                 "postgres": FakePostgres(),
@@ -319,8 +462,12 @@ def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
     # attribute is not an export).
     saved_connect = Postgres.connect
     Postgres.connect = FakePostgres.connect  # type: ignore[method-assign,assignment]
+    # THE TICKER RUNG, NOT THE YAHOO ONE. This test is about `SYMBOLOGY_AUTOMATION`'s re-ask, and
+    # `raw_yahoo_symbol` deliberately carries no condition — it spends the budget the nightly price
+    # sweep lives on, so it stays an operator's backfill. Pointed at the Yahoo rung this asserts
+    # zero for a reason unrelated to the rule.
     defs = dg.Definitions(
-        assets=[symbology_raw.raw_yahoo_symbol],
+        assets=[symbology_raw.raw_figi_ticker],
         resources={
             "postgres": FakePostgres(),
             "parquet_io": ParquetIOManager(str(tmp_path)),
@@ -340,7 +487,9 @@ def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
             # `missing()` covers both on a cold grid. Correct, and not what this tests.
             assert cold.total_requested == 2, cold.total_requested
 
-            _materialise_range(tmp_path, instance, [SID, OTHER_SID])
+            _materialise_range(
+                tmp_path, instance, [SID, OTHER_SID], asset=symbology_raw.raw_figi_ticker
+            )
             again = dg.evaluate_automation_conditions(
                 defs=defs, instance=instance, cursor=cold.cursor, evaluation_time=after
             )

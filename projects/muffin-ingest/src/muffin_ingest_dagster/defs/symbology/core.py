@@ -95,6 +95,11 @@ def security_symbology(
         # THE LADDER: US ticker first, then the LOCAL line, then Yahoo's home-market hit. The local
         # picker sees the UNFILTERED mapping (entry_local) so it can find the KS/`.T` line; Yahoo
         # is the fallback only where OpenFIGI could not name a local line.
+        # WHETHER THE SYMBOL RUNGS ASKED, read off the raw files rather than assumed. Both append
+        # a row for every subject they ask about, so an ABSENT entry is "skipped — the evidence was
+        # already held", not "asked and got nothing". Recording the second for the first writes an
+        # observation nobody made, and `stale_misses` then re-asks it in 30 days. The ticker rung
+        # needs no flag: `mapping_entry` is reconstructed from its row, so None already means it.
         identifiers, symbols, probes = sym.plan_symbols(
             sid,
             isin=isin,
@@ -103,6 +108,7 @@ def security_symbology(
             yahoo_hits=yahoo_hits,
             venues=venues,
             source="openfigi",
+            asked_symbol=bool(local.get(sid)) or bool(yahoo.get(sid)),
         )
         # The local line may resolve from the UNFILTERED rung alone, so merge its pick in.
         local_pick = sym.pick_local_symbol(country, entry_local.hits if entry_local else (), venues)

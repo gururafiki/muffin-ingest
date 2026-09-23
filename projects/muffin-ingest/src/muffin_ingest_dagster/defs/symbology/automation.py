@@ -13,9 +13,24 @@ from muffin_ingest_dagster.defs.symbology.raw import raw_figi_ticker
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
+#: WHY THIS ONE IS A SPEND DECISION AND THE DISCOVERY SENSORS WERE NOT.
+#:
+#: `new_nport_filings` and `new_exchange_sweeps` return `run_requests=[]` and their assets carry no
+#: automation condition, so starting them makes work VISIBLE and asks no provider for anything.
+#: This sensor seeds a grid whose rungs DO carry a condition, behind a RUNNING default automation
+#: sensor — so the partitions it adds are asked about within the hour.
+#:
+#: What that costs, measured 2026-09-21: 5,697 equities missing a ticker and 1,618 missing a
+#: provider symbol. Keyed, OpenFIGI takes 100 mapping jobs a request, so the two mapping rungs are
+#: ~57 and ~17 requests — minutes, against a budget nothing else here competes for.
+#:
+#: `raw_yahoo_symbol` is deliberately left WITHOUT a condition: it is one request per subject on
+#: the budget the nightly price sweep lives on, and 1,618 of those is more than a whole night's
+#: measured allowance. It stays an operator's backfill until that trade is measured.
 @dg.sensor(
     target=raw_figi_ticker,
     minimum_interval_seconds=6 * 3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
     description="A security missing any of the ladder's evidence becomes a partition.",
 )
 def new_symbols_needed(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:

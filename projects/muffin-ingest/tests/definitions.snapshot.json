@@ -631,7 +631,7 @@
       "tags": {}
     },
     "raw_yahoo_symbol": {
-      "automation_condition": "never asked, or a stale miss (cd6c999f33c1)",
+      "automation_condition": null,
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"
@@ -1019,7 +1019,7 @@
       "type": "STANDARD"
     },
     "new_symbols_needed": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "__anonymous_asset_job_new_symbols_needed"
       ],
