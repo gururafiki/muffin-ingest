@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, timedelta
 
 import pytest
@@ -421,3 +422,62 @@ def test_the_window_is_applied_in_stage_2_and_is_half_open() -> None:
     window = (date(2026, 9, 10), date(2026, 9, 11))
     out = prices.normalise(raw, {}, source_code="yfinance", window=window)
     assert [r["trade_date"] for r in out] == ["2026-09-10"]
+
+
+# --- which securities the returns run asks about -------------------------------------------------
+
+
+def test_the_enumeration_probes_each_security_and_never_aggregates_the_bars() -> None:
+    """ASSERTED ON THE SHAPE BECAUSE NO FIXTURE CAN SEE THE COST. On a handful of rows a `group by`
+    over the bars and a probe per security both answer instantly; on production's 57.5M the first
+    was cancelled at the role's 120 s `statement_timeout` two nights running, before a single
+    return was computed. And the semi-join that reads as the fix is not one: the planner flattens
+    `exists` into a Parallel Hash Semi Join over every partition, measured at a 110 s bound.
+
+    `LATERAL ... LIMIT 1` is the one form that stays a probe, and the `trade_date` bound is what
+    lets pruning skip the partitions the caller never reads.
+    """
+    flat = " ".join(prices.SECURITIES_WITH_BARS.split()).lower()
+    assert "cross join lateral" in flat and "limit 1" in flat, flat
+    assert "pb.trade_date >= %s" in flat, "without the bound every yearly partition is probed"
+    assert "group by pb." not in flat and "distinct pb." not in flat, (
+        "an aggregate over the bars is O(rows), and the history lane grows the rows every night"
+    )
+    assert "exists" not in flat, "the planner turns a semi-join back into a hash over every row"
+
+
+class _Recording:
+    """A connection that records what it was asked and answers with fixed ids."""
+
+    def __init__(self, ids: list[str]) -> None:
+        self.ids = ids
+        self.calls: list[tuple[str, list[object]]] = []
+
+    def cursor(self) -> _Recording:
+        return self
+
+    def __enter__(self) -> _Recording:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Sequence[object] = ()) -> None:
+        self.calls.append((sql, list(params)))
+
+    def fetchall(self) -> list[tuple[str]]:
+        return [(i,) for i in self.ids]
+
+
+def test_the_enumeration_asks_about_the_window_it_is_given_and_pages_the_answer() -> None:
+    """The window travels as a PARAMETER, first, and a limit is appended after it — so the order
+    of the placeholders and the order of the values cannot disagree."""
+    conn = _Recording([f"id-{i}" for i in range(5)])
+    since = date(2021, 7, 1)
+
+    pages = list(prices.securities_with_bars(conn, since=since, page=2, limit=5))
+
+    assert pages == [["id-0", "id-1"], ["id-2", "id-3"], ["id-4"]]
+    sql, params = conn.calls[0]
+    assert params == [since, 5]
+    assert sql.startswith(prices.SECURITIES_WITH_BARS) and sql.rstrip().endswith("limit %s")
