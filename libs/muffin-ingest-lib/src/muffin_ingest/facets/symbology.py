@@ -211,6 +211,7 @@ def plan_symbols(
     venues: dict[str, list[tuple[str, str]]],
     source: str,
     asked_symbol: bool = True,
+    local_hits: Sequence[dict[str, Any]] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """One security's ladder evidence → the rows to write.
 
@@ -243,6 +244,17 @@ def plan_symbols(
     TICKER rung's own hits naming a local line, so a subject whose symbol rungs were both skipped
     still reaches this branch holding a real value. It is written — it is a finding — but nothing
     observed it. The default stays True so a caller that genuinely asked reads unchanged.
+
+    `local_hits` ARE THE LOCAL RUNG'S OWN MATCHES, AND THEY BELONG ON THIS LADDER, NOT BESIDE IT.
+    The local line used to be picked here only from the TICKER rung's hits — restricted to
+    `exchCode: US`, so they name a local line for a US listing and for nothing else — while the
+    caller picked it again from the unfiltered local rung and appended that pick's row and `hit`
+    probe beside this function's output. Both probes carry one key, `(security_id, scheme,
+    provider)`, the writer keeps the LAST row per key, and this function's `miss` came last. So
+    every symbol the local rung resolved was ADOPTED and recorded as a MISS: measured 2026-09-24,
+    `identifier_probe` held **0** `symbol/hit` rows beside **759** `symbol/miss` rows for
+    securities that did hold a yfinance symbol — National Healthcare Properties among them, `NHP`
+    adopted from the local rung and its probe reading `miss`. One ladder, one decision per scheme.
     """
 
     probes: list[SymbolEvidence] = []
@@ -280,7 +292,9 @@ def plan_symbols(
                 )
             )
 
-    local = pick_local_symbol(country_iso2, mapping_entry.hits if mapping_entry else (), venues)
+    local = pick_local_symbol(
+        country_iso2, (*local_hits, *(mapping_entry.hits if mapping_entry else ())), venues
+    )
     home = pick_home_listing(country_iso2, yahoo_hits, venues)
     value = (local or {}).get("symbol") or home
     if value and not asked_symbol:
@@ -500,8 +514,13 @@ def adoptable_symbols(
 
 
 STALE_MISSES = """
-select distinct security_id::text from market.identifier_probe
- where outcome = 'miss' and observed_at < now() - make_interval(days => %s)
+select distinct p.security_id::text from market.identifier_probe p
+ where p.outcome = 'miss' and p.observed_at < now() - make_interval(days => %s)
+   and (   (p.scheme = %s and not exists (select 1 from market.security_identifier t
+                                          where t.security_id = p.security_id and t.kind_code = %s))
+        or (p.scheme = 'symbol' and not exists (select 1 from market.security_provider_symbol s
+                                          where s.security_id = p.security_id
+                                            and s.provider_code = %s)))
 """
 
 
@@ -511,7 +530,15 @@ def stale_misses(conn: Any, *, older_than_days: int) -> set[str]:
     NOT NEVER, AND NOT SOON. A security can gain a US listing, and a pair Yahoo does not index
     today may be indexed next quarter — but re-asking a known absence on every run is how a
     rate-limited provider gets spent on answers already written down.
+
+    ONLY WHILE THE EVIDENCE IS STILL MISSING, or the re-ask never ends. A rung asks only about a
+    subject that still needs what it supplies (`subjects_needing`), so a subject whose miss is old
+    but whose symbol has since arrived — from any source: another rung, a repair, the old
+    handlers — is re-requested, SKIPPED by the rung, earns no new observation, and is therefore
+    still a stale miss on the next tick. Every day, for ever: a backlog defined as "wants X and
+    does not have X" with no way to leave, the shape this schema has rediscovered four times. The
+    anti-join is per scheme because a subject can be missing its ticker and hold its symbol.
     """
     with conn.cursor() as cur:
-        cur.execute(STALE_MISSES, (older_than_days,))
+        cur.execute(STALE_MISSES, (older_than_days, TICKER_KIND, TICKER_KIND, SYMBOL_PROVIDER))
         return {row[0] for row in cur.fetchall()}

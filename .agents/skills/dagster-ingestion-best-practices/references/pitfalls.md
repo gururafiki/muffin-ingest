@@ -244,6 +244,16 @@ per partition and emit once at the end; Dagster replicates the one dict onto eve
 materialization, so per-partition metadata is not expressible this way at all. Verified live: 67 of
 67 runs failed on 09-22, 100 of 100 succeeded on 09-23.
 
+## Do not let two code paths write rows for one key
+
+`dedupe_by` keeps the LAST row per conflict key, so when two writers emit a row for the same key,
+the ORDER of the appends decides which one lands — and nothing reports that a decision was made.
+`security_symbology` appended the local rung's `symbol/hit` and then `plan_symbols`' own
+`symbol/miss` for the same `(security_id, scheme, provider)`; `plan_symbols` could not see the local
+rung, so the miss came last and won. After the first full drain: 0 symbol hits, 759 misses on
+securities that had just been given a symbol. Put the decision in ONE function that sees every
+source, and test it with a fixture where the sources DISAGREE — while they agree, both orders pass.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
