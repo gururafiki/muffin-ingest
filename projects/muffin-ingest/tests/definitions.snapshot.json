@@ -987,7 +987,7 @@
       "type": "AUTO_MATERIALIZE"
     },
     "new_currencies_need_history": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "__anonymous_asset_job_new_currencies_need_history"
       ],
@@ -1011,7 +1011,7 @@
       "type": "STANDARD"
     },
     "new_securities_need_history": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "__anonymous_asset_job_new_securities_need_history"
       ],
