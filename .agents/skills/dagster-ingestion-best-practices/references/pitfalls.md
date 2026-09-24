@@ -221,6 +221,29 @@ openbb routes are `(symbol, start_date, end_date, provider, **kwargs)`: a misspe
 silently uses the default. mypy cannot see it (and crashes on openbb's generated package); what catches
 it is behavioural — the window filter's count moves.
 
+## Do not enumerate a growing table with an aggregate
+
+`security_return` listed "securities with bars" as a `group by` over `market.price_bar` — O(rows), and
+the per-security history lane adds rows every night. It answered inside `ingest_rw`'s 120 s
+`statement_timeout` through 2026-09-20 and was cancelled at 126 s two nights running before a single
+return was computed. **The semi-join is not the fix**: `where exists (...)` is flattened by the
+planner into a Parallel Hash Semi Join over every partition, measured at a 110 s bound. A
+`LATERAL (... LIMIT 1)` cannot be flattened, so it stays one index probe per entity — and bounding it
+by the window the caller READS prunes the partitions it never reads: 11,760 securities in 26 s, flat
+in history depth. The window must be the read's own value, passed once to both queries, because then
+leaving out an entity with no bar in it changes the pages and nothing else — proven on production
+over a sixteenth of the universe, 733 securities in the same positions, 0 differing.
+
+## Do not call `add_output_metadata` from code that runs once per partition
+
+It may be called ONCE per output. An I/O manager's per-partition writer that calls it works for a
+single partition and raises `DagsterInvalidMetadata: Tried to add metadata for key(s) that already
+have metadata` on the SECOND partition of a range — which is how all 66 bounded runs of
+`nightly_prices` failed from 2026-09-19 to 09-22 while every single-partition test passed. Tally
+per partition and emit once at the end; Dagster replicates the one dict onto every partition's
+materialization, so per-partition metadata is not expressible this way at all. Verified live: 67 of
+67 runs failed on 09-22, 100 of 100 succeeded on 09-23.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies

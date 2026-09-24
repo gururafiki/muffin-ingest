@@ -111,6 +111,7 @@ muffin-ingest/                       dg workspace
 | "The schema is awkward but it works" | Rule 2 — fix the model now, expand/contract |
 | "One call fetches the universe, so partition by day" | Count URLs, not calls — openbb's yfinance asks once per ticker |
 | "Re-materialise the partition to pick up the new day" | Extend from the stored rows; a full re-fetch is the bug |
+| "The condition test passes, so it fires in production" | In-process is not the daemon — `is_serializable`, or a code-location sensor |
 
 ## References
 

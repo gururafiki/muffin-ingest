@@ -11,7 +11,7 @@ project environment.
 |---|---|---|
 | A table or raw dataset | `@dg.asset`, one per table; `@dg.multi_asset` only when one computation writes tables together | ops and jobs as the unit |
 | Run on a clock | `ScheduleDefinition`, `build_schedule_from_partitioned_job` | pg_cron, cron offsets |
-| Run after upstream changes | `AutomationCondition.eager()` **and** the automation sensor declared RUNNING in code — Dagster ships it stopped. Eager also needs **no upstream partition missing**, so it never fires for an unpartitioned asset over a partition set that is never complete (`security_return`; open: `docs/deferred/2026-09-17-security-return-never-auto-materialises.md`). Why it did not fire: `dagster.asset_daemon_asset_evaluations` | chained schedules |
+| Run after upstream changes | `AutomationCondition.eager()` **and** the automation sensor declared RUNNING in code — Dagster ships it stopped. Eager also needs **no upstream partition missing**, so it never fires for an unpartitioned asset over a partition set that is never complete (`security_return`, closed 2026-09-19 by `.without(~any_deps_missing())`; and an upstream left unautomated on purpose needs `.replace("any_deps_missing", ….ignore(…))` — below). Why it did not fire: `dagster.asset_daemon_asset_evaluations` | chained schedules |
 | New subjects appear | a sensor issuing `AddDynamicPartitionsRequest` | backlog views |
 | What was asked / what is missing | partition status; backfill over missing partitions | `pending_*` views, `%_missing_at` columns |
 | One caller per provider | `pool="<provider>"` at limit 1 | mutex tables |
@@ -149,15 +149,46 @@ tick ran, and 2 of 2 added between ticks. A lane whose sensor seeds the grid bef
 live therefore does nothing at all, silently. `missing()` requests both. Use `on_missing()` only
 where the grid is known to predate nothing.
 
-**A custom `AutomationCondition` is viable and was driven before being relied on.** Subclass it,
-implement `evaluate`, and return `AutomationResult(context, true_subset=…)`;
+**A custom `AutomationCondition` is viable ONLY with a sensor evaluated in the code location — and
+"driven before being relied on" in-process proved nothing.** Dagster ships a condition to the
+AssetDaemon only if EVERY node is whitelisted for serialisation (`is_serializable` is
+`all(children)`); otherwise the location sends a display snapshot with `automation_condition = None`
+(`external_data.resolve_automation_condition_args`), and a daemon-evaluated sensor — the default
+one — silently leaves the asset out, built-in branches included. Measured 2026-09-24: the symbology
+rungs' `missing() | (cron & ReAskAfter())` requested nothing for 6,984 seeded partitions over 1,807
+ticks, while the UI displayed the condition and every test passed, because
+`evaluate_automation_conditions` evaluates in-process where the Python object exists. They had been
+unable to fire since they shipped. So:
+
+- target such assets with `AutomationConditionSensorDefinition(..., use_user_code_server=True,
+  default_status=RUNNING)` — Beta, ≤500 targets, and it DEFAULTS TO STOPPED;
+- two automation sensors may not target one asset (Dagster refuses the definitions), so the general
+  sensor becomes `AssetSelection.all() - <those assets>`;
+- guard it with Dagster's own predicate: every asset whose condition is not `is_serializable` is
+  targeted by a running `SensorType.AUTOMATION` sensor (`tests/test_automation_is_evaluable.py`).
+
+The class itself: subclass, implement `evaluate`, return `AutomationResult(context, true_subset=…)`;
 `context.candidate_subset` is an `EntitySubset` with `compute_intersection_with_partition_keys`. Its
 identity is its CLASS NAME (`get_node_unique_id` hashes `self.name`), so renaming it is a state
-change like any other rename. It gets no resources, so it opens its own connection — gate it behind
-`cron_tick_passed(...) &` and return early on an empty candidate subset, or it queries once per
-daemon tick. Reach for it only when a sensor cannot express the same thing: a sensor can request a
-partition or a contiguous RANGE, so a scattered subject set becomes one run per subject, which turns
-a ten-per-request bulk API into one per request.
+change. It gets no resources, so it opens its own connection — gate it behind
+`cron_tick_passed(...) &` and return early on an empty candidate subset, or it queries every tick.
+Reach for it only when a sensor cannot express the same thing: a sensor can request a partition or a
+contiguous RANGE, so a scattered subject set becomes one run per subject.
+
+**`eager()` waits for EVERY upstream partition, so an upstream deliberately left unautomated means
+the downstream never fires.** `security_symbology` depended on three rungs and one of them —
+`raw_yahoo_symbol`, which spends the price sweep's budget — carries no condition on purpose. Driven
+on 1.13.22 with the other two landed: requested for 0 of 1. Keep the gate for the rungs that DO land
+and drop it only for the one that may never:
+`eager().replace("any_deps_missing", AutomationCondition.any_deps_missing().ignore(AssetSelection.assets(x)))`
+— and give that input `AssetIn(metadata={"allow_missing_partitions": True})`, `UPathIOManager`'s
+built-in, or the run the condition now permits dies loading a file that was never written. The
+condition permitting a run is not the run surviving it; test both.
+
+**A first evaluation counts as "handled".** `eager()` triggers on
+`(newly_missing | any_deps_updated).since_last_handled()`, so evaluating once against a fresh cursor
+reports zero whatever the rule says. A test of a trigger needs a prior tick, then the event, then
+the evaluation with the first tick's cursor.
 
 ## Pools and rates
 
