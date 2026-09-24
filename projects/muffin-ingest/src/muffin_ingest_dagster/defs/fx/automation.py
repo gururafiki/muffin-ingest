@@ -9,11 +9,11 @@ from muffin_ingest_dagster.defs.fx.raw import raw_fx_history, raw_fx_spot
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
-#: RUNNING IN CODE, NOT ONLY IN THE DATABASE. Until 2026-09-24 this sensor ran because someone had
-#: switched it on in the UI: `all_instigator_state()` reported `stored=RUNNING` while the code said
-#: nothing, so a state reset or a rebuilt Dagster database would have turned this lane off silently —
-#: the same way every sensor in the location once shipped stopped and the lanes behind them sat idle.
-#: Declaring it here changes nothing today and makes the intent survive the database.
+#: RUNNING IN CODE, NOT ONLY IN THE DATABASE. Until 2026-09-24 this sensor ran because someone
+#: had switched it on in the UI: `all_instigator_state()` reported `stored=RUNNING` while the code
+#: said nothing, so a state reset or a rebuilt Dagster database would have turned this lane off
+#: silently — the way every sensor in the location once shipped stopped and the lanes behind them
+#: sat idle. Declaring it here changes nothing today and makes the intent survive the database.
 @dg.sensor(
     target=raw_fx_history,
     minimum_interval_seconds=3600,
