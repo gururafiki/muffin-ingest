@@ -297,6 +297,108 @@ def test_a_rung_that_asked_and_got_nothing_still_records_the_miss(tmp_path: Path
     assert ("ticker", "miss") in seen["asked"] and ("ticker", "miss") in seen["skipped"], seen
 
 
+def test_the_ladder_closes_without_the_rung_that_is_not_automated(tmp_path: Path) -> None:
+    """WHAT LEAVING A RUNG UNAUTOMATED DOES TO THE STEP THAT ADOPTS ITS ANSWERS. `eager()` will not
+    fire while ANY upstream partition is missing, and `raw_yahoo_symbol` has no condition — so if
+    `security_symbology` waited on it, the two mapping rungs would collect answers into Parquet for
+    ever and nothing would ever reach the identity tables. Every run stays green while the lane
+    delivers nothing, which is precisely the shape that kept `security_return` from ever
+    materialising and went unseen for a whole history load.
+
+    Driven rather than reasoned about: the two mapping rungs land, the Yahoo one never does, and
+    the daemon is asked what it would request.
+    """
+    defs = dg.Definitions(
+        assets=[
+            symbology_raw.raw_figi_ticker,
+            symbology_raw.raw_figi_local_symbol,
+            symbology_raw.raw_yahoo_symbol,
+            symbology_core.security_symbology,
+        ],
+        resources={
+            "postgres": FakePostgres(),
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "postgres_io": ParquetIOManager(str(tmp_path)),
+        },
+    )
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
+        # A FIRST TICK BEFORE ANYTHING LANDS, because `eager()` triggers on
+        # `(newly_missing | any_deps_updated).since_last_handled()` and the initial evaluation
+        # COUNTS AS HANDLED. Evaluating once against a fresh cursor therefore reports zero for
+        # every asset whatever the rule says — the same shape already measured for `on_missing()`,
+        # which requested 0 of 2 partitions that were in the grid at its first tick.
+        first = dg.evaluate_automation_conditions(defs=defs, instance=instance)
+        for rung in (symbology_raw.raw_figi_ticker, symbology_raw.raw_figi_local_symbol):
+            _materialise_range(tmp_path, instance, [SID], asset=rung)
+        requested = {
+            str(r.key.to_user_string()): r.true_subset.size
+            for r in dg.evaluate_automation_conditions(
+                defs=defs, instance=instance, cursor=first.cursor
+            ).results
+        }
+    assert requested.get("security_symbology") == 1, (
+        "the adopting step waits for a rung nothing will ever materialise, so the ladder's "
+        f"answers never reach the identity tables: {requested}"
+    )
+
+
+def test_the_adopting_step_runs_when_the_yahoo_rung_never_did(tmp_path: Path) -> None:
+    """THE CONDITION PERMITTING A RUN IS HALF OF IT; THE RUN SURVIVING IS THE OTHER. With the Yahoo
+    rung unautomated its partition file does not exist, and an input that cannot tolerate that
+    dies loading it — measured 2026-09-22, six runs failed with
+    `FileNotFoundError: .../raw_figi_local_symbol/<uuid>.parquet` for exactly this reason, and the
+    test above cannot see it because asking the daemon what it WOULD request executes nothing.
+
+    Driven the way production reaches it: the two mapping rungs materialise, the Yahoo one is
+    in the graph but NOT selected, so its input is loaded from disk and finds no file. Yahoo is
+    wired to refuse, so a run that asked it anyway fails for that reason instead.
+    """
+
+    def refuse(isin: str, **kw: Any) -> Document:
+        raise AssertionError(f"the unautomated Yahoo rung was asked about {isin}")
+
+    FakeCursor.writes.clear()
+    saved_map, saved_search = openfigi.mapping, yahoo_search.search
+    openfigi.mapping = lambda jobs, **kw: _doc(MAPPING_BODY)
+    yahoo_search.search = refuse
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
+            result = dg.materialize(
+                [
+                    symbology_raw.raw_figi_ticker,
+                    symbology_raw.raw_figi_local_symbol,
+                    symbology_raw.raw_yahoo_symbol,
+                    symbology_core.security_symbology,
+                ],
+                selection=[
+                    symbology_raw.raw_figi_ticker,
+                    symbology_raw.raw_figi_local_symbol,
+                    symbology_core.security_symbology,
+                ],
+                partition_key=SID,
+                instance=instance,
+                resources={
+                    "postgres": FakePostgres(),
+                    "parquet_io": ParquetIOManager(str(tmp_path)),
+                },
+            )
+    finally:
+        openfigi.mapping = saved_map
+        yahoo_search.search = saved_search
+
+    assert result.success
+    assert not (tmp_path / "raw_yahoo_symbol" / f"{SID}.parquet").exists(), (
+        "the fixture is meant to reach the adopting step with NO Yahoo file on disk"
+    )
+    # AND IT ADOPTED WHAT THE MAPPING RUNGS FOUND — a run that succeeded by writing nothing would
+    # pass the two assertions above and deliver exactly the silent outage this guards against.
+    assert any(
+        "market.security_identifier" in w and "AAPL" in params for w, params in FakeCursor.writes
+    ), FakeCursor.writes
+
+
 def test_the_yahoo_rung_deliberately_carries_no_automation_condition() -> None:
     """ITS ABSENCE IS A DECISION, AND AN ABSENCE CANNOT BE READ FROM THE CODE AS ONE — adding the
     condition back is a one-line change that would look like completing an oversight.

@@ -199,7 +199,16 @@ def rows_per_partition(context: AssetExecutionContext, loaded: Any) -> dict[str,
 
     Keyed by partition so the caller applies each partition's own window to its own file, after
     which a stray cannot be published at all.
+
+    `None` IS A PARTITION THE MANAGER WAS TOLD MAY BE ABSENT, and it can arrive no other way.
+    `UPathIOManager` raises `FileNotFoundError` for a missing single partition UNLESS that input
+    declares `allow_missing_partitions`, in which case it returns `None`; over several partitions
+    it simply leaves the key out of the mapping, which this function already handles. So treating
+    `None` as "no rows" here cannot swallow a genuinely lost file — an input that did not ask for
+    the tolerance still fails loudly, one frame down.
     """
+    if loaded is None:
+        return {}
     if isinstance(loaded, Mapping):
         return {str(key): list(rows) for key, rows in sorted(loaded.items())}
     keys = list(context.partition_keys)
