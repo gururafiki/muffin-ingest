@@ -172,11 +172,21 @@ def security_symbology(
                     update=None,
                 )
                 written["identifiers"], collapsed = result.written, collapsed + result.collapsed
-            if symbol_rows:
+            # ONE LISTING, ONE SECURITY — the second unique key this upsert does not name. Decided
+            # before the write, because a violation fails the whole batch (see `adoptable_symbols`).
+            adoption = sym.adoptable_symbols(symbol_rows, sym.symbol_holders(conn, symbol_rows))
+            for sid, symbol, holder in adoption.held_elsewhere[:20]:
+                context.log.warning(
+                    f"symbol {symbol} resolved for {sid} is already held by {holder}; "
+                    "kept the holder"
+                )
+            for symbol, sids in list(adoption.ambiguous.items())[:20]:
+                context.log.warning(f"symbol {symbol} claimed by {len(sids)} securities: {sids}")
+            if adoption.kept:
                 result = upsert(
                     cur,
                     "market.security_provider_symbol",
-                    symbol_rows,
+                    adoption.kept,
                     conflict=["security_id", "provider_code"],
                 )
                 written["symbols"], collapsed = result.written, collapsed + result.collapsed
@@ -209,6 +219,10 @@ def security_symbology(
             "symbols": written.get("symbols", 0),
             "probes": written.get("probes", 0),
             "collapsed": collapsed,
+            # A REFUSAL IS COUNTED, NOT HIDDEN. Non-zero is a statement about the UNIVERSE: two
+            # securities resolving to one listing is a duplicate for identity consolidation to find.
+            "symbols_held_elsewhere": len(adoption.held_elsewhere),
+            "symbols_ambiguous": len(adoption.ambiguous),
         }
     )
 

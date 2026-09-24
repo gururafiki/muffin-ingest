@@ -427,6 +427,78 @@ def attributes_for(conn: Any, security_ids: Sequence[str]) -> dict[str, dict[str
         }
 
 
+# --- one listing, one security -------------------------------------------------------------------
+#
+# `market.security_provider_symbol` carries TWO unique keys: the primary key `(security_id,
+# provider_code)` — one symbol per security — and `(provider_code, symbol)` — one security per
+# listing. The adopting step upserts on the first, and an `on conflict` covers only the key it
+# names, so a symbol already held by ANOTHER security raised `UniqueViolation` and took the whole
+# batch of up to 200 subjects with it. Measured 2026-09-24 on the first day the ladder ran:
+# `(yfinance, WLN.PA) already exists` — Worldline holds two securities, ISINs FR0011981968 and
+# FR00140182K6, and OpenFIGI correctly names the same Paris line for both.
+#
+# That is an IDENTITY fact — one of the two is a stale or duplicate security — and deciding which is
+# identity consolidation, not symbol resolution. So this step decides nothing: the existing holder
+# keeps the listing, a batch claiming one listing twice adopts neither (an ambiguous match is
+# refused, never broken with `min()`), and both are REPORTED. The probe is still written: the
+# provider did say this, and that observation is true whoever ends up holding the symbol.
+
+SYMBOL_HOLDERS = """
+select provider_code, symbol, security_id::text
+  from market.security_provider_symbol
+ where provider_code = any(%s) and symbol = any(%s)
+"""
+
+
+def symbol_holders(conn: Any, rows: Sequence[dict[str, Any]]) -> dict[tuple[str, str], str]:
+    """(provider_code, symbol) → the security already holding it, for the symbols in `rows`."""
+    if not rows:
+        return {}
+    providers = sorted({str(r["provider_code"]) for r in rows})
+    symbols = sorted({str(r["symbol"]) for r in rows})
+    with conn.cursor() as cur:
+        cur.execute(SYMBOL_HOLDERS, (providers, symbols))
+        return {(provider, symbol): sid for provider, symbol, sid in cur.fetchall()}
+
+
+@dataclass(frozen=True)
+class SymbolAdoption:
+    """Which symbol rows may be written, and why the others may not."""
+
+    kept: list[dict[str, Any]]
+    #: (security_id, symbol, the security already holding it)
+    held_elsewhere: list[tuple[str, str, str]]
+    #: symbol → the securities in this batch that all claimed it
+    ambiguous: dict[str, list[str]]
+
+
+def adoptable_symbols(
+    rows: Sequence[dict[str, Any]], holders: dict[tuple[str, str], str]
+) -> SymbolAdoption:
+    """Withhold every symbol row that would give one listing to two securities."""
+    claimants: dict[tuple[str, str], set[str]] = {}
+    for row in rows:
+        claimants.setdefault((row["provider_code"], row["symbol"]), set()).add(row["security_id"])
+    ambiguous = {key: sorted(sids) for key, sids in claimants.items() if len(sids) > 1}
+
+    kept: list[dict[str, Any]] = []
+    held: set[tuple[str, str, str]] = set()
+    for row in rows:
+        key = (row["provider_code"], row["symbol"])
+        if key in ambiguous:
+            continue
+        holder = holders.get(key)
+        if holder is not None and holder != row["security_id"]:
+            held.add((row["security_id"], row["symbol"], holder))
+            continue
+        kept.append(row)
+    return SymbolAdoption(
+        kept=kept,
+        held_elsewhere=sorted(held),
+        ambiguous={symbol: sids for (_, symbol), sids in sorted(ambiguous.items())},
+    )
+
+
 STALE_MISSES = """
 select distinct security_id::text from market.identifier_probe
  where outcome = 'miss' and observed_at < now() - make_interval(days => %s)
