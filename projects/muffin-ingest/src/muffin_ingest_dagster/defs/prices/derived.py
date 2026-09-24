@@ -80,8 +80,13 @@ def security_return(
     stats = {"securities": 0, "with_returns": 0, "periods": 0, "with_total_return": 0}
 
     with postgres.connect() as conn:
-        for batch in prices.securities_with_bars(conn, page=config.page, limit=config.limit):
-            series = prices.bars_for(conn, [s for s in batch], since=today - LOOKBACK)
+        # ONE WINDOW, NAMED ONCE. The enumeration is exact only because it asks about the same
+        # days `bars_for` reads, so the two must not be able to disagree.
+        since = today - LOOKBACK
+        for batch in prices.securities_with_bars(
+            conn, since=since, page=config.page, limit=config.limit
+        ):
+            series = prices.bars_for(conn, [s for s in batch], since=since)
             for security_id, bars in series.items():
                 stats["securities"] += 1
                 priced = returns.price_returns(bars, today)

@@ -16,6 +16,7 @@ from typing import Any, ClassVar
 
 import dagster as dg
 import pytest
+from muffin_ingest.facets import prices
 from muffin_ingest.providers import openbb
 from muffin_ingest.providers.openbb import Answer, ProviderRefused
 
@@ -441,7 +442,16 @@ def test_the_two_lanes_have_opposite_backfill_policies_and_that_is_deliberate() 
 
 class ReturnsConn:
     """A conn that answers the two queries `security_return` makes, with a series that ENDS IN THE
-    PAST — which is the whole point of the test below."""
+    PAST — which is the whole point of the test below.
+
+    IT RECOGNISES THE ENUMERATION BY THE CONSTANT, NOT BY A CLAUSE OF IT. This fake used to match
+    `"group by pb.security_id"` — the one clause the 2026-09-24 fix exists to remove, so the fix
+    would have silently routed the enumeration to the bars branch and handed back 501 copies of
+    one id. It also records the window each query was given, which is what the window test reads.
+    """
+
+    #: query → the `since` it was asked with, across every connection in a run.
+    windows: ClassVar[dict[str, date]] = {}
 
     def __init__(self, last_bar: date, days: int = 500) -> None:
         self.last_bar = last_bar
@@ -459,10 +469,15 @@ class ReturnsConn:
 
     def execute(self, sql: str, params: Any = ()) -> None:
         self._sql = sql
+        values = list(params)
+        if sql.startswith(prices.SECURITIES_WITH_BARS):
+            ReturnsConn.windows["enumerate"] = values[0]
+        elif "from market.price_bar pb" in sql:
+            ReturnsConn.windows["read"] = values[1]
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         sid = "11111111-1111-1111-1111-111111111111"
-        if "group by pb.security_id" in self._sql:
+        if self._sql.startswith(prices.SECURITIES_WITH_BARS):
             return [(sid,)]
         # A series that MOVES every day, so no window is refused for being flat.
         return [
@@ -507,6 +522,29 @@ def test_a_return_is_stamped_with_the_last_bar_it_used_not_with_the_run_s_own_da
         f"stamped {stamped} — a run on a series whose newest bar is yesterday must say yesterday, "
         f"not {date.today().isoformat()}"
     )
+
+
+def test_the_enumeration_asks_about_exactly_the_days_the_run_reads() -> None:
+    """THE ENUMERATION IS EXACT ONLY BECAUSE ITS WINDOW IS THE READ'S WINDOW. It asks which
+    securities have a bar on or after `since`; `bars_for` reads nothing older than its own
+    `since`; so leaving out a security whose bars all predate the window changes the pages and
+    nothing else — proven on production over a sixteenth of the universe, 733 securities in the
+    same positions, 0 differing.
+
+    Let the two drift and that stops being true in whichever direction they move: a narrower
+    enumeration silently drops securities that still have readable bars, a wider one pays for
+    probes that can never produce a row. So the run is asserted to ask both queries the SAME day,
+    and that day to be the lookback the module names.
+    """
+    ReturnsConn.windows.clear()
+    assert dg.materialize(
+        [prices_derived.security_return],
+        selection=[prices_derived.security_return],
+        resources={"postgres": ReturnsPostgres(), "postgres_io": _Capture()},
+    ).success
+
+    expected = date.today() - prices_derived.LOOKBACK
+    assert ReturnsConn.windows == {"enumerate": expected, "read": expected}, ReturnsConn.windows
 
 
 class _Capture(dg.ConfigurableIOManager):

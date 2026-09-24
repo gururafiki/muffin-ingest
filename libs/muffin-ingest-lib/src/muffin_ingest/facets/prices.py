@@ -350,26 +350,63 @@ def normalise(
     return out
 
 
+#: WHICH SECURITIES HAVE A BAR THE CALLER WILL READ — one index probe per security, never a pass
+#: over the bars. A `group by` over `market.price_bar` is O(ROWS), and this table's rows grow with
+#: every night of the per-security history lane: it answered inside the role's 120 s
+#: `statement_timeout` through 2026-09-20 and died at 126 s on 09-23 and again on 09-24, both runs
+#: of `security_return` cancelled on this one statement before a single return was computed.
+#:
+#: THE SEMI-JOIN IS NOT THE FIX, and that was measured rather than assumed: written as `where exists
+#: (...)` the planner turns it straight back into a Parallel Hash Semi Join that reads every
+#: partition, and it hit a 110 s bound over 57.5M rows. `LATERAL ... LIMIT 1` cannot be flattened
+#: that way, so it stays one parameterised probe per security into the `(security_id, trade_date)`
+#: primary key. And the `trade_date` bound PRUNES — six of 61 yearly partitions — so the cost is
+#: index descents per security, flat however deep history gets. 11,760 securities in 26 s.
+#:
+#: The weights are aggregated ONCE and joined, not looked up per security: a lateral over
+#: `fund_holding_current` would evaluate that view 27,000 times.
+SECURITIES_WITH_BARS = """
+with weight as materialized (
+  select security_id, max(coalesce(weight, 0)) as w
+    from market.fund_holding_current
+   group by security_id
+)
+select s.security_id::text
+  from market.security s
+ cross join lateral (
+   select 1 from market.price_bar pb
+    where pb.security_id = s.security_id and pb.trade_date >= %s
+    limit 1
+ ) has_bar
+  left join weight on weight.security_id = s.security_id
+ order by coalesce(weight.w, 0) desc, s.security_id
+"""
+
+
 def securities_with_bars(
-    conn: Any, *, page: int = 500, limit: int | None = None
+    conn: Any, *, since: date, page: int = 500, limit: int | None = None
 ) -> Iterator[list[str]]:
-    """Securities that have bars, heaviest holdings first, in pages.
+    """Securities with a bar on or after `since`, heaviest holdings first, in pages.
 
     PAGED BECAUSE THE BARS ARE, NOT THE SECURITIES. One page's worth of daily history over the
     longest lookback is the thing held in memory — 500 securities is ~650k rows — so the page is a
     memory budget wearing a row count's clothes.
+
+    `since` MUST BE THE WINDOW THE CALLER READS, AND THAT IS WHAT MAKES THIS EXACT RATHER THAN AN
+    APPROXIMATION. `bars_for` returns nothing older than it, so a security whose bars all predate
+    it contributes no series and writes no row whichever way it is enumerated — leaving it out
+    changes the pages and nothing else. Proven on production 2026-09-24 over a sixteenth of the
+    universe: the old enumeration restricted to that window and this one gave the same 733
+    securities in the same positions, 0 differing. It is REQUIRED, not defaulted, because a
+    default here is a second copy of the lookback free to drift from the one the caller reads.
     """
-    sql = """
-    select pb.security_id::text
-      from market.price_bar pb
-      left join market.fund_holding_current h on h.security_id = pb.security_id
-     group by pb.security_id
-     order by max(coalesce(h.weight, 0)) desc, pb.security_id
-    """
+    sql = SECURITIES_WITH_BARS
+    params: list[Any] = [since]
     if limit is not None:
         sql += " limit %s"
+        params.append(limit)
     with conn.cursor() as cur:
-        cur.execute(sql, [limit] if limit is not None else [])
+        cur.execute(sql, params)
         ids = [r[0] for r in cur.fetchall()]
     for i in range(0, len(ids), page):
         yield ids[i : i + page]
