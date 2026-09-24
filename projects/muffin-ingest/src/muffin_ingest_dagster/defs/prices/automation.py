@@ -20,9 +20,15 @@ from muffin_ingest_dagster.defs.prices.raw import raw_price_bars, raw_price_hist
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
+#: RUNNING IN CODE, NOT ONLY IN THE DATABASE. Until 2026-09-24 this sensor ran because someone
+#: had switched it on in the UI: `all_instigator_state()` reported `stored=RUNNING` while the code
+#: said nothing, so a state reset or a rebuilt Dagster database would have turned this lane off
+#: silently — the way every sensor in the location once shipped stopped and the lanes behind them
+#: sat idle. Declaring it here changes nothing today and makes the intent survive the database.
 @dg.sensor(
     target=raw_price_history,
     minimum_interval_seconds=3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
     description="A security with no history partition yet becomes one to fill.",
 )
 def new_securities_need_history(
