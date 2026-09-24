@@ -262,6 +262,87 @@ def test_the_ticker_rung_carries_its_own_question_and_needs_no_flag() -> None:
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
 
 
+def test_a_local_line_named_by_the_unfiltered_rung_is_a_hit_not_a_miss() -> None:
+    """THE LIVE DEFECT, 2026-09-24: every symbol the local rung resolved was adopted AND recorded
+    as a miss. `identifier_probe` held 0 `symbol/hit` rows beside 759 `symbol/miss` rows for
+    securities that did hold a yfinance symbol — National Healthcare Properties among them, `NHP`
+    adopted from the local rung while its probe read `miss`.
+
+    THE FIXTURE MAKES THE TWO SOURCES DISAGREE, which is the only shape that shows it. The ticker
+    rung — restricted to `exchCode: US` — asked and got nothing, while the unfiltered local rung
+    names the line. A ladder that picks the local line from the ticker rung's hits alone sees no
+    value and, having asked, records a miss; one that reads the local rung's own matches records
+    the hit it is. Whenever both rungs name the same line (every other test here) the two rules
+    agree and nothing can tell them apart.
+    """
+    sec = "11111111-1111-1111-1111-111111111111"
+    entries = _mapping()
+    _, symbols, probes = symbology.plan_symbols(
+        sec,
+        isin="US0378331005",
+        country_iso2="US",
+        # The ticker rung asked and OpenFIGI answered with nothing for it.
+        mapping_entry=symbology.MappingEntry(asked="US0378331005"),
+        yahoo_hits=[],
+        venues=VENUES,
+        source="openfigi",
+        asked_symbol=True,
+        # The local rung names AAPL on the US board — the captured answer.
+        local_hits=entries[0].hits,
+    )
+    assert [(p["scheme"], p["outcome"], p["value"]) for p in probes] == [
+        ("ticker", "miss", None),
+        ("symbol", "hit", "AAPL"),
+    ], probes
+    assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
+
+
+def test_a_stale_miss_is_re_asked_only_while_its_evidence_is_still_missing() -> None:
+    """A RUNG SKIPS A SUBJECT WHOSE EVIDENCE IS HELD, SO RE-ASKING ONE WOULD NEVER END.
+
+    Re-requested, the rung skips it, the ladder records nothing because nothing asked, and the miss
+    is exactly as stale on the next tick — a daily loop over every subject whose symbol arrived
+    from somewhere other than the probe that missed. The anti-join is per scheme, because a
+    subject can lack its ticker and hold its symbol.
+
+    STRUCTURAL, because no fixture here has a database to be wrong against; the query was run on
+    production before shipping (see the PR). The parameters are asserted too: the kinds are named
+    once, in this module, and a literal copy in the SQL would be free to drift from them.
+    """
+    sql = " ".join(symbology.STALE_MISSES.split())
+    assert (
+        "p.scheme = %s and not exists (select 1 from market.security_identifier t "
+        "where t.security_id = p.security_id and t.kind_code = %s)"
+    ) in sql, sql
+    assert (
+        "p.scheme = 'symbol' and not exists (select 1 from market.security_provider_symbol s "
+        "where s.security_id = p.security_id and s.provider_code = %s)"
+    ) in sql, sql
+
+    class Recording:
+        params: ClassVar[list[tuple[object, ...]]] = []
+
+        def cursor(self) -> Recording:
+            return self
+
+        def __enter__(self) -> Recording:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str, params: tuple[object, ...]) -> None:
+            Recording.params.append(params)
+
+        def fetchall(self) -> list[tuple[str]]:
+            return []
+
+    symbology.stale_misses(Recording(), older_than_days=30)
+    assert Recording.params == [
+        (30, symbology.TICKER_KIND, symbology.TICKER_KIND, symbology.SYMBOL_PROVIDER)
+    ]
+
+
 def test_one_listing_is_never_given_to_two_securities() -> None:
     """`(provider_code, symbol)` IS UNIQUE, AND THE UPSERT'S `on conflict` DOES NOT NAME IT — so a
     listing already held elsewhere raised `UniqueViolation` and failed a whole batch of up to 200

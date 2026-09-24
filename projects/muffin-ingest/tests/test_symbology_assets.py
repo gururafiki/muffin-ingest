@@ -154,12 +154,23 @@ def materialise(
     *,
     mapping_body: bytes = MAPPING_BODY,
     search_body: bytes = YAHOO_BODY,
+    local_body: bytes | None = None,
 ) -> dg.ExecuteInProcessResult:
     """The whole ladder for one subject. The bodies are arguments because "the providers answered
-    with nothing" is a case this family has to get right and cannot reach with the hit captures."""
+    with nothing" is a case this family has to get right and cannot reach with the hit captures.
+
+    `local_body` SEPARATES THE TWO MAPPING RUNGS when given. The ticker rung asks with
+    `exchCode: US` and the local rung without, so the jobs say which rung is asking — and a rung
+    answering differently from its sibling is the one shape where their evidence can disagree."""
     saved_map, saved_search = openfigi.mapping, yahoo_search.search
-    # The mapping rungs get the SAME body; `position` says who it answers.
-    openfigi.mapping = lambda jobs, **kw: _doc(mapping_body)
+
+    def mapping(jobs: Sequence[dict[str, Any]], **_: Any) -> Document:
+        if local_body is not None and not any("exchCode" in job for job in jobs):
+            return _doc(local_body)
+        return _doc(mapping_body)
+
+    # By default the mapping rungs get the SAME body; `position` says who it answers.
+    openfigi.mapping = mapping
     yahoo_search.search = lambda isin, **kw: _doc(search_body)
     try:
         return dg.materialize(
@@ -265,10 +276,10 @@ def test_a_skipped_rung_writes_no_observation_and_the_asset_is_what_says_so(
     assert any("market.security_provider_symbol" in w for w, _ in skipped_writes), skipped_writes
 
     # THE CONTROL IS THE NEXT TEST, NOT HERE, AND THE MUTATION IS WHY. Re-running this subject
-    # with the rungs asking DOES write a symbol hit — and it would write one with the flag pinned
-    # false too, because the local pick below `plan_symbols` records its own hit whenever the
-    # unfiltered rung names a line. That control passes through a different code path from the
-    # rule, so it proves nothing: pinning `asked_symbol=False` was MISSED by it.
+    # with the rungs asking DOES write a symbol hit — and until 2026-09-24 it wrote one with the
+    # flag pinned false too, because the local pick was merged in beside `plan_symbols` with a hit
+    # of its own. That control passed through a different code path from the rule, so pinning
+    # `asked_symbol=False` was MISSED by it. The pick is on the ladder now, and obeys the flag.
 
 
 def test_a_rung_that_asked_and_got_nothing_still_records_the_miss(tmp_path: Path) -> None:
@@ -304,6 +315,36 @@ def test_a_rung_that_asked_and_got_nothing_still_records_the_miss(tmp_path: Path
     # The ticker rung asked in both, and its own miss is recorded either way — so the difference
     # above is the symbol rule rather than the run having done nothing.
     assert ("ticker", "miss") in seen["asked"] and ("ticker", "miss") in seen["skipped"], seen
+
+
+def test_a_local_line_is_recorded_as_the_hit_it_is(tmp_path: Path) -> None:
+    """THE LIVE DEFECT AT THE CALL SITE, 2026-09-24. The local pick used to be merged in beside
+    `plan_symbols` with its own `hit` probe, while `plan_symbols` — blind to the local rung —
+    recorded a `miss` under the same key after it; the writer keeps the last row per key. So the
+    symbol was adopted and the observation said the provider had nothing: 759 such rows in
+    production, and 0 symbol hits.
+
+    The ticker rung answers with OpenFIGI's captured refusal and the local rung with the captured
+    AAPL line, so the two sources disagree — the only shape where the collision decides anything.
+    """
+    FakeCursor.writes.clear()
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
+        assert materialise(
+            tmp_path,
+            instance,
+            mapping_body=NOTHING_MAPPING,
+            search_body=NOTHING_SEARCH,
+            local_body=MAPPING_BODY,
+        ).success
+
+    assert _probes(FakeCursor.writes) == [("ticker", "miss"), ("symbol", "hit")], _probes(
+        FakeCursor.writes
+    )
+    assert any(
+        "market.security_provider_symbol" in w and "AAPL" in params
+        for w, params in FakeCursor.writes
+    ), FakeCursor.writes
 
 
 def test_the_ladder_closes_without_the_rung_that_is_not_automated(tmp_path: Path) -> None:

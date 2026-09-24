@@ -133,28 +133,12 @@ def security_symbology(
             venues=venues,
             source="openfigi",
             asked_symbol=bool(local.get(sid)) or bool(yahoo.get(sid)),
+            # THE UNFILTERED RUNG IS ON THE LADDER, not merged in beside it. Its pick used to be
+            # appended here with its own `hit` probe, and `plan_symbols` — which could not see it —
+            # appended a `miss` under the same key after it; the writer keeps the last row per key,
+            # so every local line was adopted AND recorded as a miss (759 on 2026-09-24).
+            local_hits=entry_local.hits if entry_local else (),
         )
-        # The local line may resolve from the UNFILTERED rung alone, so merge its pick in.
-        local_pick = sym.pick_local_symbol(country, entry_local.hits if entry_local else (), venues)
-        if local_pick:
-            symbol_rows.append(
-                {
-                    "security_id": sid,
-                    "provider_code": sym.SYMBOL_PROVIDER,
-                    "symbol": local_pick["symbol"],
-                }
-            )
-            probe_rows.append(
-                {
-                    "security_id": sid,
-                    "scheme": "symbol",
-                    "provider": "openfigi",
-                    "asked_with": isin,
-                    "value": local_pick["symbol"],
-                    "outcome": "hit",
-                    "observed_at": _now(),
-                }
-            )
         identifier_rows += identifiers
         symbol_rows += symbols
         probe_rows += probes
@@ -210,8 +194,10 @@ def security_symbology(
     # a reader checking the run would assume, which is how a counter stops being evidence.
     #
     # `collapsed` is the difference, and it is reported rather than hidden: a non-zero value is a
-    # statement about the SOURCE. Two here is the local pick agreeing with itself; a number that
-    # grows means this asset is building the same row twice for a reason nobody intended.
+    # statement about the SOURCE. It used to be the local pick colliding with `plan_symbols`' own
+    # row — and that collision is exactly how a resolved symbol was recorded as a miss, because the
+    # writer keeps the last row per key. With one ladder deciding each scheme once, a non-zero value
+    # now means this asset built the same row twice for a reason nobody intended.
     return dg.MaterializeResult(
         metadata={
             "securities": len(context.partition_keys),
@@ -248,9 +234,3 @@ def _entry_from_evidence(
     if position < len(entries):
         return entries[position]
     return sym.MappingEntry(asked=isin)
-
-
-def _now() -> str:
-    from datetime import UTC, datetime
-
-    return datetime.now(UTC).isoformat()
