@@ -1025,6 +1025,12 @@
       ],
       "minimum_interval_seconds": 21600,
       "type": "STANDARD"
+    },
+    "symbology_rungs": {
+      "default_status": "RUNNING",
+      "jobs": [],
+      "minimum_interval_seconds": 30,
+      "type": "AUTOMATION"
     }
   }
 }
