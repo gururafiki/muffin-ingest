@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -259,6 +260,74 @@ def test_the_ticker_rung_carries_its_own_question_and_needs_no_flag() -> None:
     )
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("symbol", "hit")]
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
+
+
+def test_one_listing_is_never_given_to_two_securities() -> None:
+    """`(provider_code, symbol)` IS UNIQUE, AND THE UPSERT'S `on conflict` DOES NOT NAME IT — so a
+    listing already held elsewhere raised `UniqueViolation` and failed a whole batch of up to 200
+    subjects. Measured 2026-09-24: Worldline holds two securities, and OpenFIGI names `WLN.PA` for
+    both ISINs.
+
+    THE FIXTURE MAKES EVERY CANDIDATE RULE DISAGREE: A wants a listing B holds (withheld), C and D
+    claim one listing in the same batch (both refused — never broken with `min()`), E wants a free
+    one (kept), and F re-resolves the listing F ALREADY holds (kept — a rule that withheld every
+    held symbol would drop it, and a rule comparing only the symbol could not tell F from A).
+    """
+
+    def row(sid: str, symbol: str) -> dict[str, str]:
+        return {"security_id": sid, "provider_code": "yfinance", "symbol": symbol}
+
+    rows = [
+        row("A", "X.PA"),
+        row("C", "Y.PA"),
+        row("D", "Y.PA"),
+        row("E", "Z.PA"),
+        row("F", "W.PA"),
+        row("F", "W.PA"),
+    ]
+    holders = {("yfinance", "X.PA"): "B", ("yfinance", "W.PA"): "F"}
+
+    adoption = symbology.adoptable_symbols(rows, holders)
+
+    assert [(r["security_id"], r["symbol"]) for r in adoption.kept] == [
+        ("E", "Z.PA"),
+        ("F", "W.PA"),
+        ("F", "W.PA"),
+    ]
+    assert adoption.held_elsewhere == [("A", "X.PA", "B")]
+    assert adoption.ambiguous == {"Y.PA": ["C", "D"]}
+
+
+def test_the_holders_are_asked_about_exactly_the_symbols_in_the_batch() -> None:
+    """Narrowed to the batch — the table holds a symbol for every priced security, and a run
+    covers 200."""
+
+    class Conn:
+        calls: ClassVar[list[tuple[str, tuple[object, ...]]]] = []
+
+        def cursor(self) -> Conn:
+            return self
+
+        def __enter__(self) -> Conn:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[object, ...]) -> None:
+            Conn.calls.append((sql, params))
+
+        def fetchall(self) -> list[tuple[str, str, str]]:
+            return [("yfinance", "X.PA", "B")]
+
+    rows = [
+        {"security_id": "A", "provider_code": "yfinance", "symbol": "X.PA"},
+        {"security_id": "E", "provider_code": "yfinance", "symbol": "Z.PA"},
+    ]
+    assert symbology.symbol_holders(Conn(), rows) == {("yfinance", "X.PA"): "B"}
+    assert Conn.calls[0][1] == (["yfinance"], ["X.PA", "Z.PA"])
+    assert symbology.symbol_holders(Conn(), []) == {}, "no rows must not reach the database"
+    assert len(Conn.calls) == 1
 
 
 # --- who the ladder asks about -------------------------------------------------------------------

@@ -73,6 +73,13 @@ class FakeCursor:
             return
         if "from market.exchange" in text:
             self.rows = [("US", "US", "")]
+        elif "from market.security_provider_symbol where provider_code = any(%s)" in text:
+            asked = set(params[1]) if params else set()
+            self.rows = [
+                ("yfinance", symbol, holder)
+                for symbol, holder in self._state.symbol_holders.items()
+                if symbol in asked
+            ]
         elif "from market.identifier_probe" in text:
             self.rows = [(sid,) for sid in self._state.stale_misses]
         elif "market.security_identifier t" in text:  # subjects_needing(NEEDS_TICKER)
@@ -99,6 +106,8 @@ class _State:
     needing_ticker: set[str] = field(default_factory=lambda: {SID})
     needing_symbol: set[str] = field(default_factory=lambda: {SID})
     stale_misses: set[str] = field(default_factory=set)
+    #: symbol → the security already holding it in `security_provider_symbol`.
+    symbol_holders: dict[str, str] = field(default_factory=dict)
 
 
 STATE = _State()
@@ -397,6 +406,71 @@ def test_the_adopting_step_runs_when_the_yahoo_rung_never_did(tmp_path: Path) ->
     assert any(
         "market.security_identifier" in w and "AAPL" in params for w, params in FakeCursor.writes
     ), FakeCursor.writes
+
+
+def test_a_listing_held_by_another_security_is_withheld_and_counted_not_crashed_on(
+    tmp_path: Path,
+) -> None:
+    """ONE LISTING, ONE SECURITY. `(provider_code, symbol)` is unique and the upsert's `on conflict`
+    names the other key, so on 2026-09-24 a symbol another security already held failed a whole
+    batch of up to 200 with `UniqueViolation` — `WLN.PA`, which OpenFIGI correctly names for both of
+    Worldline's ISINs. The fake cannot enforce the key, so this asserts the DECISION: the listing
+    stays with its holder, the refusal is counted, and the probe — a true observation — is written.
+
+    TWO SUBJECTS, BECAUSE ONE CANNOT TELL "WRITE THE ADOPTABLE ROWS" FROM "WRITE EVERY ROW". With a
+    single withheld subject nothing is left to write, the write is skipped either way, and a
+    mutation writing every row it built passed clean. Here AAPL is held elsewhere and ACN is free,
+    so the write happens and must carry exactly one of them.
+    """
+    holder = "33333333-3333-3333-3333-333333333333"
+    STATE.symbol_holders = {"AAPL": holder}
+    STATE.needing_ticker = {SID, OTHER_SID}
+    STATE.needing_symbol = {SID, OTHER_SID}
+    FakeCursor.writes.clear()
+    saved_map, saved_search = openfigi.mapping, yahoo_search.search
+    openfigi.mapping = lambda jobs, **kw: _doc(MAPPING_BODY)
+    yahoo_search.search = lambda isin, **kw: _doc(NOTHING_SEARCH)
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID, OTHER_SID])
+            result = dg.materialize(
+                [
+                    symbology_raw.raw_figi_ticker,
+                    symbology_raw.raw_figi_local_symbol,
+                    symbology_raw.raw_yahoo_symbol,
+                    symbology_core.security_symbology,
+                ],
+                instance=instance,
+                resources={
+                    "postgres": FakePostgres(),
+                    "parquet_io": ParquetIOManager(str(tmp_path)),
+                },
+                tags={
+                    "dagster/asset_partition_range_start": SID,
+                    "dagster/asset_partition_range_end": OTHER_SID,
+                },
+            )
+    finally:
+        openfigi.mapping = saved_map
+        yahoo_search.search = saved_search
+        STATE.symbol_holders = {}
+        STATE.needing_ticker = {SID}
+        STATE.needing_symbol = {SID}
+
+    assert result.success
+    written = [
+        v
+        for w, params in FakeCursor.writes
+        if w.startswith("insert into market.security_provider_symbol")
+        for v in params
+    ]
+    assert "ACN" in written, f"the free listing was not adopted: {written}"
+    assert "AAPL" not in written, f"wrote a listing another security holds: {written}"
+    assert ("symbol", "hit") in _probes(FakeCursor.writes), _probes(FakeCursor.writes)
+
+    meta = result.asset_materializations_for_node("security_symbology")[0].metadata
+    assert meta["symbols_held_elsewhere"].value == 1, meta
+    assert meta["symbols_ambiguous"].value == 0, meta
 
 
 def test_the_yahoo_rung_deliberately_carries_no_automation_condition() -> None:
