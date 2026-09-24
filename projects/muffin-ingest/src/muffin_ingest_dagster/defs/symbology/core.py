@@ -12,6 +12,7 @@ from muffin_ingest_dagster.defs.symbology.partitions import (
     SYMBOLOGY_PER_RUN,
     symbology_subjects,
 )
+from muffin_ingest_dagster.defs.symbology.raw import raw_yahoo_symbol
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -36,11 +37,34 @@ def _venues(conn: Any) -> dict[str, list[tuple[str, str]]]:
     pool="sql",
     group_name="symbology",
     kinds={"postgres"},
-    # EAGER, SO THE LADDER CLOSES ITSELF. The three rungs are requested independently (each
-    # holds a different pool), so this waits until all three of a subject's partitions have
-    # landed — which is what `eager()`'s no-upstream-partition-missing clause means here, and
-    # a skipped rung still materializes its partition, so a skip does not block it.
-    automation_condition=dg.AutomationCondition.eager(),
+    # EAGER, MINUS THE WAIT ON THE ONE RUNG NOTHING WILL EVER MATERIALISE.
+    #
+    # `eager()` will not fire while ANY upstream partition is missing, and `raw_yahoo_symbol`
+    # deliberately carries no automation condition — it spends the budget the nightly price sweep
+    # lives on, so it is an operator's backfill. Plain `eager()` therefore requests ZERO: driven
+    # on 1.13.22 with both mapping rungs landed and the Yahoo one absent, `security_symbology` was
+    # requested for 0 of 1 subjects. The two automated rungs would have collected OpenFIGI's
+    # answers into Parquet for ever and adopted none of them, with every run green — the same
+    # shape that kept `security_return` from ever materialising through a whole history load.
+    #
+    # THE GATE IS KEPT FOR THE TWO AUTOMATED RUNGS and dropped only for the Yahoo one, which is
+    # narrower than the `.without(~any_deps_missing())` its sibling in `prices/derived.py` needs:
+    # those two DO land on their own, so waiting for them is correct and costs nothing.
+    # `any_deps_updated` still watches all three, so an operator's later Yahoo backfill re-fires
+    # this step and the new evidence is adopted; `any_deps_in_progress` still covers all three, so
+    # a backfill in flight is waited for rather than raced.
+    automation_condition=dg.AutomationCondition.eager().replace(
+        "any_deps_missing",
+        dg.AutomationCondition.any_deps_missing().ignore(
+            dg.AssetSelection.assets(raw_yahoo_symbol)
+        ),
+    ),
+    # AND THE INPUT HAS TO TOLERATE WHAT THE CONDITION NOW PERMITS. Firing without the Yahoo rung
+    # means loading a partition file that does not exist — measured on 2026-09-22, six runs died
+    # with `FileNotFoundError: .../raw_figi_local_symbol/<uuid>.parquet` for exactly that reason.
+    # `UPathIOManager` has the built-in: the input arrives as `None`, which `rows_per_partition`
+    # reads as "no rows", and `plan_symbols` then records no observation because nothing asked.
+    ins={"raw_yahoo_symbol": dg.AssetIn(metadata={"allow_missing_partitions": True})},
     description="The securities a rung resolved, adopted into the identity tables.",
 )
 def security_symbology(
