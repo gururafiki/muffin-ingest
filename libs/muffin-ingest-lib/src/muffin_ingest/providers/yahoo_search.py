@@ -25,6 +25,10 @@ REAL_ORIGIN = "https://query1.finance.yahoo.com"
 #: The endpoint answers differently without a browser-like User-Agent.
 BROWSER_UA = "Mozilla/5.0 (compatible; muffin-market-data)"
 
+#: The name this provider's requests are counted under, and the `provider` its observations are
+#: recorded under in `market.identifier_probe`. Spelled once so the two cannot drift apart.
+PROVIDER = "yahoo"
+
 
 def search(isin: str, *, timeout_s: float = 15.0) -> Document:
     """One ISIN → whatever Yahoo's index says, response body whole.
@@ -36,7 +40,7 @@ def search(isin: str, *, timeout_s: float = 15.0) -> Document:
     url = f"{base}/v1/finance/search?q={quote(isin)}&quotesCount=10&newsCount=0"
     return _get(
         url,
-        provider="yahoo",
+        provider=PROVIDER,
         headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
         timeout_s=timeout_s,
     )

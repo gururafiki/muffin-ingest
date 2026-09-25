@@ -196,7 +196,8 @@ def test_the_ladder_adopts_a_ticker_and_a_symbol_and_records_probes(
     tmp_path: Path,
 ) -> None:
     """AAPL's mapping hit (position 0 of the captured three-entry body) and Yahoo's `AAPL` search
-    line become a ticker identifier, a provider symbol and two hit probes — in one transaction."""
+    line become a ticker identifier, a provider symbol and a hit probe per rung that asked — in one
+    transaction."""
     FakeCursor.writes.clear()
     with dg.instance_for_test() as instance:
         instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
@@ -215,8 +216,12 @@ def test_the_ladder_adopts_a_ticker_and_a_symbol_and_records_probes(
     assert probe_writes and "hit" in probe_writes[0][1], probe_writes
 
 
-def _probes(writes: list[tuple[str, tuple[Any, ...]]]) -> list[tuple[Any, Any]]:
-    """Every `identifier_probe` row a run wrote, as (scheme, outcome).
+def _probes(writes: list[tuple[str, tuple[Any, ...]]]) -> list[tuple[Any, Any, Any]]:
+    """Every `identifier_probe` row a run wrote, as (scheme, provider, outcome).
+
+    The PROVIDER is read because it is part of the row's key: the two symbol rungs are OpenFIGI and
+    Yahoo, each asked subject earns one row per rung, and a label saying the wrong one is how a
+    Yahoo answer would have been stored as OpenFIGI's.
 
     The upsert flattens its rows into one params tuple, so the rows are recovered by chunking on
     the column count — and the column list is READ OUT OF THE STATEMENT rather than restated here.
@@ -227,15 +232,16 @@ def _probes(writes: list[tuple[str, tuple[Any, ...]]]) -> list[tuple[Any, Any]]:
     Asserting on the SCHEME rather than on a substring is the other half: `"symbol" in params` is
     also true of a ticker row whose value happens to contain it.
     """
-    out: list[tuple[Any, Any]] = []
+    out: list[tuple[Any, Any, Any]] = []
     for sql, params in writes:
         if "market.identifier_probe" not in sql:
             continue
         columns = [c.strip() for c in sql.split("(", 1)[1].split(")", 1)[0].split(",")]
-        scheme, outcome = columns.index("scheme"), columns.index("outcome")
+        scheme, provider = columns.index("scheme"), columns.index("provider")
+        outcome = columns.index("outcome")
         for i in range(0, len(params), len(columns)):
             row = params[i : i + len(columns)]
-            out.append((row[scheme], row[outcome]))
+            out.append((row[scheme], row[provider], row[outcome]))
     return out
 
 
@@ -268,7 +274,7 @@ def test_a_skipped_rung_writes_no_observation_and_the_asset_is_what_says_so(
     finally:
         STATE.needing_symbol = {SID}
 
-    assert skipped == [("ticker", "hit")], (
+    assert skipped == [("ticker", "openfigi", "hit")], (
         f"recorded an answer to a question nobody asked: {skipped}"
     )
     # AND THE VALUE IS STILL ADOPTED. The ticker rung's own hits name the US line, so the ladder
@@ -293,7 +299,7 @@ def test_a_rung_that_asked_and_got_nothing_still_records_the_miss(tmp_path: Path
     what the database says the subject still needs: asked earns a miss, skipped earns silence.
     """
     keys = {"asked": {SID}, "skipped": {OTHER_SID}}
-    seen: dict[str, list[tuple[Any, Any]]] = {}
+    seen: dict[str, list[tuple[Any, Any, Any]]] = {}
     for label, needing in keys.items():
         STATE.needing_symbol = needing
         FakeCursor.writes.clear()
@@ -310,11 +316,14 @@ def test_a_rung_that_asked_and_got_nothing_still_records_the_miss(tmp_path: Path
             STATE.needing_symbol = {SID}
         seen[label] = _probes(FakeCursor.writes)
 
-    assert ("symbol", "miss") in seen["asked"], seen["asked"]
-    assert ("symbol", "miss") not in seen["skipped"], seen["skipped"]
+    # BOTH symbol rungs asked, so each records its own miss under its own name.
+    assert ("symbol", "openfigi", "miss") in seen["asked"], seen["asked"]
+    assert ("symbol", "yahoo", "miss") in seen["asked"], seen["asked"]
+    assert not [p for p in seen["skipped"] if p[0] == "symbol"], seen["skipped"]
     # The ticker rung asked in both, and its own miss is recorded either way — so the difference
     # above is the symbol rule rather than the run having done nothing.
-    assert ("ticker", "miss") in seen["asked"] and ("ticker", "miss") in seen["skipped"], seen
+    ticker_miss = ("ticker", "openfigi", "miss")
+    assert ticker_miss in seen["asked"] and ticker_miss in seen["skipped"], seen
 
 
 def test_a_local_line_is_recorded_as_the_hit_it_is(tmp_path: Path) -> None:
@@ -338,9 +347,13 @@ def test_a_local_line_is_recorded_as_the_hit_it_is(tmp_path: Path) -> None:
             local_body=MAPPING_BODY,
         ).success
 
-    assert _probes(FakeCursor.writes) == [("ticker", "miss"), ("symbol", "hit")], _probes(
-        FakeCursor.writes
-    )
+    # The local line is OpenFIGI's hit; Yahoo was asked too and found nothing, which is its own
+    # observation under its own name rather than a second opinion folded into the first.
+    assert _probes(FakeCursor.writes) == [
+        ("ticker", "openfigi", "miss"),
+        ("symbol", "openfigi", "hit"),
+        ("symbol", "yahoo", "miss"),
+    ], _probes(FakeCursor.writes)
     assert any(
         "market.security_provider_symbol" in w and "AAPL" in params
         for w, params in FakeCursor.writes
@@ -447,6 +460,13 @@ def test_the_adopting_step_runs_when_the_yahoo_rung_never_did(tmp_path: Path) ->
     assert any(
         "market.security_identifier" in w and "AAPL" in params for w, params in FakeCursor.writes
     ), FakeCursor.writes
+    # AND YAHOO IS NOT CLAIMED TO HAVE ANSWERED. This is production's ordinary state — the rung is
+    # an operator's backfill and has never run for most subjects — so a call site that wired
+    # `asked_yahoo` to anything but the Yahoo rung's own file would stamp a Yahoo miss on every
+    # security the ladder touches. OpenFIGI's own observations are unaffected.
+    probes = _probes(FakeCursor.writes)
+    assert not [p for p in probes if p[1] == "yahoo"], probes
+    assert ("symbol", "openfigi", "hit") in probes, probes
 
 
 def test_a_listing_held_by_another_security_is_withheld_and_counted_not_crashed_on(
@@ -507,7 +527,7 @@ def test_a_listing_held_by_another_security_is_withheld_and_counted_not_crashed_
     ]
     assert "ACN" in written, f"the free listing was not adopted: {written}"
     assert "AAPL" not in written, f"wrote a listing another security holds: {written}"
-    assert ("symbol", "hit") in _probes(FakeCursor.writes), _probes(FakeCursor.writes)
+    assert ("symbol", "openfigi", "hit") in _probes(FakeCursor.writes), _probes(FakeCursor.writes)
 
     meta = result.asset_materializations_for_node("security_symbology")[0].metadata
     assert meta["symbols_held_elsewhere"].value == 1, meta
