@@ -80,8 +80,12 @@ own call.
   nothing for three days. **A schedule that covers a slice emits one `RunRequest` per run width**,
   reading that width from the module that defines it so the policy and the schedule cannot
   disagree, with a `run_key` carrying the tick so a re-tick is idempotent and two ticks cannot
-  collide. Assert the width in a test: the fixture needs a grid exactly one slice wide, or the
-  rotation clamps and the test fails for an unrelated reason.
+  collide. Assert the width in a test: the fixture needs a grid exactly one slice wide, so the
+  slice is the whole grid whatever the night and nothing but the width can vary.
+- **A schedule has no cursor, but the runs it launched are durable state it can read back.** A
+  rotation that must survive the grid growing resumes after the last key the previous tick asked
+  for, stamped as a tag on every run (`context.instance.get_runs` filtered by
+  `dagster/schedule_name`), never from a formula over the grid's size. See pitfalls.md.
 
 **Measure the grain on the wire, because a wrapper hides it.** openbb's yfinance adapter calls
 `yf.download(..., threads=False)`, which loops per ticker and issues `/v8/finance/chart/{ticker}`

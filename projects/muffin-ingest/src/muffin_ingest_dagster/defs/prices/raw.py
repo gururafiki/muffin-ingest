@@ -552,13 +552,29 @@ def raw_price_history(
     )
 
 
-def _earliest(watermarks: dict[str, date], end: date) -> date:
-    """The oldest watermark in the cohort, re-asking its newest stored day.
+#: HOW FAR BEHIND ITS OWN WATERMARK EACH EXTENSION RE-READS. The vendor is asked once per ticker
+#: whatever range we name, so a wider window costs bytes, never a request: at ~one bar a day this
+#: is about seven extra rows per security per extension.
+#:
+#: WHAT IT BUYS IS A RULE WHERE THERE WAS AN ACCIDENT. Yahoo has two kinds of gap at 00:00 UTC.
+#: The just-closed US session arrives with a NaN close, which stage 2 refuses, and the next
+#: extension's inclusive re-read of the newest stored day filled that. But a day can also be
+#: `null` in Yahoo itself for days afterwards and then appear: measured 2026-09-24, the 09-22 bar
+#: was still missing for KO, CZR, EMBC and PRAA while MSFT, SPY and JPM had it. An extension
+#: starting at the cohort's oldest watermark re-read such a day only if a cohort-mate happened to
+#: be behind it. The sweep reaches each security every ~5 nights, so with seven days a day still
+#: missing at one extension is asked for again at the next one, whatever its cohort-mates hold.
+REREAD = timedelta(days=7)
 
-    THE STORED DAY IS RE-ASKED RATHER THAN SKIPPED, because a provider restates: a bar can be
-    corrected, split-adjusted or filled in after the fact, and the merge supersedes it per key. A
+
+def _earliest(watermarks: dict[str, date], end: date) -> date:
+    """The oldest watermark in the cohort, less the re-read window.
+
+    THE STORED DAYS ARE RE-ASKED RATHER THAN SKIPPED, because a provider restates: a bar can be
+    corrected, split-adjusted or filled in after the fact, and the merge supersedes it per key
+    (raw, `merge_on`) and per `(security_id, trade_date)` (core, DO UPDATE). See `REREAD`. A
     watermark of `end` would also make a degenerate range — `start == end` returns everything from
     `start` to today on this provider, measured — so the window is held at least a day wide.
     """
     oldest = min(watermarks.values())
-    return min(oldest, end - timedelta(days=1))
+    return min(oldest - REREAD, end - timedelta(days=1))

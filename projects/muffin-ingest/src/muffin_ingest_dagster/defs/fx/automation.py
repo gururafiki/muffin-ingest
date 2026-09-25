@@ -6,6 +6,7 @@ from muffin_ingest.facets import fx
 from muffin_ingest_dagster.defs.fx.core import fx_rate
 from muffin_ingest_dagster.defs.fx.partitions import CURRENCY_PARTITION, currency_partitions
 from muffin_ingest_dagster.defs.fx.raw import raw_fx_history, raw_fx_spot
+from muffin_ingest_dagster.lib.priority import SHORT_LANE
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
@@ -57,6 +58,9 @@ daily_fx = dg.build_schedule_from_partitioned_job(
     dg.define_asset_job(
         "daily_fx",
         selection=dg.AssetSelection.assets(raw_fx_spot, fx_rate),
+        # FIRST IN LINE FOR THE `sql` POOL. See `lib/priority.py`: without it this ~25 s lane
+        # waited behind the whole price sweep on 2026-09-24 (6,069 s).
+        run_tags=SHORT_LANE,
     ),
     default_status=dg.DefaultScheduleStatus.RUNNING,
 )

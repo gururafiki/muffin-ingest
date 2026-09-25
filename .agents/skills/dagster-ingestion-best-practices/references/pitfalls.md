@@ -254,6 +254,27 @@ rung, so the miss came last and won. After the first full drain: 0 symbol hits, 
 securities that had just been given a symbol. Put the decision in ONE function that sees every
 source, and test it with a fixture where the sources DISAGREE — while they agree, both orders pass.
 
+## Do not derive a rotation's position from the size of what it rotates over
+
+`start = (day * SWEEP_SLICE) % len(keys)` is stateless and advances one slice a night — while the
+grid never changes size. Adding ONE key re-maps every future slice, because `day * 2500 mod N` and
+`day * 2500 mod (N+1)` are unrelated. Measured 2026-09-25: the grid went from 12,267 to 12,268 keys
+and that night swept [2300, 4800), all of it swept on the two nights before, while 6,056 securities
+sat 8-14 days stale. Anchor on a KEY instead: dynamic partitions are listed in insertion order, so
+growth appends and never moves one. `nightly_prices` stamps the night's last key on every run it
+launches and the next tick resumes after it, excluding its own night so a retried tick is
+idempotent. **Its tests needed a growing grid to mean anything**: over a constant grid the date rule
+lands on exactly the same keys, and two guards passed with their rule deleted until the fixtures
+grew between nights.
+
+## Do not leave queue order to whichever schedule ticked first
+
+At a shared tick every queued run waits in creation order, so a 20-second lane can sit behind a
+hundred runs of a long one that happened to be created a moment earlier: `daily_indices` waited
+6,185 s on 2026-09-23 and `daily_fx` 6,069 s on 09-24, and on 09-25 neither waited. Give short lanes
+`dagster/priority` through the job's `run_tags`; `QueuedRunCoordinator` sorts by it before checking
+pools, so the short lane is first in line when the pool frees and waits at most one long run.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies

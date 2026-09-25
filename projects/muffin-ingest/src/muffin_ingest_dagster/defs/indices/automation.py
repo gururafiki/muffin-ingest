@@ -4,6 +4,7 @@ import dagster as dg
 
 from muffin_ingest_dagster.defs.indices.core import index_return
 from muffin_ingest_dagster.defs.indices.raw import raw_index_bars, raw_sector_performance
+from muffin_ingest_dagster.lib.priority import SHORT_LANE
 
 #: RUNNING, AND THE COMPARISON THAT GATED IT WAS ADJUDICATED AGAINST THE PROVIDER RATHER THAN
 #: AGAINST `market.performance`.
@@ -24,6 +25,9 @@ daily_indices = dg.build_schedule_from_partitioned_job(
     dg.define_asset_job(
         "daily_indices",
         selection=dg.AssetSelection.assets(raw_index_bars, raw_sector_performance, index_return),
+        # FIRST IN LINE FOR THE `sql` POOL. See `lib/priority.py`: without it this ~20 s lane
+        # waited behind the whole price sweep on 2026-09-23 (6,185 s).
+        run_tags=SHORT_LANE,
     ),
     default_status=dg.DefaultScheduleStatus.RUNNING,
 )
