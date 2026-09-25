@@ -132,7 +132,8 @@ def security_symbology(
             yahoo_hits=yahoo_hits,
             venues=venues,
             source="openfigi",
-            asked_symbol=bool(local.get(sid)) or bool(yahoo.get(sid)),
+            asked_local=bool(local.get(sid)),
+            asked_yahoo=bool(yahoo.get(sid)),
             # THE UNFILTERED RUNG IS ON THE LADDER, not merged in beside it. Its pick used to be
             # appended here with its own `hit` probe, and `plan_symbols` — which could not see it —
             # appended a `miss` under the same key after it; the writer keeps the last row per key,

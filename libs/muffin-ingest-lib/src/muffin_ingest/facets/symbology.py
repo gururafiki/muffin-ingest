@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from muffin_ingest.facets.openfigi import OpenFigiUnreadable
+from muffin_ingest.providers import yahoo_search
 
 
 @dataclass(frozen=True)
@@ -210,7 +211,8 @@ def plan_symbols(
     yahoo_hits: Sequence[dict[str, Any]],
     venues: dict[str, list[tuple[str, str]]],
     source: str,
-    asked_symbol: bool = True,
+    asked_local: bool,
+    asked_yahoo: bool,
     local_hits: Sequence[dict[str, Any]] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """One security's ladder evidence → the rows to write.
@@ -221,10 +223,10 @@ def plan_symbols(
     `security_provider_symbol` rows. A security the rung ASKED about and got nothing for still
     yields its probe row (outcome 'miss') — that is what a materialised, empty run records.
 
-    `asked_symbol` IS NOT OPTIONAL INFORMATION, AND OMITTING IT WROTE EVIDENCE FOR A QUESTION
-    NOBODY ASKED. A rung skips a subject whose evidence is already held — that is the whole reason
-    `_subjects` filters by `NEEDS_*`, since asking costs a provider request to be told what is
-    written down. This function used to emit a `symbol` probe unconditionally, so those
+    `asked_local` / `asked_yahoo` ARE NOT OPTIONAL INFORMATION, AND OMITTING THEM WROTE EVIDENCE
+    FOR A QUESTION NOBODY ASKED. A rung skips a subject whose evidence is already held — that is the
+    whole reason `_subjects` filters by `NEEDS_*`, since asking costs a provider request to be told
+    what is written down. This function used to emit a `symbol` probe unconditionally, so those
     deliberately-skipped subjects were recorded as MISSES. Measured live 2026-09-22 on the first
     three subjects ever run: all three needed a ticker and already had a symbol, their local and
     Yahoo raw files were correctly EMPTY, and `identifier_probe` still gained three
@@ -240,10 +242,20 @@ def plan_symbols(
     without one. A second flag beside it could never be false where the entry is present, and a
     guard that cannot fire reads as protection without being it.
 
-    The symbol side is different, and that is why the flag is here: the value can come from the
+    The symbol side is different, and that is why the flags are here: the value can come from the
     TICKER rung's own hits naming a local line, so a subject whose symbol rungs were both skipped
     still reaches this branch holding a real value. It is written — it is a finding — but nothing
-    observed it. The default stays True so a caller that genuinely asked reads unchanged.
+    observed it. Both flags are REQUIRED: a default is a claim about what was asked, made by
+    whoever did not say.
+
+    ONE OBSERVATION PER PROVIDER ASKED, NAMED FOR THAT PROVIDER. The two symbol rungs are two
+    providers — OpenFIGI's local rung and Yahoo's search — and `identifier_probe` is keyed
+    `(security_id, scheme, provider)`. This used to record ONE symbol probe labelled with `source`
+    (`openfigi`) whichever rung supplied the value, so a Yahoo hit would have been stored as
+    OpenFIGI's answer, and a Yahoo miss would have overwritten OpenFIGI's own miss under the same
+    key. Neither was live only because the Yahoo rung had never run. Now each rung that asked earns
+    its own row: an OpenFIGI miss beside a Yahoo hit is two true observations, not one false one.
+    The adopted symbol still prefers OpenFIGI's local line, then Yahoo's home-market line.
 
     `local_hits` ARE THE LOCAL RUNG'S OWN MATCHES, AND THEY BELONG ON THIS LADDER, NOT BESIDE IT.
     The local line used to be picked here only from the TICKER rung's hits — restricted to
@@ -292,45 +304,40 @@ def plan_symbols(
                 )
             )
 
+    if yahoo_hits and not asked_yahoo:
+        # Hits come out of the Yahoo rung's own raw file, which exists only for a subject it asked.
+        # Hits with no question is a caller wiring the flags wrongly, and guessing which half is
+        # true would record an observation on a coin toss.
+        raise ValueError(f"{security_id}: Yahoo hits were passed for a subject Yahoo was not asked")
+
     local = pick_local_symbol(
         country_iso2, (*local_hits, *(mapping_entry.hits if mapping_entry else ())), venues
     )
+    local_value = (local or {}).get("symbol")
     home = pick_home_listing(country_iso2, yahoo_hits, venues)
-    value = (local or {}).get("symbol") or home
-    if value and not asked_symbol:
-        # A VALUE WITHOUT A QUESTION IS STILL NOT AN OBSERVATION, and this branch is reachable:
-        # the ticker rung's own hits can name a local line. The adopted symbol is still written —
-        # it is a real finding — but no probe is recorded, because nothing asked.
+    for asked, provider, found in (
+        (asked_local, source, local_value),
+        (asked_yahoo, yahoo_search.PROVIDER, home),
+    ):
+        if asked:
+            probes.append(
+                SymbolEvidence(
+                    security_id=security_id,
+                    scheme="symbol",
+                    asked_with=isin,
+                    outcome="hit" if found else "miss",
+                    value=found,
+                    source=provider,
+                )
+            )
+
+    # A VALUE WITHOUT A QUESTION IS STILL NOT AN OBSERVATION, and it is reachable: the ticker
+    # rung's own hits can name a local line while both symbol rungs were skipped. The adopted
+    # symbol is written either way — it is a finding — and only the rungs that asked are observed.
+    value = local_value or home
+    if value:
         symbol_rows.append(
             {"security_id": security_id, "provider_code": SYMBOL_PROVIDER, "symbol": value}
-        )
-    elif value:
-        probes.append(
-            SymbolEvidence(
-                security_id=security_id,
-                scheme="symbol",
-                asked_with=isin,
-                outcome="hit",
-                value=value,
-                source=source,
-            )
-        )
-        symbol_rows.append(
-            {
-                "security_id": security_id,
-                "provider_code": SYMBOL_PROVIDER,
-                "symbol": value,
-            }
-        )
-    elif asked_symbol:
-        probes.append(
-            SymbolEvidence(
-                security_id=security_id,
-                scheme="symbol",
-                asked_with=isin,
-                outcome="miss",
-                source=source,
-            )
         )
 
     probe_rows: list[dict[str, Any]] = [

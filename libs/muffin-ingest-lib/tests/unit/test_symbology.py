@@ -37,6 +37,11 @@ def _mapping() -> list[symbology.MappingEntry]:
     )
 
 
+def observed(probes: list[dict[str, object]]) -> list[tuple[object, object, object]]:
+    """Each probe row as (scheme, provider, outcome) — the provider is part of the probe's key."""
+    return [(p["scheme"], p["provider"], p["outcome"]) for p in probes]
+
+
 def test_the_captured_mapping_is_positional_and_carries_hits_and_a_refusal() -> None:
     entries = _mapping()
     assert [e.asked for e in entries] == ["US0378331005", "IE00B4BNMY34", "ZZ0000000000"]
@@ -155,12 +160,18 @@ def test_plan_symbols_records_a_hit_and_a_miss_as_observations() -> None:
         yahoo_hits=symbology.parse_yahoo_search((FIX / "yahoo_search_aapl.json").read_bytes()),
         venues=VENUES,
         source="openfigi",
+        asked_local=True,
+        asked_yahoo=True,
     )
     assert identifiers == [
         {"kind_code": "ticker", "value": "AAPL", "security_id": sec, "source_code": "openfigi"}
     ]
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
-    assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "hit"), ("symbol", "hit")]
+    assert observed(probes) == [
+        ("ticker", "openfigi", "hit"),
+        ("symbol", "openfigi", "hit"),
+        ("symbol", "yahoo", "hit"),
+    ]
 
     # And the security the providers have NOTHING for still records the misses.
     identifiers, symbols, probes = symbology.plan_symbols(
@@ -171,9 +182,15 @@ def test_plan_symbols_records_a_hit_and_a_miss_as_observations() -> None:
         yahoo_hits=[],
         venues=VENUES,
         source="openfigi",
+        asked_local=True,
+        asked_yahoo=True,
     )
     assert identifiers == [] and symbols == []
-    assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss"), ("symbol", "miss")]
+    assert observed(probes) == [
+        ("ticker", "openfigi", "miss"),
+        ("symbol", "openfigi", "miss"),
+        ("symbol", "yahoo", "miss"),
+    ]
 
 
 def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
@@ -207,7 +224,8 @@ def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
         yahoo_hits=[],
         venues=VENUES,
         source="openfigi",
-        asked_symbol=False,
+        asked_local=False,
+        asked_yahoo=False,
     )
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "hit")]
@@ -221,7 +239,8 @@ def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
         yahoo_hits=[],
         venues=VENUES,
         source="openfigi",
-        asked_symbol=False,
+        asked_local=False,
+        asked_yahoo=False,
     )
     assert identifiers == [] and symbols == []
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss")]
@@ -235,7 +254,8 @@ def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
         yahoo_hits=[],
         venues=VENUES,
         source="openfigi",
-        asked_symbol=True,
+        asked_local=True,
+        asked_yahoo=False,
     )
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss"), ("symbol", "miss")]
 
@@ -257,9 +277,85 @@ def test_the_ticker_rung_carries_its_own_question_and_needs_no_flag() -> None:
         yahoo_hits=symbology.parse_yahoo_search((FIX / "yahoo_search_aapl.json").read_bytes()),
         venues=VENUES,
         source="openfigi",
+        asked_local=True,
+        asked_yahoo=True,
     )
-    assert [(p["scheme"], p["outcome"]) for p in probes] == [("symbol", "hit")]
+    assert observed(probes) == [("symbol", "openfigi", "miss"), ("symbol", "yahoo", "hit")]
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
+
+
+def test_each_symbol_rung_is_observed_under_its_own_provider() -> None:
+    """TWO PROVIDERS, TWO OBSERVATIONS. The local rung is OpenFIGI and the fallback is Yahoo's
+    search, and `identifier_probe` is keyed `(security_id, scheme, provider)`.
+
+    The ladder used to record ONE symbol probe labelled `openfigi` whoever supplied the value, so
+    this exact case — OpenFIGI found no local line, Yahoo did — would have stored Yahoo's answer as
+    OpenFIGI's hit, and a Yahoo miss would have overwritten OpenFIGI's own miss under one key. The
+    fixture makes the providers DISAGREE, which is the only shape where the label decides anything:
+    while both hit or both miss, one row labelled either way reads the same.
+    """
+    sec = "11111111-1111-1111-1111-111111111111"
+    _, symbols, probes = symbology.plan_symbols(
+        sec,
+        isin="US0378331005",
+        country_iso2="US",
+        mapping_entry=symbology.MappingEntry(asked="US0378331005"),
+        yahoo_hits=symbology.parse_yahoo_search((FIX / "yahoo_search_aapl.json").read_bytes()),
+        venues=VENUES,
+        source="openfigi",
+        asked_local=True,
+        asked_yahoo=True,
+    )
+    assert [(p["scheme"], p["provider"], p["outcome"], p["value"]) for p in probes] == [
+        ("ticker", "openfigi", "miss", None),
+        ("symbol", "openfigi", "miss", None),
+        ("symbol", "yahoo", "hit", "AAPL"),
+    ]
+    assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}], (
+        "Yahoo's home-market line is adopted when OpenFIGI names none"
+    )
+
+
+def test_when_both_rungs_name_a_line_openfigis_local_line_is_adopted() -> None:
+    """THE PREFERENCE IS A RULE, AND IT HAD NO TEST until the rungs were split. Yahoo's index is
+    the fallback because it is the less reliable of the two — it resolved Walmex to a Frankfurt
+    line only — so where OpenFIGI names the local line, that is the one adopted. The fixture makes
+    the two rungs name DIFFERENT home-market lines; while they agree, either order passes."""
+    sec = "11111111-1111-1111-1111-111111111111"
+    entries = _mapping()
+    _, symbols, probes = symbology.plan_symbols(
+        sec,
+        isin="US0378331005",
+        country_iso2="US",
+        mapping_entry=entries[0],
+        yahoo_hits=[{"symbol": "APC", "quote_type": "EQUITY"}],
+        venues=VENUES,
+        source="openfigi",
+        asked_local=True,
+        asked_yahoo=True,
+    )
+    assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
+    assert [(p["provider"], p["value"]) for p in probes if p["scheme"] == "symbol"] == [
+        ("openfigi", "AAPL"),
+        ("yahoo", "APC"),
+    ], "each rung's own answer is still recorded as that rung's observation"
+
+
+def test_yahoo_hits_for_a_subject_yahoo_was_not_asked_about_are_refused() -> None:
+    """Hits can only come from the Yahoo rung's own raw file. Passing them with `asked_yahoo=False`
+    is a wiring mistake at the call site, and either reading of it would record a false fact."""
+    with pytest.raises(ValueError, match="Yahoo was not asked"):
+        symbology.plan_symbols(
+            "11111111-1111-1111-1111-111111111111",
+            isin="US0378331005",
+            country_iso2="US",
+            mapping_entry=None,
+            yahoo_hits=symbology.parse_yahoo_search((FIX / "yahoo_search_aapl.json").read_bytes()),
+            venues=VENUES,
+            source="openfigi",
+            asked_local=True,
+            asked_yahoo=False,
+        )
 
 
 def test_a_local_line_named_by_the_unfiltered_rung_is_a_hit_not_a_miss() -> None:
@@ -286,7 +382,8 @@ def test_a_local_line_named_by_the_unfiltered_rung_is_a_hit_not_a_miss() -> None
         yahoo_hits=[],
         venues=VENUES,
         source="openfigi",
-        asked_symbol=True,
+        asked_local=True,
+        asked_yahoo=False,
         # The local rung names AAPL on the US board — the captured answer.
         local_hits=entries[0].hits,
     )
