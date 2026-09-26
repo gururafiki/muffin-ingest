@@ -82,6 +82,12 @@ def parse_filter(
                 # explaining why this is the only column naming a fund, and it has an index.
                 "security_type": str(r["securityType2"]) if r.get("securityType2") else None,
                 "figi_security_type": str(r["securityType"]) if r.get("securityType") else None,
+                # THE ONE OPENFIGI KEY THAT IS THE SAME ON EVERY VENUE. A composite FIGI is per
+                # COUNTRY of listing and a FIGI per line, so neither can say that a Frankfurt line
+                # and a New York line are one company; the share class can. Every stored page
+                # carried it and this parse dropped it — measured on the 59 raw files 2026-09-26:
+                # 99,459 lines, 54,332 share classes, 21 lines without one.
+                "share_class_figi": str(r["shareClassFIGI"]) if r.get("shareClassFIGI") else None,
             }
         )
     return rows, parsed.get("next"), parsed.get("total")

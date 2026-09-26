@@ -88,6 +88,7 @@ def security_symbology(
     identifier_rows: list[dict[str, Any]] = []
     symbol_rows: list[dict[str, Any]] = []
     probe_rows: list[dict[str, Any]] = []
+    conflicting: dict[str, tuple[str, ...]] = {}
 
     ticker = partitioned.rows_per_partition(context, raw_figi_ticker)
     local = partitioned.rows_per_partition(context, raw_figi_local_symbol)
@@ -124,6 +125,11 @@ def security_symbology(
         # already held", not "asked and got nothing". Recording the second for the first writes an
         # observation nobody made, and `stale_misses` then re-asks it in 30 days. The ticker rung
         # needs no flag: `mapping_entry` is reconstructed from its row, so None already means it.
+        #
+        # AND SINCE 2026-09-26 THE LOCAL RUNG ASKS FOR TWO THINGS, so a row existing no longer
+        # means it asked for the symbol: `asked_for` says which. A file written before then has no
+        # such column and was asked for the symbol alone.
+        local_asked = _asked_for(local.get(sid), default=sym.NEEDS_SYMBOL)
         identifiers, symbols, probes = sym.plan_symbols(
             sid,
             isin=isin,
@@ -132,7 +138,7 @@ def security_symbology(
             yahoo_hits=yahoo_hits,
             venues=venues,
             source="openfigi",
-            asked_local=bool(local.get(sid)),
+            asked_local=sym.NEEDS_SYMBOL in local_asked,
             asked_yahoo=bool(yahoo.get(sid)),
             # THE UNFILTERED RUNG IS ON THE LADDER, not merged in beside it. Its pick used to be
             # appended here with its own `hit` probe, and `plan_symbols` — which could not see it —
@@ -144,19 +150,66 @@ def security_symbology(
         symbol_rows += symbols
         probe_rows += probes
 
+        # THE SHARE CLASS, FROM EVERY OPENFIGI ANSWER ON DISK FOR THIS SUBJECT. Both rungs look up
+        # the same ISIN, so their lines name the same class; reading both lets a subject that
+        # only the ticker rung asked about still be keyed.
+        share = sym.plan_share_class(
+            sid,
+            isin=isin,
+            hits=[
+                *(mapping_entry.hits if mapping_entry else ()),
+                *(entry_local.hits if entry_local else ()),
+            ],
+            source="openfigi",
+            asked=sym.NEEDS_SHARE_CLASS in local_asked,
+        )
+        identifier_rows += share.identifiers
+        probe_rows += share.probes
+        if share.conflicting:
+            conflicting[sid] = share.conflicting
+
+    for sid, named in list(conflicting.items())[:20]:
+        context.log.warning(f"{sid}: one ISIN answer named {len(named)} share classes {named}")
+
     written: dict[str, int] = {}
     collapsed = 0
     with postgres.connect() as conn:
         with conn.cursor() as cur:
-            if identifier_rows:
+            # ONE SHARE CLASS, ONE SECURITY. The key already refuses a second holder, silently; this
+            # decides it before the write so the refusal is COUNTED (see `adoptable_identifiers`).
+            share_rows = [r for r in identifier_rows if r["kind_code"] == sym.SHARE_CLASS_KIND]
+            share_adoption = sym.adoptable_identifiers(
+                share_rows, sym.identifier_holders(conn, sym.SHARE_CLASS_KIND, share_rows)
+            )
+            for sid, value, holder in share_adoption.held_elsewhere[:20]:
+                context.log.warning(
+                    f"share class {value} resolved for {sid} is already held by {holder}; "
+                    "kept the holder"
+                )
+            for value, sids in list(share_adoption.ambiguous.items())[:20]:
+                context.log.warning(
+                    f"share class {value} claimed by {len(sids)} securities: {sids}"
+                )
+            adoptable = [
+                r for r in identifier_rows if r["kind_code"] != sym.SHARE_CLASS_KIND
+            ] + share_adoption.kept
+            if adoptable:
                 result = upsert(
                     cur,
                     "market.security_identifier",
-                    identifier_rows,
+                    adoptable,
                     conflict=["kind_code", "value"],
                     update=None,
                 )
                 written["identifiers"], collapsed = result.written, collapsed + result.collapsed
+            # A SYMBOL ALREADY HELD IS NEVER REPLACED HERE — see `unreplaced_symbols`. Filtered
+            # first, so a refused pick cannot also be counted as a listing held elsewhere.
+            symbol_rows, replacing = sym.unreplaced_symbols(
+                symbol_rows,
+                sym.current_symbols(conn, [str(r["security_id"]) for r in symbol_rows]),
+            )
+            for sid, held, proposed in replacing[:20]:
+                context.log.info(f"{sid} holds {held}; kept it over the pick {proposed}")
             # ONE LISTING, ONE SECURITY — the second unique key this upsert does not name. Decided
             # before the write, because a violation fails the whole batch (see `adoptable_symbols`).
             adoption = sym.adoptable_symbols(symbol_rows, sym.symbol_holders(conn, symbol_rows))
@@ -210,8 +263,26 @@ def security_symbology(
             # securities resolving to one listing is a duplicate for identity consolidation to find.
             "symbols_held_elsewhere": len(adoption.held_elsewhere),
             "symbols_ambiguous": len(adoption.ambiguous),
+            # A pick that disagreed with a symbol the security already holds. Not a defect: the
+            # held one may have been verified against the provider, and replacing it is Stage 3's
+            # rule with its own evidence. A large number says the pick is often worse.
+            "symbols_already_held": len(replacing),
+            "share_classes_offered": len(share_rows),
+            "share_classes_held_elsewhere": len(share_adoption.held_elsewhere),
+            "share_classes_ambiguous": len(share_adoption.ambiguous),
+            # One ISIN's answer naming two classes. Measured at 0 of 1,518 before shipping; a
+            # non-zero value is a new shape of answer, and nothing was adopted for it.
+            "share_classes_conflicting": len(conflicting),
         }
     )
+
+
+def _asked_for(rows: Sequence[dict[str, Any]] | None, *, default: str) -> set[str]:
+    """What a rung asked this subject for, read off its raw row. No row, no question."""
+    if not rows:
+        return set()
+    value = rows[0].get("asked_for")
+    return set(str(value).split(",")) if value else {default}
 
 
 def _entry_from_evidence(

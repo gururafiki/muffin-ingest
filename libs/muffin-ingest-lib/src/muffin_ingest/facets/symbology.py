@@ -75,6 +75,9 @@ def parse_mapping(body: bytes, asked: Sequence[str]) -> list[MappingEntry]:
                     "name": str(r["name"]) if r.get("name") else None,
                     "composite_figi": str(r["compositeFIGI"]) if r.get("compositeFIGI") else None,
                     "security_type": str(r["securityType2"]) if r.get("securityType2") else None,
+                    "share_class_figi": (
+                        str(r["shareClassFIGI"]) if r.get("shareClassFIGI") else None
+                    ),
                 }
             )
         out.append(
@@ -186,6 +189,11 @@ def pick_home_listing(
 
 #: The identifier kinds the ladder adopts into `security_identifier`.
 TICKER_KIND = "ticker"
+#: An equity's identity: the OpenFIGI share class, the one key that is the same on every venue a
+#: class trades on. `security_identifier`'s `(kind_code, value)` key is what makes it "one security
+#: per share class" — decided 2026-09-26 (umbrella docs/specs/2026-09-26-finishing-the-universe-
+#: family.md).
+SHARE_CLASS_KIND = "share_class_figi"
 #: The provider code the local symbol is addressable under — matches `market.data_source`.
 SYMBOL_PROVIDER = "yfinance"
 
@@ -361,6 +369,71 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
+@dataclass(frozen=True)
+class ShareClassPlan:
+    """What one security's evidence says about its share class."""
+
+    identifiers: list[dict[str, Any]]
+    probes: list[dict[str, Any]]
+    #: Every share class the evidence named, when it named more than one. Nothing is adopted then.
+    conflicting: tuple[str, ...] = ()
+
+
+def plan_share_class(
+    security_id: str,
+    *,
+    isin: str,
+    hits: Sequence[dict[str, Any]],
+    source: str,
+    asked: bool,
+) -> ShareClassPlan:
+    """One security's mapping hits → its share class, if they name exactly one.
+
+    AN ISIN NAMES ONE SHARE CLASS, AND THE ANSWER SAYS SO ON EVERY LINE. OpenFIGI's mapping by ISIN
+    returns the class's lines on every venue, each carrying the same `shareClassFIGI` — measured
+    2026-09-26 over the 1,518 answers stored by the local rung: 1,393 name exactly one, 125 name
+    none, and not one names two. Lines WITHOUT one are ordinary (2,340 of them, nearly all common
+    stock) and say nothing, so they are skipped rather than counted as disagreement.
+
+    TWO IS A REFUSAL, NEVER A CHOICE. If an answer ever names two classes, taking either attaches a
+    company's identity by coin toss, so nothing is adopted and the caller reports it.
+
+    THE VALUE IS A FINDING WHETHER OR NOT THE QUESTION WAS ASKED, and only an asked question is an
+    observation — the rule `plan_symbols` keeps for the local line. A class named in an answer to a
+    symbol question is written; the probe is recorded only when this rung was asked for the class,
+    so a skipped question never reads as the provider having nothing.
+    """
+    named = sorted({str(h["share_class_figi"]) for h in hits if h.get("share_class_figi")})
+    if len(named) > 1:
+        return ShareClassPlan(identifiers=[], probes=[], conflicting=tuple(named))
+
+    identifiers = [
+        {
+            "kind_code": SHARE_CLASS_KIND,
+            "value": named[0],
+            "security_id": security_id,
+            "source_code": source,
+        }
+        for _ in named[:1]
+    ]
+    probes = (
+        [
+            {
+                "security_id": security_id,
+                "scheme": SHARE_CLASS_KIND,
+                "provider": source,
+                "asked_with": isin,
+                "value": named[0] if named else None,
+                "outcome": "hit" if named else "miss",
+                "observed_at": _now(),
+            }
+        ]
+        if asked
+        else []
+    )
+    return ShareClassPlan(identifiers=identifiers, probes=probes)
+
+
 # --- who the ladder is for ----------------------------------------------------------------------
 #
 # WHAT A RUNG ASKS ABOUT IS A QUESTION FOR THE DATABASE, NOT FOR THE ASSET, and it is asked per
@@ -401,9 +474,17 @@ select distinct i.security_id::text
                     where p.security_id = s.security_id and p.provider_code = %s)
 """
 
+#: The ticker's anti-join, parameterised by the identifier kind, so the two cannot drift apart.
+#: Every equity holding an ISIN starts here, because no security carried a share class before
+#: 2026-09-26 — and the local rung's ISIN lookup answers it in the same request that answers the
+#: local line, so widening that rung costs one job per subject, a hundred to a request keyed.
+SUBJECTS_NEEDING_SHARE_CLASS = SUBJECTS_NEEDING_TICKER
+
+
 #: What each rung is for, so a caller names the EVIDENCE rather than repeating a query.
 NEEDS_TICKER = "ticker"
 NEEDS_SYMBOL = "symbol"
+NEEDS_SHARE_CLASS = SHARE_CLASS_KIND
 
 
 def subjects_needing(conn: Any, evidence: str) -> set[str]:
@@ -412,8 +493,12 @@ def subjects_needing(conn: Any, evidence: str) -> set[str]:
         sql, params = SUBJECTS_NEEDING_TICKER, (TICKER_KIND,)
     elif evidence == NEEDS_SYMBOL:
         sql, params = SUBJECTS_NEEDING_SYMBOL, (SYMBOL_PROVIDER,)
+    elif evidence == NEEDS_SHARE_CLASS:
+        sql, params = SUBJECTS_NEEDING_SHARE_CLASS, (SHARE_CLASS_KIND,)
     else:
-        raise ValueError(f"unknown evidence {evidence!r}; expected one of ticker, symbol")
+        raise ValueError(
+            f"unknown evidence {evidence!r}; expected one of ticker, symbol, share_class_figi"
+        )
     with conn.cursor() as cur:
         cur.execute(sql, params)
         return {row[0] for row in cur.fetchall()}
@@ -520,6 +605,115 @@ def adoptable_symbols(
     )
 
 
+# --- one share class, one security ------------------------------------------------------------
+#
+# THE SAME RULE AS ONE LISTING, ONE SECURITY, ONE LEVEL UP. `security_identifier` is keyed
+# `(kind_code, value)`, so a share class already held by another security is silently not written
+# by a DO NOTHING upsert — correct, and invisible. Two securities naming one class is an IDENTITY
+# fact (Worldline holds two ISINs, FR0011981968 and FR00140182K6, for one company), and deciding
+# which survives is consolidation, not symbology. So this decides nothing either: the holder keeps
+# the class, a batch naming one class for two securities adopts neither, and both are reported.
+
+IDENTIFIER_HOLDERS = """
+select value, security_id::text
+  from market.security_identifier
+ where kind_code = %s and value = any(%s)
+"""
+
+
+def identifier_holders(conn: Any, kind: str, rows: Sequence[dict[str, Any]]) -> dict[str, str]:
+    """value → the security already holding it, for the `kind` values in `rows`."""
+    values = sorted({str(r["value"]) for r in rows if r["kind_code"] == kind})
+    if not values:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(IDENTIFIER_HOLDERS, (kind, values))
+        return {value: sid for value, sid in cur.fetchall()}
+
+
+@dataclass(frozen=True)
+class IdentifierAdoption:
+    """Which identifier rows may be written, and why the others may not."""
+
+    kept: list[dict[str, Any]]
+    #: (security_id, value, the security already holding it)
+    held_elsewhere: list[tuple[str, str, str]]
+    #: value → the securities in this batch that all claimed it
+    ambiguous: dict[str, list[str]]
+
+
+def adoptable_identifiers(
+    rows: Sequence[dict[str, Any]], holders: dict[str, str]
+) -> IdentifierAdoption:
+    """Withhold every identifier row that would give one value to two securities."""
+    claimants: dict[str, set[str]] = {}
+    for row in rows:
+        claimants.setdefault(str(row["value"]), set()).add(str(row["security_id"]))
+    ambiguous = {value: sorted(sids) for value, sids in claimants.items() if len(sids) > 1}
+
+    kept: list[dict[str, Any]] = []
+    held: set[tuple[str, str, str]] = set()
+    for row in rows:
+        value, sid = str(row["value"]), str(row["security_id"])
+        if value in ambiguous:
+            continue
+        holder = holders.get(value)
+        if holder is not None and holder != sid:
+            held.add((sid, value, holder))
+            continue
+        kept.append(row)
+    return IdentifierAdoption(
+        kept=kept, held_elsewhere=sorted(held), ambiguous=dict(sorted(ambiguous.items()))
+    )
+
+
+# --- a symbol already held is never replaced here -----------------------------------------------
+#
+# ADOPTION FILLS A GAP; IT DOES NOT OVERRULE. A yfinance symbol this ladder did not write may have
+# been verified against the provider — the edge's `security-symbol-repair` adopted `BRK-B`,
+# `ESSITY-B.ST` and `0006.HK` only after the provider answered for them — while the ladder's local
+# pick is OpenFIGI's spelling plus a suffix, which is exactly the `BRK/B` and `ESSITYB.ST` shape the
+# repair existed to undo. The upsert is keyed `(security_id, provider_code)` and UPDATES, so any
+# pick reaching it for a security that already holds a symbol overwrites it.
+#
+# That was reachable before (the ticker rung's US hit is "a finding" even when the symbol rungs
+# were skipped) and becomes routine once the local rung also asks for share classes, because then
+# it answers for securities that hold a symbol already. So the write keeps every current symbol,
+# and says how many picks disagreed with one. Replacing a symbol the provider has refused is a
+# separate rule with its own evidence (Phase 3 stage 3).
+
+CURRENT_SYMBOLS = """
+select security_id::text, symbol
+  from market.security_provider_symbol
+ where provider_code = %s and security_id::text = any(%s)
+"""
+
+
+def current_symbols(conn: Any, security_ids: Sequence[str]) -> dict[str, str]:
+    """security_id → its current yfinance symbol, for the securities named."""
+    if not security_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(CURRENT_SYMBOLS, (SYMBOL_PROVIDER, sorted(set(security_ids))))
+        return {sid: symbol for sid, symbol in cur.fetchall()}
+
+
+def unreplaced_symbols(
+    rows: Sequence[dict[str, Any]], current: dict[str, str]
+) -> tuple[list[dict[str, Any]], list[tuple[str, str, str]]]:
+    """Split symbol rows into the ones that fill a gap (or restate the held symbol) and the ones
+    that would replace a different held symbol — `(security_id, held, proposed)`."""
+    kept: list[dict[str, Any]] = []
+    refused: list[tuple[str, str, str]] = []
+    for row in rows:
+        held = current.get(str(row["security_id"]))
+        if held is not None and held != row["symbol"]:
+            refused.append((str(row["security_id"]), held, str(row["symbol"])))
+            continue
+        kept.append(row)
+    return kept, refused
+
+
 STALE_MISSES = """
 select distinct p.security_id::text from market.identifier_probe p
  where p.outcome = 'miss' and p.observed_at < now() - make_interval(days => %s)
@@ -527,7 +721,10 @@ select distinct p.security_id::text from market.identifier_probe p
                                           where t.security_id = p.security_id and t.kind_code = %s))
         or (p.scheme = 'symbol' and not exists (select 1 from market.security_provider_symbol s
                                           where s.security_id = p.security_id
-                                            and s.provider_code = %s)))
+                                            and s.provider_code = %s))
+        or (p.scheme = %s and not exists (select 1 from market.security_identifier c
+                                          where c.security_id = p.security_id
+                                            and c.kind_code = %s)))
 """
 
 
@@ -547,5 +744,15 @@ def stale_misses(conn: Any, *, older_than_days: int) -> set[str]:
     anti-join is per scheme because a subject can be missing its ticker and hold its symbol.
     """
     with conn.cursor() as cur:
-        cur.execute(STALE_MISSES, (older_than_days, TICKER_KIND, TICKER_KIND, SYMBOL_PROVIDER))
+        cur.execute(
+            STALE_MISSES,
+            (
+                older_than_days,
+                TICKER_KIND,
+                TICKER_KIND,
+                SYMBOL_PROVIDER,
+                SHARE_CLASS_KIND,
+                SHARE_CLASS_KIND,
+            ),
+        )
         return {row[0] for row in cur.fetchall()}

@@ -15,6 +15,10 @@
     "raw_price_bars:every_askable_security_was_asked": {
       "additional_deps": [],
       "blocking": false
+    },
+    "security_symbology:one_security_per_share_class": {
+      "additional_deps": [],
+      "blocking": false
     }
   },
   "assets": {

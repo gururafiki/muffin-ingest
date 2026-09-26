@@ -26,8 +26,10 @@ def mapping_jobs_per_request() -> int:
     return figi.mapping_jobs_per_request()
 
 
-def _subjects(context: AssetExecutionContext, postgres: Postgres, evidence: str) -> Any:
-    """The keys this rung has something to ask about, and what to ask with.
+def _subjects(
+    context: AssetExecutionContext, postgres: Postgres, *evidence: str
+) -> tuple[list[str], dict[str, Any], dict[str, str]]:
+    """The keys this rung has something to ask about, what to ask with, and what it is asking.
 
     A RUN COVERS THE FAMILY'S GRID; A RUNG COVERS THE SUBSET IT CAN HELP. The three rungs share one
     partitions definition because `security_symbology` consumes all three, so the grid holds every
@@ -40,18 +42,34 @@ def _subjects(context: AssetExecutionContext, postgres: Postgres, evidence: str)
     A SKIPPED SUBJECT STILL GETS A FILE, because `by_partition` writes one for every key in the
     run. The partition's claim stays true — this rung was asked about this subject and had nothing
     to ask — and the counters say which happened.
+
+    ONE REQUEST CAN ANSWER TWO QUESTIONS, AND THEN THE ROW MUST SAY WHICH WAS ASKED. The local
+    rung's ISIN lookup returns every line of the class, naming the local line AND the share class,
+    so it asks about a subject missing either. The third value maps each asked subject to what it
+    was asked for (`share_class_figi,symbol`), because a question nobody asked must never be
+    observed as answered with nothing — that defect wrote three false `miss` rows on this lane's
+    first live run (2026-09-22).
     """
     keys = list(context.partition_keys)
     with postgres.connect() as conn:
-        needed = sym.subjects_needing(conn, evidence)
-        attributes = sym.attributes_for(conn, [k for k in keys if k in needed])
-    return keys, attributes
+        needs = {e: sym.subjects_needing(conn, e) for e in evidence}
+        asking = {k: ",".join(sorted(e for e in evidence if k in needs[e])) for k in keys}
+        attributes = sym.attributes_for(conn, [k for k, v in asking.items() if v])
+    return keys, attributes, {k: asking[k] for k in attributes}
 
 
 def _rung_metadata(
-    context: AssetExecutionContext, keys: list[str], attributes: dict[str, Any], rows: int
+    context: AssetExecutionContext,
+    keys: list[str],
+    attributes: dict[str, Any],
+    rows: int,
+    asked_for: dict[str, str],
 ) -> None:
     asked = len(attributes)
+    per_evidence: dict[str, int] = {}
+    for question in asked_for.values():
+        for evidence in question.split(","):
+            per_evidence[evidence] = per_evidence.get(evidence, 0) + 1
     context.add_output_metadata(
         {
             "subjects": len(keys),
@@ -62,6 +80,9 @@ def _rung_metadata(
             # been asked at all.
             "skipped_have_evidence": len(keys) - asked,
             "rows": rows,
+            # PER QUESTION, AND THESE OVERLAP: one subject asked for its symbol and its share class
+            # is counted under both. They say what the requests were FOR, not how many there were.
+            **{f"asked_for_{e}": n for e, n in sorted(per_evidence.items())},
         }
     )
 
@@ -84,14 +105,15 @@ def raw_figi_ticker(context: AssetExecutionContext, postgres: Postgres) -> Any:
     batch that covered the security, with `position` saying which entry answers it — the mapping
     response is positional and a reorder would attach one company's listing to another's.
     """
-    keys, attributes = _subjects(context, postgres, sym.NEEDS_TICKER)
+    keys, attributes, asked_for = _subjects(context, postgres, sym.NEEDS_TICKER)
     rows = _map_in_batches(
         context,
         attributes,
+        asked_for,
         scheme="ticker",
         jobs=lambda isin: {"idType": "ID_ISIN", "idValue": isin, "exchCode": "US"},
     )
-    _rung_metadata(context, keys, attributes, len(rows))
+    _rung_metadata(context, keys, attributes, len(rows), asked_for)
     return partitioned.by_partition(context, rows, key=lambda r: str(r["security_id"]))
 
 
@@ -106,15 +128,24 @@ def raw_figi_ticker(context: AssetExecutionContext, postgres: Postgres) -> Any:
     description="OpenFIGI's every-venue lookup for each security, response whole.",
 )
 def raw_figi_local_symbol(context: AssetExecutionContext, postgres: Postgres) -> Any:
-    """The same mapping UNFILTERED, so every venue's match is on record for the local line."""
-    keys, attributes = _subjects(context, postgres, sym.NEEDS_SYMBOL)
+    """The same mapping UNFILTERED, so every venue's match is on record for the local line.
+
+    IT ALSO ANSWERS THE SHARE CLASS, so it asks about a subject missing either. An ISIN lookup
+    returns every line of the class, each carrying `shareClassFIGI` — the identity a security is
+    keyed on since 2026-09-26. Measured that day: 1,393 of the 1,518 answers this rung had stored
+    already named exactly one class, and none named two.
+    """
+    keys, attributes, asked_for = _subjects(
+        context, postgres, sym.NEEDS_SYMBOL, sym.NEEDS_SHARE_CLASS
+    )
     rows = _map_in_batches(
         context,
         attributes,
+        asked_for,
         scheme="symbol",
         jobs=lambda isin: {"idType": "ID_ISIN", "idValue": isin},
     )
-    _rung_metadata(context, keys, attributes, len(rows))
+    _rung_metadata(context, keys, attributes, len(rows), asked_for)
     return partitioned.by_partition(context, rows, key=lambda r: str(r["security_id"]))
 
 
@@ -145,7 +176,7 @@ def raw_yahoo_symbol(context: AssetExecutionContext, postgres: Postgres) -> Any:
     partitions and costs nothing until someone asks for it. Giving it a condition is a one-line
     change on the day the measurement says it is affordable.
     """
-    keys, attributes = _subjects(context, postgres, sym.NEEDS_SYMBOL)
+    keys, attributes, asked_for = _subjects(context, postgres, sym.NEEDS_SYMBOL)
     rows: list[dict[str, Any]] = []
     for sid, attr in attributes.items():
         doc = yahoo_search.search(attr["isin"])
@@ -153,15 +184,17 @@ def raw_yahoo_symbol(context: AssetExecutionContext, postgres: Postgres) -> Any:
         row["security_id"] = sid
         row["position"] = 0
         row["asked_with"] = attr["isin"]
+        row["asked_for"] = asked_for[sid]
         row["scheme"] = "symbol"
         rows.append(row)
-    _rung_metadata(context, keys, attributes, len(rows))
+    _rung_metadata(context, keys, attributes, len(rows), asked_for)
     return partitioned.by_partition(context, rows, key=lambda r: str(r["security_id"]))
 
 
 def _map_in_batches(
     context: AssetExecutionContext,
     attributes: dict[str, Any],
+    asked_for: dict[str, str],
     *,
     scheme: str,
     jobs: Any,
@@ -172,6 +205,10 @@ def _map_in_batches(
     the body is a positional array of ten answers and carries nothing that says which of our
     securities job j was asked for. Without it the partition's own file could not be read back on
     its own — which is the whole reason raw is partitioned.
+
+    `asked_for` IS THE SAME KIND OF ADDITION: what the question WAS cannot be derived later, because
+    the evidence it depended on changes the moment stage 2 adopts an answer. Files written before
+    it existed lack the column and were asked only for the rung's own scheme.
     """
     subjects = list(attributes)
     rows: list[dict[str, Any]] = []
@@ -184,6 +221,7 @@ def _map_in_batches(
             row["security_id"] = sid
             row["position"] = position
             row["asked_with"] = attributes[sid]["isin"]
+            row["asked_for"] = asked_for[sid]
             row["scheme"] = scheme
             rows.append(row)
     return rows

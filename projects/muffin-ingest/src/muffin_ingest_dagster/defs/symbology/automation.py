@@ -47,14 +47,21 @@ def new_symbols_needed(context: dg.SensorEvaluationContext, postgres: Postgres) 
     mistake as a backlog view that asks "does the output look right?" — it destroys the one piece
     of state that distinguishes "never asked" from "asked, and the provider had nothing".
 
-    THE POPULATION IS THE UNION of what the rungs need, because they share one grid and
+    THE POPULATION IS THE UNION of what the rungs need (ticker, symbol and, since 2026-09-26,
+    share class), because they share one grid and
     `security_symbology` consumes all three. Each rung then narrows to its own subset inside the
     run, so a subject seeded for its missing local symbol does not cost a Yahoo request it has no
     use for.
     """
     with postgres.connect() as conn:
-        needed = sym.subjects_needing(conn, sym.NEEDS_TICKER) | sym.subjects_needing(
-            conn, sym.NEEDS_SYMBOL
+        needed = (
+            sym.subjects_needing(conn, sym.NEEDS_TICKER)
+            | sym.subjects_needing(conn, sym.NEEDS_SYMBOL)
+            # EVERY EQUITY WITH AN ISIN, ONCE: the share class is identity, and no security held
+            # one before 2026-09-26. Only the local rung asks for it — in the request it already
+            # makes, a hundred subjects to a keyed call — so the subjects this adds cost the other
+            # two rungs nothing: they narrow to their own evidence inside the run.
+            | sym.subjects_needing(conn, sym.NEEDS_SHARE_CLASS)
         )
 
     existing = set(context.instance.get_dynamic_partitions(SYMBOLOGY_PARTITIONS))
