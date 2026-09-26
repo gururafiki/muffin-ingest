@@ -32,6 +32,13 @@ def _known_identifiers(conn: Any) -> dict[str, str]:
         return {f"{kind}:{value}": security_id for kind, value, security_id in cur.fetchall()}
 
 
+def _known_issuers(conn: Any) -> dict[str, str]:
+    """lei → issuer_id for every issuer already held — most minted by the edge with random ids."""
+    with conn.cursor() as cur:
+        cur.execute("select lei, issuer_id::text from market.issuer where lei is not null")
+        return {lei: issuer_id for lei, issuer_id in cur.fetchall()}
+
+
 def _known_countries(conn: Any) -> set[str]:
     with conn.cursor() as cur:
         cur.execute("select iso2 from market.countries")
@@ -106,6 +113,7 @@ def discovered_security(
     raw = partitioned.loaded_rows(raw_nport_filing)
     with postgres.connect() as conn:
         known = _known_identifiers(conn)
+        known_issuers = _known_issuers(conn)
         countries = _known_countries(conn)
         fund_sids = _fund_securities(conn)
         tracked = _tracked_funds(conn)
@@ -121,6 +129,7 @@ def discovered_security(
             secs, idents, issus, ids = nport.plan_holdings(
                 holdings,
                 known_identifiers=known,
+                known_issuers=known_issuers,
                 countries=countries,
                 source=SOURCE,
             )
@@ -274,6 +283,7 @@ def fund_holding(
     parts = partitioned.rows_per_partition(context, raw_nport_filing)
     with postgres.connect() as conn:
         known = _known_identifiers(conn)
+        known_issuers = _known_issuers(conn)
         countries = _known_countries(conn)
         fund_by_series = _fund_security_by_series(conn)
 
@@ -289,7 +299,11 @@ def fund_holding(
             )
             continue
         _, _, _, ids = nport.plan_holdings(
-            holdings, known_identifiers=known, countries=countries, source=SOURCE
+            holdings,
+            known_identifiers=known,
+            known_issuers=known_issuers,
+            countries=countries,
+            source=SOURCE,
         )
         rows += nport.fund_holding_rows(
             holdings,

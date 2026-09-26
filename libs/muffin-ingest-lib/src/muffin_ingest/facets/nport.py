@@ -322,13 +322,20 @@ def country_of(holding: dict[str, Any], known: set[str]) -> str | None:
     return c.upper() if c and known and c.upper() in known else None
 
 
-def issuer_rows(holdings: list[dict[str, Any]], countries: set[str]) -> list[dict[str, Any]]:
+def issuer_rows(
+    holdings: list[dict[str, Any]], countries: set[str], *, known_issuers: dict[str, str]
+) -> list[dict[str, Any]]:
     """One issuer per LEI, name/country from the first holding carrying it.
 
     `market.issuer.lei` is UNIQUE, so two share classes of one company converge on one issuer
     row instead of being merged into one security — which is where the LEI belongs and the reason
-    it is not a security identifier. The issuer_id is STABLE for a given filing (derived from the
-    LEI), so a re-run upserts the same row rather than minting a fresh uuid.
+    it is not a security identifier.
+
+    AN LEI ALREADY HELD KEEPS THE issuer_id IT WAS MINTED WITH (`known_issuers`, `lei → issuer_id`),
+    and only a NEW one gets the id derived from its LEI. The edge function minted random UUIDs for
+    the 9,022 issuers it wrote, so a derived id for a held LEI is a SECOND row for it, and the
+    upsert — keyed on `issuer_id` — inserts it and fails on `issuer_lei_key`. That is what the
+    lane's first production run did (2026-09-26), on Oaktree Specialty Lending's LEI.
     """
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -342,7 +349,7 @@ def issuer_rows(holdings: list[dict[str, Any]], countries: set[str]) -> list[dic
         seen.add(lei)
         out.append(
             {
-                "issuer_id": _stable_issuer_id(lei),
+                "issuer_id": known_issuers.get(lei) or _stable_issuer_id(lei),
                 "name": h.get("name"),
                 "lei": lei,
                 "country_iso2": country_of(h, countries),
@@ -352,12 +359,13 @@ def issuer_rows(holdings: list[dict[str, Any]], countries: set[str]) -> list[dic
 
 
 def _stable_issuer_id(lei: str) -> str:
-    """A deterministic but unguessable issuer_id from the LEI.
+    """A deterministic but unguessable issuer_id for a NEW LEI.
 
     The edge function minted `crypto.randomUUID()` per new issuer, which made a re-run of a
     filing mint a SECOND issuer for the same LEI (the old one left orphaned). Deriving from the
-    LEI makes resolution idempotent: the same filing re-parsed maps the same LEI to the same
-    issuer_id, and the upsert on `lei` (UNIQUE) converges.
+    LEI makes resolution idempotent for issuers this lane creates. It is only for those: an LEI
+    already held resolves to its existing id in `issuer_rows`, because the upsert is keyed on
+    `issuer_id` and a second id for one LEI violates `issuer_lei_key`.
     """
     import hashlib
     import uuid
@@ -369,6 +377,7 @@ def plan_holdings(
     holdings: list[dict[str, Any]],
     *,
     known_identifiers: dict[str, str],
+    known_issuers: dict[str, str],
     countries: set[str],
     source: str,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], list[str | None]]:
@@ -393,7 +402,7 @@ def plan_holdings(
     security_rows: list[dict[str, Any]] = []
     identifier_rows: list[dict[str, Any]] = []
     ids: list[str | None] = []
-    issuers = issuer_rows(holdings, countries)
+    issuers = issuer_rows(holdings, countries, known_issuers=known_issuers)
     issuer_by_lei = {r["lei"]: r["issuer_id"] for r in issuers}
 
     for i, h in enumerate(holdings):
