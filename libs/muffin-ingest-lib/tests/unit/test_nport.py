@@ -309,3 +309,72 @@ def test_the_parsed_ewj_holdings_are_real_names_not_placeholders() -> None:
     names = {h["name"] for h in holdings}
     assert "TOYOTA MOTOR CORPORATION" in names  # verified in the capture; Nintendo is not in it
     assert all(h.get("name") for h in holdings)
+
+
+def test_lookup_rows_learn_each_code_once_and_keep_a_reported_none() -> None:
+    """Every code a filing carries becomes a foreign-key target, once. `couponKind` "None" is a
+    REPORTED kind and is learned like any other; a missing value is not a code."""
+    holdings: list[dict[str, Any]] = [
+        {
+            "currency": "USD",
+            "asset_category": "DBT",
+            "issuer_category": "UST",
+            "coupon_kind": "None",
+        },
+        {
+            "currency": "USD",
+            "asset_category": "DBT",
+            "issuer_category": "CORP",
+            "coupon_kind": None,
+        },
+        {"currency": " ", "asset_category": "EC", "issuer_category": None, "coupon_kind": "Fixed"},
+    ]
+    rows = nport.lookup_rows(holdings)
+    assert rows["currency"] == [{"code": "USD"}]
+    assert rows["asset_category"] == [{"code": "DBT", "name": "DBT"}, {"code": "EC", "name": "EC"}]
+    assert [r["code"] for r in rows["issuer_category"]] == ["CORP", "UST"]
+    assert [r["code"] for r in rows["coupon_kind"]] == ["Fixed", "None"]
+
+
+def test_debt_term_rows_keep_a_zero_coupon_and_skip_what_has_no_terms() -> None:
+    """A zero-coupon bond keeps `0.0`; an equity (no maturity) and an unresolved holding write
+    nothing; two lots of one bond write one row."""
+    holdings: list[dict[str, Any]] = [
+        {
+            "maturity_date": "2030-01-15",
+            "coupon_rate": 0.0,
+            "coupon_kind": "None",
+            "in_default": False,
+        },
+        {
+            "maturity_date": "2030-01-15",
+            "coupon_rate": 0.0,
+            "coupon_kind": "None",
+            "in_default": False,
+        },
+        {"maturity_date": None},
+        {
+            "maturity_date": "2031-06-01",
+            "coupon_rate": 4.25,
+            "coupon_kind": "Fixed",
+            "in_default": True,
+        },
+    ]
+    rows = nport.debt_term_rows(holdings, ["b1", "b1", "eq", None], report_date="2026-06-30")
+    assert rows == [
+        {
+            "security_id": "b1",
+            "maturity_date": "2030-01-15",
+            "coupon_rate": 0.0,
+            "coupon_kind_code": "None",
+            "in_default": False,
+            "as_of": "2026-06-30",
+        }
+    ]
+
+
+def test_debt_term_rows_refuse_ids_that_do_not_line_up_with_the_holdings() -> None:
+    """The ids are POSITIONAL; a list of the wrong length would attach one bond's terms to
+    another, so it is an error rather than a silent truncation."""
+    with pytest.raises(ValueError):
+        nport.debt_term_rows([{"maturity_date": "2030-01-15"}], [], report_date="2026-06-30")

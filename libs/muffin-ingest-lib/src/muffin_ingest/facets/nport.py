@@ -500,6 +500,72 @@ def _add(a: Any, b: Any) -> Any:
     return (a or 0) + (b or 0)
 
 
+#: The lookup tables a filing can introduce a code into, and the holding field carrying it.
+#:
+#: FOREIGN-KEY TARGETS, which is why they are learned before anything is written:
+#: `security.currency_code` and `security.coupon_kind_code`, and `fund_holding`'s currency, asset
+#: category and issuer category all reference them, so ONE code the database has never seen fails
+#: the whole statement. The edge function learned them as it went (`ingest.ts` `learnLookups`), and
+#: no migration seeds a new one — a filing is how a new currency or category arrives. Retiring that
+#: resource without this would have turned the next new code into a failed run.
+LOOKUP_FIELDS: dict[str, str] = {
+    "currency": "currency",
+    "asset_category": "asset_category",
+    "issuer_category": "issuer_category",
+    "coupon_kind": "coupon_kind",
+}
+
+
+def lookup_rows(holdings: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """table → the rows making every code in `holdings` a valid foreign-key target.
+
+    Written `on conflict do nothing`, never `do update`: a name corrected by hand is kept.
+    `currency` has no name to offer (its rows carry a symbol and a history cursor that other lanes
+    own), so it takes the code alone; the category tables take the code as their name, as the
+    edge did. A code is used exactly as filed — `couponKind` is literally `"None"` on some bonds,
+    and that is a REPORTED KIND, not an absence.
+    """
+    out: dict[str, list[dict[str, Any]]] = {}
+    for table, field in LOOKUP_FIELDS.items():
+        codes = sorted({str(h[field]).strip() for h in holdings if str(h.get(field) or "").strip()})
+        if codes:
+            out[table] = [
+                {"code": c} if table == "currency" else {"code": c, "name": c} for c in codes
+            ]
+    return out
+
+
+def debt_term_rows(
+    holdings: list[dict[str, Any]], ids: list[str | None], *, report_date: str
+) -> list[dict[str, Any]]:
+    """The `market.set_debt_terms` payload for one filing: a row per resolved security that the
+    filing reports under a `<debtSec>` block.
+
+    `maturity_date` is the marker for "this holding had debt terms" — an equity or a derivative
+    has none, and must not have these columns cleared. `coupon_rate` is passed through as parsed,
+    so a zero-coupon bond keeps its `0.0` (see `_debt_terms`). Two lots of one bond carry the same
+    terms, so the first is kept. `as_of` is the filing's own report date: the RPC refuses to let an
+    older filing overwrite a newer one, which is what makes the order funds arrive in irrelevant.
+    """
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for holding, sid in zip(holdings, ids, strict=True):
+        if not sid or not holding.get("maturity_date") or sid in seen:
+            continue
+        seen.add(sid)
+        out.append(
+            {
+                "security_id": sid,
+                "maturity_date": holding["maturity_date"],
+                "coupon_rate": holding.get("coupon_rate"),
+                "coupon_kind_code": holding.get("coupon_kind"),
+                "in_default": holding.get("in_default"),
+                "as_of": report_date,
+            }
+        )
+    return out
+
+
 def filing_date_of(body: bytes) -> date:
     """The filing's own report-period end — THE DATE THAT TRAVELS WITH THE DATA.
 

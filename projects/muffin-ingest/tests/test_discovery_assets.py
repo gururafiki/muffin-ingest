@@ -86,6 +86,13 @@ class FakeCursor:
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         text = " ".join(sql.split())
+        # AN RPC IS A WRITE THAT STARTS WITH "select". Recorded like any other write, and answered
+        # with the number of rows it was handed, which is what the real one returns on a database
+        # holding none of these bonds' terms yet.
+        if text.startswith("select market.set_debt_terms"):
+            FakeCursor.writes.append((text, tuple(params)))
+            self.rows = [(len(json.loads(params[0])),)]
+            return
         # READ queries are answered by shape; anything else is a WRITE and is recorded for the
         # assertions on what reached the database. Guarded with `startswith("select")` because the
         # identifier INSERT contains the words of the identifier SELECT.
@@ -360,6 +367,158 @@ def test_a_filing_for_an_untracked_series_publishes_no_holdings(
 
     assert result.success
     assert _Capture.last == []
+
+
+#: A bond fund's filing, cut down to what the debt-term and lookup rules read. Three holdings:
+#: a ZERO-COUPON note whose coupon kind is literally "None", a DEFAULTED bond in a currency and an
+#: issuer category no database has seen, and an equity with no `<debtSec>` at all.
+BOND_FUND_KEY = "999:000099999926000001"
+BOND_FUND_BODY = b"""<edgarSubmission><formData><genInfo>
+<seriesId>S000099999</seriesId><repPdDate>2026-06-30</repPdDate></genInfo><invstOrSecs>
+<invstOrSec><name>T926 Zero Coupon Note</name><title>ZERO 2030</title>
+<identifiers><isin value="US91282CAB12"/></identifiers><balance>1000</balance><units>PA</units>
+<curCd>USD</curCd><valUSD>900</valUSD><pctVal>0.5</pctVal><assetCat>DBT</assetCat>
+<issuerCat>UST</issuerCat><invCountry>US</invCountry>
+<debtSec><maturityDt>2030-01-15</maturityDt><couponKind>None</couponKind>
+<annualizedRt>0.0</annualizedRt><isDefault>N</isDefault></debtSec></invstOrSec>
+<invstOrSec><name>T926 Defaulted Bond</name><title>DEF 2031</title>
+<identifiers><isin value="US91282CCD34"/></identifiers><balance>500</balance><units>PA</units>
+<curCd>XTS</curCd><valUSD>200</valUSD><pctVal>0.2</pctVal><assetCat>DBT</assetCat>
+<issuerCat>T926</issuerCat><invCountry>US</invCountry>
+<debtSec><maturityDt>2031-06-01</maturityDt><couponKind>Fixed</couponKind>
+<annualizedRt>4.25</annualizedRt><isDefault>Y</isDefault></debtSec></invstOrSec>
+<invstOrSec><name>T926 Equity</name><title>EQ</title>
+<identifiers><isin value="US0378331005"/></identifiers><balance>10</balance><units>NS</units>
+<curCd>USD</curCd><valUSD>2000</valUSD><pctVal>1.0</pctVal><assetCat>EC</assetCat>
+<issuerCat>CORP</issuerCat><invCountry>US</invCountry></invstOrSec>
+</invstOrSecs></formData></edgarSubmission>"""
+
+
+def _serve_bond_fund(cik: str, accession: str, **kw: Any) -> Document:
+    return _doc(BOND_FUND_BODY)
+
+
+def test_discovery_writes_the_debt_terms_the_edge_used_to(
+    tmp_path: Path, instance: dg.DagsterInstance
+) -> None:
+    """Bond terms reach `market.set_debt_terms`, which only the edge's `fund-holdings` ever called.
+
+    The parser always read them; the rows were thrown away, so retiring that resource would have
+    stopped bond terms with no error. The zero-coupon note is the one that goes wrong quietly: a
+    truthiness test on the rate turns every such note into a missing rate.
+    """
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    FakeCursor.writes.clear()
+    instance.add_dynamic_partitions(discovery_partitions.NPORT_PARTITIONS, [BOND_FUND_KEY])
+    result = materialise(
+        tmp_path,
+        [discovery_raw.raw_nport_filing, discovery_core.discovered_security],
+        BOND_FUND_KEY,
+        instance=instance,
+        provider=_serve_bond_fund,
+    )
+    assert result.success
+    calls = [params for sql, params in FakeCursor.writes if "set_debt_terms" in sql]
+    assert len(calls) == 1, calls
+    rows = {r["maturity_date"]: r for r in json.loads(calls[0][0])}
+    assert set(rows) == {"2030-01-15", "2031-06-01"}, "the equity has no debt terms to write"
+    zero = rows["2030-01-15"]
+    assert zero["coupon_rate"] == 0.0 and zero["coupon_rate"] is not None, zero
+    assert zero["coupon_kind_code"] == "None", "a REPORTED kind, not an absence"
+    assert zero["in_default"] is False
+    assert rows["2031-06-01"]["in_default"] is True
+    assert {r["as_of"] for r in rows.values()} == {"2026-06-30"}, "the filing's own report date"
+
+    events = result.asset_materializations_for_node(discovery_core.discovered_security.op.name)
+    meta: dict[str, Any] = {k: v.value for k, v in events[0].metadata.items()}
+    assert meta["debt_terms_offered"] == 2 and meta["debt_terms_updated"] == 2, meta
+
+
+def test_discovery_learns_a_new_lookup_code_before_writing_what_references_it(
+    tmp_path: Path, instance: dg.DagsterInstance
+) -> None:
+    """A currency or category the database has never seen is inserted BEFORE the securities that
+    reference it. Written after them, or not at all, the first filing to carry one fails its whole
+    transaction on a foreign key — which is what retiring the edge's `learnLookups` would do."""
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    FakeCursor.writes.clear()
+    instance.add_dynamic_partitions(discovery_partitions.NPORT_PARTITIONS, [BOND_FUND_KEY])
+    result = materialise(
+        tmp_path,
+        [discovery_raw.raw_nport_filing, discovery_core.discovered_security],
+        BOND_FUND_KEY,
+        instance=instance,
+        provider=_serve_bond_fund,
+    )
+    assert result.success
+    order = [sql for sql, _ in FakeCursor.writes]
+
+    def first(prefix: str) -> int:
+        at = next((i for i, sql in enumerate(order) if sql.startswith(prefix)), None)
+        assert at is not None, f"nothing was written by `{prefix}…` — the code is never learned"
+        return at
+
+    security_at = first("insert into market.security ")
+    for table in ("currency", "asset_category", "issuer_category", "coupon_kind"):
+        assert first(f"insert into market.{table} ") < security_at, table
+    currency_params = next(p for sql, p in FakeCursor.writes if "into market.currency " in sql)
+    assert "XTS" in currency_params, currency_params
+    category_params = next(
+        p for sql, p in FakeCursor.writes if "into market.issuer_category " in sql
+    )
+    assert "T926" in category_params, category_params
+    # DO NOTHING, never DO UPDATE: a name corrected by hand must survive the next filing.
+    assert all(
+        "do update" not in sql
+        for sql, _ in FakeCursor.writes
+        if sql.startswith(("insert into market.currency ", "insert into market.asset_category "))
+    )
+
+
+def test_two_filings_in_one_run_holding_one_new_security_mint_it_once(
+    tmp_path: Path, instance: dg.DagsterInstance
+) -> None:
+    """A run covers several filings, and a security new to the database is new to ALL of them.
+
+    Resolution kept one snapshot of what the database knew and gave every filing a copy, so two
+    funds holding the same new bond in one run minted it twice — and the second copy lost its
+    identifiers to the DO NOTHING, leaving a security nothing could resolve to. Two partitions of
+    the same XLK filing make the two rules disagree: 76 securities, or 152.
+    """
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    second = "1064641:000141036826075255"
+    FakeCursor.writes.clear()
+    instance.add_dynamic_partitions(discovery_partitions.NPORT_PARTITIONS, [XLK_KEY, second])
+    saved = sec_nport.primary_doc
+    provider: Any = _serve  # the same patch `materialise` applies, for a two-partition range
+    sec_nport.primary_doc = provider
+    try:
+        result = dg.materialize(
+            [discovery_raw.raw_nport_filing, discovery_core.discovered_security],
+            instance=instance,
+            tags={
+                "dagster/asset_partition_range_start": XLK_KEY,
+                "dagster/asset_partition_range_end": second,
+            },
+            resources={
+                "postgres": FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "postgres_io": _Capture(),
+            },
+        )
+    finally:
+        sec_nport.primary_doc = saved
+    assert result.success
+    events = result.asset_materializations_for_node(discovery_core.discovered_security.op.name)
+    meta: dict[str, Any] = {k: v.value for k, v in events[0].metadata.items()}
+    assert meta["filings"] == 2, meta
+    assert meta["securities"] == 76, f"one XLK filing twice must mint 76 securities, not {meta}"
 
 
 def test_the_placeholder_collapse_is_impossible_at_the_planning_layer() -> None:
