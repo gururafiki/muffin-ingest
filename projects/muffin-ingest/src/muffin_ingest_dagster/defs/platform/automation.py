@@ -29,8 +29,20 @@ import dagster as dg
 #:
 #: KEYED BY NAME so this module imports no family, and guarded rather than trusted: a key that stops
 #: matching leaves the rungs uncovered, and `test_automation_is_evaluable` fails on exactly that.
+#:
+#: `security_symbology` IS HERE TOO, AND ITS CONDITION IS ALL BUILT-INS. It is here because a child
+#: is only scheduled WITH its parents when one sensor evaluates both: `eager()`'s trigger includes
+#: `will_be_requested()`, which sees what THIS evaluation is requesting and nothing another sensor
+#: requests. Evaluated by the default sensor, the adopting step never saw the rungs being requested;
+#: it saw their partitions finish, one materialisation event at a time — `in_progress()` covers a
+#: partition only "until the run has executed it" — so each 30-second tick requested whatever
+#: scattered subset had landed. Measured: 145 runs for 6,981 subjects on 2026-09-24 (107 under 20
+#: partitions each), and ~420 queued for 5,512 on 2026-09-26, at about a minute each on the `sql`
+#: pool, where one run of 200 costs the same minute. Evaluated here, the ladder is requested in one
+#: tick, the backfill runs a rung and the adopting step for the same 200 subjects in ONE run — which
+#: is what an operator's backfill of both already did.
 EVALUATED_IN_THE_CODE_LOCATION = dg.AssetSelection.assets(
-    "raw_figi_ticker", "raw_figi_local_symbol"
+    "raw_figi_ticker", "raw_figi_local_symbol", "security_symbology"
 )
 
 automation = dg.AutomationConditionSensorDefinition(
@@ -43,8 +55,8 @@ automation = dg.AutomationConditionSensorDefinition(
 
 #: `use_user_code_server=True` is Dagster's documented remedy for a custom condition: this sensor is
 #: evaluated in the code location, beside the class. It is Beta and capped at 500 targets; it has
-#: two. RUNNING IN CODE, because a user-defined automation sensor defaults to STOPPED, and a sensor
-#: that ships stopped is a lane that does not exist.
+#: three. RUNNING IN CODE, because a user-defined automation sensor defaults to STOPPED, and a
+#: sensor that ships stopped is a lane that does not exist.
 code_location_automation = dg.AutomationConditionSensorDefinition(
     name="symbology_rungs",
     target=EVALUATED_IN_THE_CODE_LOCATION,
@@ -52,6 +64,7 @@ code_location_automation = dg.AutomationConditionSensorDefinition(
     default_status=dg.DefaultSensorStatus.RUNNING,
     description=(
         "Evaluates conditions the AssetDaemon cannot deserialise — the OpenFIGI rungs' re-ask is a "
-        "Python subclass — inside the code location."
+        "Python subclass — inside the code location, with the step that adopts their answers so "
+        "the ladder is requested in one tick."
     ),
 )

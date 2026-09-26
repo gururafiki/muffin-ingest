@@ -77,13 +77,36 @@ def test_every_condition_the_daemon_cannot_read_is_evaluated_in_the_code_locatio
     )
 
 
-def test_the_adopting_step_stays_on_the_daemon_because_its_condition_is_all_built_ins() -> None:
-    """`security_symbology` is NOT in the code-location sensor, deliberately — it is eager with a
-    `replace(...ignore(...))`, every node of which is Dagster's own. If that ever stops being true
-    the guard above catches it; this says why the asset is absent from `symbology_rungs`."""
-    graph = loaded_defs().resolve_asset_graph()
-    condition = graph.get(dg.AssetKey("security_symbology")).automation_condition
+def test_the_adopting_step_is_evaluated_by_the_sensor_that_requests_its_rungs() -> None:
+    """ONE SENSOR FOR THE WHOLE LADDER, and the reason is `will_be_requested()`.
+
+    `eager()` schedules a child in the SAME tick as a parent being requested — its trigger includes
+    `will_be_requested()` — but that sees only what the evaluating sensor is requesting. Left on the
+    default sensor, `security_symbology` could not see the rungs being requested; it saw their
+    partitions finish one materialisation at a time (`in_progress()` covers a partition only until
+    the run has executed it), and each 30-second tick requested whatever scattered subset had
+    landed: 145 runs for 6,981 subjects on 2026-09-24, ~420 queued for 5,512 on 2026-09-26.
+
+    Its condition is all built-ins, so it could be read by either sensor — which is exactly why
+    nothing else would catch it being moved back.
+    """
+    defs = loaded_defs()
+    graph = defs.resolve_asset_graph()
+    adopting = dg.AssetKey("security_symbology")
+    condition = graph.get(adopting).automation_condition
     assert condition is not None and condition.is_serializable
+
+    rungs = {symbology_raw.raw_figi_ticker.key, symbology_raw.raw_figi_local_symbol.key}
+    owners = [
+        sensor.name
+        for sensor in defs.get_repository_def().sensor_defs
+        if isinstance(sensor, dg.AutomationConditionSensorDefinition)
+        and {adopting, *rungs} <= sensor.asset_selection.resolve(graph)
+    ]
+    assert owners == ["symbology_rungs"], (
+        "the adopting step and its rungs must share one automation sensor, or it is requested in "
+        f"fragments as their partitions land; sensors covering all three: {owners}"
+    )
 
 
 def test_the_code_location_sensor_requests_the_seeded_subjects() -> None:
@@ -100,17 +123,33 @@ def test_the_code_location_sensor_requests_the_seeded_subjects() -> None:
     subjects = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"]
     defs = loaded_defs()
     with dg.instance_for_test() as instance:
-        instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, subjects)
-        result = code_location_automation.evaluate_tick(
+        # A FIRST TICK ON AN EMPTY GRID, which is where production's sensor has long been: the
+        # first evaluation of an `eager()` asset counts as handled, so a single tick on a fresh
+        # cursor would assert on a state production never sees.
+        first = code_location_automation.evaluate_tick(
             dg.build_sensor_context(instance=instance, repository_def=defs.get_repository_def())
         )
+        instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, subjects)
+        result = code_location_automation.evaluate_tick(
+            dg.build_sensor_context(
+                instance=instance, repository_def=defs.get_repository_def(), cursor=first.cursor
+            )
+        )
 
+    requests = [_requested_partitions(r) for r in result.run_requests or []]
     requested: dict[str, set[str]] = {}
-    for request in result.run_requests or []:
-        for key, subset in _requested_partitions(request).items():
+    for request in requests:
+        for key, subset in request.items():
             requested.setdefault(key, set()).update(subset)
     for rung in ("raw_figi_ticker", "raw_figi_local_symbol"):
         assert requested.get(rung) == set(subjects), (rung, requested)
+    # AND THE ADOPTING STEP IN THE SAME REQUEST: one backfill carrying the ladder, which runs a rung
+    # and the step that adopts its answers for the same subjects in one run, instead of the step
+    # trailing its parents' materialisations in fragments.
+    ladder = {"raw_figi_ticker", "raw_figi_local_symbol", "security_symbology"}
+    assert any(set(r) >= ladder and all(r[k] == set(subjects) for k in ladder) for r in requests), (
+        f"the ladder was not requested as one unit: {requests}"
+    )
 
 
 def _requested_partitions(request: dg.RunRequest) -> dict[str, set[str]]:
