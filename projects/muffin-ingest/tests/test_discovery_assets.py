@@ -37,7 +37,11 @@ FUND_ID = "99999999-9999-4999-8999-999999999999"
 #: XLK's holdings resolved the way discovered_security would resolve them on a fresh database.
 XLK_HOLDINGS = nport.parse_holdings(XLK_BODY)
 _XLK_SECS, _XLK_IDENTS, _XLK_ISS, _XLK_IDS = nport.plan_holdings(
-    XLK_HOLDINGS, known_identifiers={}, countries={"US", "JP"}, source="sec-nport"
+    XLK_HOLDINGS,
+    known_identifiers={},
+    known_issuers={},
+    countries={"US", "JP"},
+    source="sec-nport",
 )
 XLK_KNOWN = {f"{i['kind_code']}:{i['value']}": i["security_id"] for i in _XLK_IDENTS}
 
@@ -70,12 +74,14 @@ class FakeCursor:
         known_identifiers: dict[str, str],
         fund_by_series: dict[str, str],
         fund_by_symbol: dict[str, str],
+        known_issuers: dict[str, str] | None = None,
     ) -> None:
         self._countries = countries
         self._tracked = tracked
         self._known = known_identifiers
         self._fund_by_series = fund_by_series
         self._fund_by_symbol = fund_by_symbol
+        self._issuers = known_issuers or {}
         self.rows: list[tuple[Any, ...]] = []
 
     def __enter__(self) -> FakeCursor:
@@ -99,6 +105,8 @@ class FakeCursor:
         if text.startswith("select"):
             if "from market.countries" in text:
                 self.rows = [(iso2,) for iso2, _ in self._countries]
+            elif "from market.issuer where lei is not null" in text:
+                self.rows = list(self._issuers.items())
             # BOTH "kind_code = 'ticker'" queries contain that phrase, so the more specific
             # (series join) must be matched before the generic one.
             elif "t.series_id, i.security_id" in text:
@@ -135,12 +143,14 @@ class FakeConn:
         known_identifiers: dict[str, str] | None = None,
         fund_by_series: dict[str, str] | None = None,
         fund_by_symbol: dict[str, str] | None = None,
+        known_issuers: dict[str, str] | None = None,
     ) -> None:
         self._countries = countries
         self._tracked = tracked
         self._known = known_identifiers or {}
         self._fund_by_series = fund_by_series or {}
         self._fund_by_symbol = fund_by_symbol or {}
+        self._issuers = known_issuers or {}
 
     def cursor(self) -> FakeCursor:
         return FakeCursor(
@@ -149,6 +159,7 @@ class FakeConn:
             known_identifiers=self._known,
             fund_by_series=self._fund_by_series,
             fund_by_symbol=self._fund_by_symbol,
+            known_issuers=self._issuers,
         )
 
     def commit(self) -> None:
@@ -159,6 +170,8 @@ class FakePostgres(Postgres):
     known: ClassVar[dict[str, str]] = {}
     fund_by_series: ClassVar[dict[str, str]] = {}
     fund_by_symbol: ClassVar[dict[str, str]] = {}
+    #: lei → issuer_id already in `market.issuer`, as the edge minted them (random ids).
+    known_issuers: ClassVar[dict[str, str]] = {}
 
     @contextmanager
     def connect(self) -> Iterator[Any]:
@@ -166,6 +179,7 @@ class FakePostgres(Postgres):
             known_identifiers=self.known,
             fund_by_series=self.fund_by_series,
             fund_by_symbol=self.fund_by_symbol,
+            known_issuers=self.known_issuers,
         )
 
 
@@ -536,7 +550,11 @@ def test_the_placeholder_collapse_is_impossible_at_the_planning_layer() -> None:
         b"</nport>"
     )
     _, _, _, ids = nport.plan_holdings(
-        nport.parse_holdings(xml), known_identifiers={}, countries=set(), source="sec-nport"
+        nport.parse_holdings(xml),
+        known_identifiers={},
+        known_issuers={},
+        countries=set(),
+        source="sec-nport",
     )
     assert ids[0] is None and ids[1] is None
     assert ids[2] is not None
@@ -837,3 +855,47 @@ def test_a_finished_walk_does_not_report_a_cursor_to_resume_from(
     assert result.success
     said = _sweep_messages(instance, result)
     assert said == ["venue LN: 1 pages from page 0, resumes at 'c1'"], said
+
+
+def test_an_issuer_the_edge_minted_keeps_its_id(
+    tmp_path: Path, instance: dg.DagsterInstance
+) -> None:
+    """THE LANE'S FIRST PRODUCTION RUN, 2026-09-26: `issuer_lei_key` on Oaktree's LEI. The edge
+    minted random ids for the 9,022 issuers it wrote, so an id derived from a held LEI is a second
+    row for it, and the upsert keyed on `issuer_id` inserts it into a table where the LEI is unique.
+
+    Here Adobe's LEI (XLK's first holding) is already held under an edge-style id. The issuer write
+    must carry that id and never the derived one, and the new Adobe security must point at it."""
+    import uuid
+
+    from muffin_ingest.facets import nport
+
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    adobe = "FU4LY2G4933NH2E1CP29"
+    held = str(uuid.uuid4())
+    FakeCursor.writes.clear()
+    FakePostgres.known_issuers = {adobe: held}
+    try:
+        instance.add_dynamic_partitions(discovery_partitions.NPORT_PARTITIONS, [XLK_KEY])
+        result = materialise(
+            tmp_path,
+            [discovery_raw.raw_nport_filing, discovery_core.discovered_security],
+            XLK_KEY,
+            instance=instance,
+            provider=_serve,
+        )
+    finally:
+        FakePostgres.known_issuers = {}
+    assert result.success
+
+    issuer_params = [p for sql, ps in FakeCursor.writes if "into market.issuer " in sql for p in ps]
+    assert held in issuer_params, "the held issuer was not written under its own id"
+    assert nport._stable_issuer_id(adobe) not in issuer_params, (
+        "a derived id was offered for an LEI already held: the row that fails issuer_lei_key"
+    )
+    security_params = [
+        p for sql, ps in FakeCursor.writes if "into market.security " in sql for p in ps
+    ]
+    assert held in security_params, "the new Adobe security does not point at the held issuer"

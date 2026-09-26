@@ -104,7 +104,7 @@ def test_a_holding_whose_ONLY_identifier_is_the_placeholder_collapses_without_th
     )
     holdings = nport.parse_holdings(xml)
     securities, identifiers, _, ids = nport.plan_holdings(
-        holdings, known_identifiers={}, countries=set(), source="sec-nport"
+        holdings, known_identifiers={}, known_issuers={}, countries=set(), source="sec-nport"
     )
     # The two placeholder-only companies are SKIPPED, not invented; Apple resolves to its own id.
     assert ids[0] is None and ids[1] is None, ids
@@ -194,6 +194,7 @@ def test_a_known_identifier_reuses_its_security_and_adds_no_row() -> None:
     securities, identifiers, _, ids = nport.plan_holdings(
         holdings,
         known_identifiers={"isin:US0378331005": "11111111-1111-1111-1111-111111111111"},
+        known_issuers={},
         countries={"US"},
         source="sec-nport",
     )
@@ -215,7 +216,7 @@ def test_a_new_holding_creates_its_security_with_identifiers_from_the_filing() -
         }
     ]
     securities, identifiers, issuers, ids = nport.plan_holdings(
-        holdings, known_identifiers={}, countries={"US"}, source="sec-nport"
+        holdings, known_identifiers={}, known_issuers={}, countries={"US"}, source="sec-nport"
     )
     sid = ids[0]
     assert sid is not None
@@ -234,7 +235,7 @@ def test_an_unknown_asset_category_falls_back_to_units_and_then_other() -> None:
         {"name": "B", "isin": "US0378331013", "asset_category": "CURRENCY", "units": "BT"},
     ]
     securities, _, _, _ = nport.plan_holdings(
-        holdings, known_identifiers={}, countries=set(), source="sec-nport"
+        holdings, known_identifiers={}, known_issuers={}, countries=set(), source="sec-nport"
     )
     assert [s["security_type_code"] for s in securities] == ["equity", "other"]
 
@@ -246,12 +247,12 @@ def test_a_re_run_of_the_same_filing_is_a_no_op() -> None:
         {"name": "Apple Inc", "isin": "US0378331005", "country": "US", "asset_category": "EC"}
     ]
     _, first_identifiers, _, first_ids = nport.plan_holdings(
-        holdings, known_identifiers={}, countries={"US"}, source="sec-nport"
+        holdings, known_identifiers={}, known_issuers={}, countries={"US"}, source="sec-nport"
     )
     # Pretend the whole file was ingested already: pass the identifiers it would have created.
     known = {f"{i['kind_code']}:{i['value']}": i["security_id"] for i in first_identifiers}
     sec2, id2, _, ids2 = nport.plan_holdings(
-        holdings, known_identifiers=known, countries={"US"}, source="sec-nport"
+        holdings, known_identifiers=known, known_issuers={}, countries={"US"}, source="sec-nport"
     )
     assert sec2 == [] and id2 == []
     assert ids2 == [first_ids[0]]
@@ -276,7 +277,7 @@ def test_fund_holding_rows_combine_two_lots_of_one_security() -> None:
         {"name": "Other", "isin": "JP3102000001", "weight": None, "balance": None},
     ]
     _, _, _, ids = nport.plan_holdings(
-        holdings, known_identifiers={}, countries=set(), source="sec-nport"
+        holdings, known_identifiers={}, known_issuers={}, countries=set(), source="sec-nport"
     )
     rows = nport.fund_holding_rows(
         holdings,
@@ -294,7 +295,7 @@ def test_fund_holding_rows_combine_two_lots_of_one_security() -> None:
 def test_a_holding_resolved_to_nothing_is_omitted_from_the_snapshot() -> None:
     holdings = [{"name": "Unidentifiable", "cusip": "000000000"}]
     _, _, _, ids = nport.plan_holdings(
-        holdings, known_identifiers={}, countries=set(), source="sec-nport"
+        holdings, known_identifiers={}, known_issuers={}, countries=set(), source="sec-nport"
     )
     assert (
         nport.fund_holding_rows(
@@ -378,3 +379,45 @@ def test_debt_term_rows_refuse_ids_that_do_not_line_up_with_the_holdings() -> No
     another, so it is an error rather than a silent truncation."""
     with pytest.raises(ValueError):
         nport.debt_term_rows([{"maturity_date": "2030-01-15"}], [], report_date="2026-06-30")
+
+
+def test_an_lei_already_held_keeps_the_issuer_id_it_was_minted_with() -> None:
+    """THE LANE'S FIRST PRODUCTION RUN FAILED HERE, 2026-09-26: `issuer_lei_key` on Oaktree
+    Specialty Lending's LEI. The edge minted random ids for the 9,022 issuers it wrote; this
+    planner derived an id from each LEI, so for a held LEI it offered a SECOND row, and the upsert,
+    keyed on `issuer_id`, inserted it into a table where the LEI is unique.
+
+    Two holdings make the rules disagree: one LEI is held (it must keep `held-issuer`, and the new
+    security issued by it must point there), the other is new (it gets the derived id, so a re-run
+    of the filing converges on the same row).
+    """
+    held_lei, new_lei = "549300J6MGCEU5928620", "HWUPKR0MPOU8FGXBT394"
+    holdings = [
+        {
+            "name": "Oaktree Specialty Lending",
+            "isin": "US67401P4054",
+            "country": "US",
+            "asset_category": "EC",
+            "units": "NS",
+            "lei": held_lei,
+        },
+        {
+            "name": "Apple Inc",
+            "isin": "US0378331005",
+            "country": "US",
+            "asset_category": "EC",
+            "units": "NS",
+            "lei": new_lei,
+        },
+    ]
+    securities, _, issuers, ids = nport.plan_holdings(
+        holdings,
+        known_identifiers={},
+        known_issuers={held_lei: "held-issuer"},
+        countries={"US"},
+        source="sec-nport",
+    )
+    by_lei = {r["lei"]: r["issuer_id"] for r in issuers}
+    assert by_lei[held_lei] == "held-issuer"
+    assert by_lei[new_lei] == nport._stable_issuer_id(new_lei)
+    assert {s["security_id"]: s["issuer_id"] for s in securities}[ids[0]] == "held-issuer"
