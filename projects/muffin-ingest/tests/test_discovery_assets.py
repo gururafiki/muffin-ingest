@@ -92,6 +92,10 @@ class FakeCursor:
 
     def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
         text = " ".join(sql.split())
+        # A `uuid` COLUMN COMES BACK AS `uuid.UUID` FROM PSYCOPG, unless the query casts it. The
+        # fake used to hand back strings, so no test could see a read id reach `json.dumps` — the
+        # lane's third production run died on exactly that.
+        uncast = "security_id::text" not in text
         # AN RPC IS A WRITE THAT STARTS WITH "select". Recorded like any other write, and answered
         # with the number of rows it was handed, which is what the real one returns on a database
         # holding none of these bonds' terms yet.
@@ -110,16 +114,20 @@ class FakeCursor:
             # BOTH "kind_code = 'ticker'" queries contain that phrase, so the more specific
             # (series join) must be matched before the generic one.
             elif "t.series_id, i.security_id" in text:
-                self.rows = [(series, sid) for series, sid in self._fund_by_series.items()]
+                self.rows = [
+                    (series, _as_read(sid, uncast)) for series, sid in self._fund_by_series.items()
+                ]
             elif "kind_code = 'ticker'" in text:
-                self.rows = [(symbol, sid) for symbol, sid in self._fund_by_symbol.items()]
+                self.rows = [
+                    (symbol, _as_read(sid, uncast)) for symbol, sid in self._fund_by_symbol.items()
+                ]
             elif "from market.tracked_fund" in text:
                 self.rows = list(self._tracked)
             elif "market.security_identifier" in text:
                 self.rows = []
                 for key, sid in self._known.items():
                     kind, value = key.split(":", 1)
-                    self.rows.append((kind, value, sid))
+                    self.rows.append((kind, value, _as_read(sid, uncast)))
             else:
                 self.rows = []
         else:
@@ -130,6 +138,18 @@ class FakeCursor:
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self.rows[0] if self.rows else None
+
+
+def _as_read(sid: str, uncast: bool) -> Any:
+    """What psycopg would return for a `uuid` column: a `uuid.UUID` unless the query cast it."""
+    import uuid
+
+    if not uncast:
+        return sid
+    try:
+        return uuid.UUID(sid)
+    except ValueError:
+        return sid  # a test id that is not uuid-shaped; nothing real reads one
 
 
 class FakeConn:
@@ -899,3 +919,36 @@ def test_an_issuer_the_edge_minted_keeps_its_id(
         p for sql, ps in FakeCursor.writes if "into market.security " in sql for p in ps
     ]
     assert held in security_params, "the new Adobe security does not point at the held issuer"
+
+
+def test_debt_terms_for_bonds_already_held_reach_the_rpc(
+    tmp_path: Path, instance: dg.DagsterInstance
+) -> None:
+    """PRODUCTION'S SHAPE, which the test above does not reach: every bond ALREADY HELD, so every
+    debt-term row carries an id READ from the database. The lane's third run (2026-09-26, AGG) died
+    in `set_debt_terms` with `Object of type UUID is not JSON serializable`: psycopg returns a
+    `uuid` column as `uuid.UUID`, the ids this lane mints are strings, and only the read ones broke
+    `json.dumps`. The fake now returns what psycopg returns."""
+    import uuid
+
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    held = {"isin:US91282CAB12": str(uuid.uuid4()), "isin:US91282CCD34": str(uuid.uuid4())}
+    FakeCursor.writes.clear()
+    FakePostgres.known = held
+    try:
+        instance.add_dynamic_partitions(discovery_partitions.NPORT_PARTITIONS, [BOND_FUND_KEY])
+        result = materialise(
+            tmp_path,
+            [discovery_raw.raw_nport_filing, discovery_core.discovered_security],
+            BOND_FUND_KEY,
+            instance=instance,
+            provider=_serve_bond_fund,
+        )
+    finally:
+        FakePostgres.known = {}
+    assert result.success
+    calls = [params for sql, params in FakeCursor.writes if "set_debt_terms" in sql]
+    assert len(calls) == 1, calls
+    assert {r["security_id"] for r in json.loads(calls[0][0])} == set(held.values())
