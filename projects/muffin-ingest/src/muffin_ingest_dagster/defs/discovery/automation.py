@@ -62,6 +62,10 @@ def _directory_map() -> dict[str, tuple[str, str]]:
 #: unmaterialised partition) and asks no provider for anything; the fetch stays an operator's call,
 #: which is what `new_exchange_sweeps`' own note below has always said.
 #:
+#: CHANGED FOR FILINGS ON 2026-09-26: `raw_nport_filing` now carries `on_missing()`, because the
+#: lane replaces the edge's `fund-holdings` and had never once run by hand. A filing costs one SEC
+#: request a quarter. The venue sweep stays an operator's call — a pass is hours of OpenFIGI.
+#:
 #: That distinction is the whole reason these two go on while `new_symbols_needed` does not. The
 #: symbology sensor seeds a grid whose rungs carry `AutomationCondition.missing()`, so the daemon
 #: would begin asking the provider the moment the keys existed. These cannot: there is no condition
@@ -83,10 +87,11 @@ def _directory_map() -> dict[str, tuple[str, str]]:
 def new_nport_filings(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:
     """FTS per enabled series for filings we have not queued yet.
 
-    ADDS KEYS AND REQUESTS NOTHING — a new filing becomes VISIBLE as an unmaterialised partition
-    rather than launching a run (the `new_securities_need_history` shape). The accession is fetched
-    so the key can carry the directory CIK, which the Archives path needs and the accession alone
-    cannot supply.
+    ADDS KEYS AND REQUESTS NOTHING ITSELF; since 2026-09-26 the asset's `on_missing()` fetches a key
+    the moment it is added, and `discovered_security` and `fund_holding` follow in the same run.
+    Until then a new filing only became VISIBLE, and nothing ever fetched one: the lane had never
+    run. The accession is fetched so the key can carry the directory CIK, which the Archives path
+    needs and the accession alone cannot supply.
     """
     import datetime as _dt
 
