@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import re
+from urllib.parse import urlparse
 
 
 def _env(name: str, default: str) -> str:
@@ -64,27 +65,34 @@ def raw_root() -> str:
     return _env("MUFFIN_RAW_ROOT", "/var/lib/muffin-ingest/raw")
 
 
-#: The cache's own locations, which are what `provider` must name. Kept here rather than inferred,
-#: because the proxy's path is the contract and a typo silently becomes a direct call — the failure
-#: mode that "keeps working and silently bypasses the cache for ever".
-CACHE_LOCATIONS = frozenset(
-    {
-        "sec",
-        "sec-data",
-        "sec-fts",
-        "openfigi",
-        "dart",
-        "nse",
-        "nse-archives",
-        "cninfo",
-        "cninfo-static",
-        "wikidata",
-        "yahoo",
-        "alphavantage",
-        "tiingo",
-        "openbb",
-    }
-)
+#: The cache's own locations, which are what `provider` must name, and the host each one PROXIES
+#: TO. Kept here rather than inferred, because the proxy's path is the contract and a typo silently
+#: becomes a direct call — the failure mode that "keeps working and silently bypasses the cache for
+#: ever". The hosts are the `set $up` of each location in muffin-deployment's
+#: `stack/proxy/nginx.conf`, read off that file on 2026-09-26.
+#:
+#: THE HOST IS PART OF THE CONTRACT, AND LEAVING IT OUT COST THE FILING LANE ITS FIRST RUN. The
+#: N-PORT fetch named `sec-data` with `https://www.sec.gov` as its origin. Without the cache that is
+#: right; through it, `sec-data` proxies to `data.sec.gov`, which serves no EDGAR archive — the
+#: first production fetch (2026-09-26) was a 404 for a document SEC serves on `www.sec.gov`. Every
+#: test passed, because none routes through the cache. A name that exists and serves ANOTHER host
+#: is the same defect as a name that does not exist.
+CACHE_LOCATIONS: dict[str, str] = {
+    "sec": "www.sec.gov",
+    "sec-data": "data.sec.gov",
+    "sec-fts": "efts.sec.gov",
+    "openfigi": "api.openfigi.com",
+    "dart": "opendart.fss.or.kr",
+    "nse": "www.nseindia.com",
+    "nse-archives": "nsearchives.nseindia.com",
+    "cninfo": "www.cninfo.com.cn",
+    "cninfo-static": "static.cninfo.com.cn",
+    "wikidata": "query.wikidata.org",
+    "yahoo": "query2.finance.yahoo.com",
+    "alphavantage": "www.alphavantage.co",
+    "tiingo": "api.tiingo.com",
+    "openbb": "openbb-api",
+}
 
 
 def provider_base(provider: str, real_origin: str) -> str:
@@ -105,19 +113,29 @@ def provider_base(provider: str, real_origin: str) -> str:
     a fix at one call site.
 
     A provider name that is not one of the proxy's own locations raises rather than quietly
-    producing a URL the cache will 404 on.
+    producing a URL the cache will 404 on — and so does a location that proxies to a DIFFERENT host
+    from `real_origin`, checked on every call rather than only when the cache is configured, so a
+    test that builds the URL without the cache still sees it.
     """
+    if provider not in CACHE_LOCATIONS:
+        raise RuntimeError(
+            f"{provider!r} is not one of http-cache's locations ({sorted(CACHE_LOCATIONS)}); "
+            f"a name the proxy does not serve becomes a 404 wearing a cache miss's clothes"
+        )
+    origin_host = urlparse(real_origin).hostname
+    if origin_host != CACHE_LOCATIONS[provider]:
+        raise RuntimeError(
+            f"http-cache's {provider!r} location proxies to {CACHE_LOCATIONS[provider]}, and this "
+            f"call's origin is {origin_host}: through the cache it would reach a different host "
+            f"than without it"
+        )
+
     override = os.environ.get(f"{provider.upper().replace('-', '_')}_BASE_URL")
     if override:
         return override
 
     cache = os.environ.get("HTTP_CACHE_URL")
     if cache:
-        if provider not in CACHE_LOCATIONS:
-            raise RuntimeError(
-                f"{provider!r} is not one of http-cache's locations ({sorted(CACHE_LOCATIONS)}); "
-                f"a name the proxy does not serve becomes a 404 wearing a cache miss's clothes"
-            )
         return f"{cache.rstrip('/')}/{provider}"
 
     return real_origin

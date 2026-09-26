@@ -20,7 +20,10 @@ from muffin_ingest import settings
 from muffin_ingest.providers.documents import Document, _get
 
 #: Yahoo's own host. `settings.provider_base` points it at http-cache when one is configured.
-REAL_ORIGIN = "https://query1.finance.yahoo.com"
+#: `query2`, the host the cache's `yahoo` location proxies to, so the call reaches the same host
+#: with the cache and without it. `query1` serves the same search; the two differed until
+#: 2026-09-26, when `provider_base` began refusing a location that serves another host.
+REAL_ORIGIN = "https://query2.finance.yahoo.com"
 
 #: The endpoint answers differently without a browser-like User-Agent.
 BROWSER_UA = "Mozilla/5.0 (compatible; muffin-market-data)"

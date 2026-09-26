@@ -74,6 +74,8 @@ def primary_doc(cik: str, accession: str, timeout_s: float = 90.0) -> Document:
     is the full document. This is why the Discovery sensor queues `f"{cik}:{accession}"` partition
     keys rather than bare accessions.
     """
-    base = settings.provider_base("sec-data", "https://www.sec.gov")
+    # `sec`, the location that proxies to www.sec.gov, where EDGAR's archives live. This named
+    # `sec-data` (data.sec.gov) until 2026-09-26 and 404'd on the lane's first production fetch.
+    base = settings.provider_base("sec", "https://www.sec.gov")
     url = f"{base}/Archives/edgar/data/{int(cik)}/{accession}/primary_doc.xml"
     return _get(url, provider="sec", headers=_headers(), timeout_s=timeout_s)
