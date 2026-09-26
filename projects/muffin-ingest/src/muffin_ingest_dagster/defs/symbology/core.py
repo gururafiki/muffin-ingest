@@ -53,6 +53,13 @@ def _venues(conn: Any) -> dict[str, list[tuple[str, str]]]:
     # `any_deps_updated` still watches all three, so an operator's later Yahoo backfill re-fires
     # this step and the new evidence is adopted; `any_deps_in_progress` still covers all three, so
     # a backfill in flight is waited for rather than raced.
+    #
+    # AND IT IS EVALUATED BY THE RUNGS' SENSOR, `symbology_rungs`, not the default one. Its trigger
+    # includes `will_be_requested()`, which only sees what the SAME sensor requests: on the default
+    # sensor it saw the rungs' partitions finish one at a time and was requested in fragments —
+    # ~420 runs queued for 5,512 subjects on 2026-09-26. With its rungs, it is requested in their
+    # tick and runs beside them. An operator's backfill of a rung should include this step for the
+    # same reason (`platform/automation.py`).
     automation_condition=dg.AutomationCondition.eager().replace(
         "any_deps_missing",
         dg.AutomationCondition.any_deps_missing().ignore(
