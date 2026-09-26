@@ -24,9 +24,17 @@ SOURCE = "sec-nport"
 
 
 def _known_identifiers(conn: Any) -> dict[str, str]:
+    """`kind:value` → security_id, AS TEXT.
+
+    PSYCOPG RETURNS A `uuid` COLUMN AS `uuid.UUID`, and every id this lane mints is a `str`, so an
+    uncast read mixes the two types in one mapping. The mix only surfaces where an id is SERIALISED:
+    the lane's third production run (2026-09-26) died in `set_debt_terms` with `Object of type UUID
+    is not JSON serializable` — AGG's bonds were all known, so every debt-term row carried a read
+    id, while every test fed strings. Cast at the read, so one type flows through the lane.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "select kind_code, value, security_id from market.security_identifier "
+            "select kind_code, value, security_id::text from market.security_identifier "
             "where kind_code in ('isin', 'cusip', 'figi', 'other')"
         )
         return {f"{kind}:{value}": security_id for kind, value, security_id in cur.fetchall()}
@@ -60,7 +68,7 @@ def _fund_securities(conn: Any) -> dict[str, str]:
     """tracked_fund.symbol → the fund's security_id, via its ticker identifier."""
     with conn.cursor() as cur:
         cur.execute(
-            "select i.value, i.security_id from market.security_identifier i "
+            "select i.value, i.security_id::text from market.security_identifier i "
             "join market.tracked_fund t on t.symbol = i.value "
             "where i.kind_code = 'ticker'"
         )
@@ -71,7 +79,7 @@ def _fund_security_by_series(conn: Any) -> dict[str, str]:
     """series_id → the fund's security_id, so a filing's own `<seriesId>` picks its fund."""
     with conn.cursor() as cur:
         cur.execute(
-            "select t.series_id, i.security_id from market.tracked_fund t "
+            "select t.series_id, i.security_id::text from market.tracked_fund t "
             "join market.security_identifier i on i.value = t.symbol "
             "where i.kind_code = 'ticker' and t.series_id is not null"
         )
