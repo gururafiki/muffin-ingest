@@ -23,7 +23,7 @@
   },
   "assets": {
     "discovered_security": {
-      "automation_condition": null,
+      "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
         "max_partitions_per_run": 20,
         "type": "MULTI_RUN"
@@ -472,7 +472,7 @@
       "tags": {}
     },
     "raw_nport_filing": {
-      "automation_condition": null,
+      "automation_condition": "on_missing (f6d36e4d73d5)",
       "backfill_policy": {
         "max_partitions_per_run": 20,
         "type": "MULTI_RUN"

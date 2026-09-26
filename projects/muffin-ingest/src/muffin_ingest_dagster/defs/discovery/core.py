@@ -86,6 +86,10 @@ def _exchanges(conn: Any) -> dict[str, tuple[str | None, str | None]]:
     group_name="universe",
     kinds={"postgres"},
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=45)),
+    # EAGER, ON THE SAME SENSOR AS THE FILING AND THE HOLDINGS, so a new filing's three steps are
+    # requested in one tick (`will_be_requested()` sees only its own sensor's requests) and run
+    # together, rather than trailing the fetch one landed partition at a time.
+    automation_condition=dg.AutomationCondition.eager(),
     description="The securities a filing names, resolved onto the identity tables.",
 )
 def discovered_security(

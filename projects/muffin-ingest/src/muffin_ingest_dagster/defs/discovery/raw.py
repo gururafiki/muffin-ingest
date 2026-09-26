@@ -83,6 +83,16 @@ def raw_fund_directory(context: AssetExecutionContext) -> list[dict[str, Any]]:
     group_name="universe",
     kinds={"sec", "parquet"},
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=45)),
+    # A NEW FILING IS FETCHED ONCE, AUTOMATICALLY. This lane shipped with no condition — the
+    # sensor made a filing VISIBLE and an operator fetched it — and measured 2026-09-26 it had
+    # therefore never run at all: `raw_nport_filing`, `discovered_security` and `fund_holding` had
+    # zero materialisations while the edge's `fund-holdings` kept writing every table they own.
+    # Retiring that resource needs this lane to run on its own, and the cost is one SEC request per
+    # fund per quarter. `on_missing()` requests a partition when it BECOMES missing — a key the
+    # sensor adds — and never again for it: a failed fetch is re-run by an operator, not every 30
+    # seconds against SEC. Keys already in the grid when this shipped are not requested either
+    # (measured on 1.13.22 for `on_missing()`, 2026-09-20); they were backfilled by hand.
+    automation_condition=dg.AutomationCondition.on_missing(),
     description="One N-PORT primary_doc.xml, exactly as SEC served it.",
 )
 def raw_nport_filing(context: AssetExecutionContext) -> Any:
