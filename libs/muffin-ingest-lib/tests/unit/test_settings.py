@@ -4,6 +4,9 @@ import pytest
 
 from muffin_ingest import settings
 
+#: The origin every Yahoo provider names, and the host the cache's `yahoo` location proxies to.
+YAHOO = "https://query2.finance.yahoo.com"
+
 
 def test_database_url_refuses_to_guess(monkeypatch: pytest.MonkeyPatch) -> None:
     """No default. A writer silently pointed at the wrong database is worse than one that stops."""
@@ -14,25 +17,27 @@ def test_database_url_refuses_to_guess(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_a_provider_defaults_to_its_real_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     """Which is what keeps the cache removable without an outage."""
-    monkeypatch.delenv("SEC_BASE_URL", raising=False)
-    assert settings.provider_base("sec", "https://data.sec.gov") == "https://data.sec.gov"
+    monkeypatch.delenv("SEC_DATA_BASE_URL", raising=False)
+    monkeypatch.delenv("HTTP_CACHE_URL", raising=False)
+    assert settings.provider_base("sec-data", "https://data.sec.gov") == "https://data.sec.gov"
 
 
 def test_an_override_wins(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEC_BASE_URL", "http://http-cache:8080/sec-data")
+    monkeypatch.setenv("SEC_DATA_BASE_URL", "http://http-cache:8080/sec-data")
     assert (
-        settings.provider_base("sec", "https://data.sec.gov") == "http://http-cache:8080/sec-data"
+        settings.provider_base("sec-data", "https://data.sec.gov")
+        == "http://http-cache:8080/sec-data"
     )
 
 
 def test_a_hyphenated_provider_maps_to_an_underscored_variable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`alpha-vantage` reads `ALPHA_VANTAGE_BASE_URL`; a dot or a hyphen in an env name is not
-    portable, and getting this wrong would silently fall back to the origin and bypass the cache."""
-    monkeypatch.setenv("ALPHA_VANTAGE_BASE_URL", "http://http-cache:8080/alphavantage")
-    got = settings.provider_base("alpha-vantage", "https://www.alphavantage.co")
-    assert got == "http://http-cache:8080/alphavantage"
+    """`sec-data` reads `SEC_DATA_BASE_URL`; a dot or a hyphen in an env name is not portable,
+    and getting this wrong would silently fall back to the origin and bypass the cache."""
+    monkeypatch.setenv("SEC_DATA_BASE_URL", "http://elsewhere/sec-data")
+    got = settings.provider_base("sec-data", "https://data.sec.gov")
+    assert got == "http://elsewhere/sec-data"
 
 
 def test_settings_are_read_at_call_time_not_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -95,11 +100,11 @@ def test_the_cache_url_the_stack_actually_sets_is_the_one_that_works(
     """
     monkeypatch.delenv("YAHOO_BASE_URL", raising=False)
     monkeypatch.setenv("HTTP_CACHE_URL", "http://http-cache:8080")
-    assert settings.provider_base("yahoo", "https://real") == "http://http-cache:8080/yahoo"
+    assert settings.provider_base("yahoo", YAHOO) == "http://http-cache:8080/yahoo"
 
     # A trailing slash is the obvious way to configure it and must not produce a double slash.
     monkeypatch.setenv("HTTP_CACHE_URL", "http://http-cache:8080/")
-    assert settings.provider_base("yahoo", "https://real") == "http://http-cache:8080/yahoo"
+    assert settings.provider_base("yahoo", YAHOO) == "http://http-cache:8080/yahoo"
 
 
 def test_a_per_provider_override_still_wins(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -107,7 +112,7 @@ def test_a_per_provider_override_still_wins(monkeypatch: pytest.MonkeyPatch) -> 
     somewhere else — a local mock, a second cache — must be able to."""
     monkeypatch.setenv("HTTP_CACHE_URL", "http://http-cache:8080")
     monkeypatch.setenv("YAHOO_BASE_URL", "http://elsewhere")
-    assert settings.provider_base("yahoo", "https://real") == "http://elsewhere"
+    assert settings.provider_base("yahoo", YAHOO) == "http://elsewhere"
 
 
 def test_with_no_cache_configured_the_default_is_the_REAL_origin(
@@ -116,7 +121,7 @@ def test_with_no_cache_configured_the_default_is_the_REAL_origin(
     """What makes the cache removable without an outage — the property the whole scheme rests on."""
     monkeypatch.delenv("HTTP_CACHE_URL", raising=False)
     monkeypatch.delenv("YAHOO_BASE_URL", raising=False)
-    assert settings.provider_base("yahoo", "https://real") == "https://real"
+    assert settings.provider_base("yahoo", YAHOO) == YAHOO
 
 
 def test_a_provider_the_proxy_does_not_serve_is_REFUSED_rather_than_404d(
@@ -128,7 +133,54 @@ def test_a_provider_the_proxy_does_not_serve_is_REFUSED_rather_than_404d(
     monkeypatch.setenv("HTTP_CACHE_URL", "http://http-cache:8080")
     monkeypatch.delenv("SEC_DATA_BASE_URL", raising=False)
     with pytest.raises(RuntimeError, match="not one of http-cache's locations"):
-        settings.provider_base("yahooo", "https://real")
+        settings.provider_base("yahooo", YAHOO)
 
     # And the real ones are accepted, or the guard would refuse everything.
-    assert settings.provider_base("sec-data", "https://real").endswith("/sec-data")
+    assert settings.provider_base("sec-data", "https://data.sec.gov").endswith("/sec-data")
+
+
+def test_a_location_that_proxies_to_another_host_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FILING LANE'S FIRST PRODUCTION FETCH, 2026-09-26: the N-PORT document named `sec-data`
+    with `https://www.sec.gov` as its origin. Without the cache the URL was right; through it,
+    `sec-data` proxies to `data.sec.gov`, which serves no EDGAR archive, and SEC answered 404 for a
+    document that exists. Refused on every call, with or without the cache configured, so any test
+    that builds the URL sees it — none of them routes through the cache."""
+    for cache in (None, "http://http-cache:8080"):
+        if cache:
+            monkeypatch.setenv("HTTP_CACHE_URL", cache)
+        else:
+            monkeypatch.delenv("HTTP_CACHE_URL", raising=False)
+        with pytest.raises(RuntimeError, match=r"proxies to data\.sec\.gov"):
+            settings.provider_base("sec-data", "https://www.sec.gov")
+    # And the pair that is right is accepted, or the guard would refuse everything.
+    assert settings.provider_base("sec", "https://www.sec.gov").endswith("/sec")
+
+
+def test_every_provider_names_the_location_that_serves_its_origin() -> None:
+    """STRUCTURAL, OVER EVERY CALL SITE, because the defect lives in a pair of literals that no
+    behaviour test reaches without the cache in front: each `provider_base(<location>, <origin>)`
+    in the providers must name a location whose upstream host IS the origin's host. A constant
+    origin (`REAL_ORIGIN`) is resolved from the module rather than skipped."""
+    import importlib
+    import re
+    from pathlib import Path
+    from urllib.parse import urlparse
+
+    import muffin_ingest.providers as providers_pkg
+
+    call = re.compile(r'provider_base\(\s*"([a-z0-9-]+)",\s*("[^"]+"|[A-Z_]+)\s*\)')
+    checked = 0
+    for path in sorted(Path(providers_pkg.__file__).parent.glob("*.py")):
+        module = importlib.import_module(f"muffin_ingest.providers.{path.stem}")
+        for location, origin in call.findall(path.read_text()):
+            url = origin.strip('"') if origin.startswith('"') else getattr(module, origin)
+            host = urlparse(url).hostname
+            assert settings.CACHE_LOCATIONS.get(location) == host, (
+                f"{path.name}: `{location}` proxies to {settings.CACHE_LOCATIONS.get(location)}, "
+                f"and the call's origin is {host}"
+            )
+            checked += 1
+    # A pattern that stops matching certifies nothing: there are nine call sites today.
+    assert checked >= 9, checked
