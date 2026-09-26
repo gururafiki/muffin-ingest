@@ -109,17 +109,36 @@ def discovered_security(
         security_rows: list[dict[str, Any]] = []
         identifier_rows: list[dict[str, Any]] = []
         issuer_rows: list[dict[str, Any]] = []
+        debt_rows: dict[str, dict[str, Any]] = {}
+        lookups: dict[str, dict[str, dict[str, Any]]] = {}
         for row in raw:
-            holdings = nport.parse_holdings(bytes(row["body"]))
-            secs, idents, issus, _ = nport.plan_holdings(
+            body = bytes(row["body"])
+            holdings = nport.parse_holdings(body)
+            secs, idents, issus, ids = nport.plan_holdings(
                 holdings,
                 known_identifiers=known,
                 countries=countries,
                 source=SOURCE,
             )
+            # ONE RUN COVERS SEVERAL FILINGS, AND WHAT ONE MINTS THE NEXT MUST KNOW. `plan_holdings`
+            # resolves against `known` and keeps its own copy, so without this a new bond held by
+            # two funds in one run became two securities — and the second lost its identifiers to
+            # the DO NOTHING below, leaving a security nothing could ever resolve to.
+            known.update({f"{i['kind_code']}:{i['value']}": i["security_id"] for i in idents})
             security_rows += secs
             identifier_rows += idents
             issuer_rows += issus
+            # THE NEWEST FILING'S TERMS PER SECURITY, so one call never carries a security twice:
+            # the RPC's UPDATE … FROM would pick between two rows arbitrarily.
+            for d in nport.debt_term_rows(
+                holdings, ids, report_date=nport.filing_date_of(body).isoformat()
+            ):
+                prev = debt_rows.get(d["security_id"])
+                if prev is None or d["as_of"] > prev["as_of"]:
+                    debt_rows[d["security_id"]] = d
+            for table, rows in nport.lookup_rows(holdings).items():
+                for r in rows:
+                    lookups.setdefault(table, {})[r["code"]] = r
 
         # THE FUNDS THEMSELVES ARE SECURITIES TOO, and a filing's `fund_id` is the fund's
         # security_id: resolve each tracked fund to its ticker-identified security, creating it when
@@ -127,6 +146,10 @@ def discovered_security(
         fund_secs, fund_idents = _ensure_fund_securities(tracked, fund_sids)
 
         with conn.cursor() as cur:
+            # THE LOOKUP CODES FIRST: the rows below reference them, and one unseen code would fail
+            # the whole statement. DO NOTHING, so a name corrected by hand survives.
+            for table, by_code in lookups.items():
+                upsert(cur, f"market.{table}", list(by_code.values()), conflict=["code"])
             upsert(
                 cur,
                 "market.issuer",
@@ -143,6 +166,7 @@ def discovered_security(
                     conflict=["kind_code", "value"],
                     update=None,  # DO NOTHING: the first source of an identifier owns it
                 )
+            debt_terms_updated = _set_debt_terms(cur, list(debt_rows.values()))
         conn.commit()
 
     return dg.MaterializeResult(
@@ -152,8 +176,41 @@ def discovered_security(
             "funds": len(fund_secs),
             "identifiers": len(identifier_rows),
             "issuers": len(issuer_rows),
+            "lookup_codes": sum(len(v) for v in lookups.values()),
+            # OFFERED AND UPDATED ARE DIFFERENT FACTS, and both are reported: the RPC refuses a
+            # filing older than the terms already held, so `updated < offered` is ordinary when
+            # funds arrive out of order, while `offered = 0` on a bond fund is a parse failure.
+            "debt_terms_offered": len(debt_rows),
+            "debt_terms_updated": debt_terms_updated,
         }
     )
+
+
+#: Rows per `set_debt_terms` call. AGG alone holds ~13,000 bonds, and one jsonb argument per call
+#: keeps each statement small enough to stay far inside `ingest_rw`'s 120 s timeout.
+DEBT_TERMS_PER_CALL = 1000
+
+
+def _set_debt_terms(cur: Any, rows: list[dict[str, Any]]) -> int:
+    """Maturity, coupon and default status for the bonds a filing reports — through
+    `market.set_debt_terms`, the RPC the edge function called for every filing it ingested.
+
+    DAGSTER NEVER WROTE THESE. `nport.parse_holdings` has always parsed them, and the rows were
+    thrown away, so retiring the edge's `fund-holdings` would have stopped bond terms silently. The
+    RPC stays the one writer, so its rule — an older filing never overwrites a newer one — is
+    enforced in one place for both.
+    """
+    import json
+
+    updated = 0
+    for i in range(0, len(rows), DEBT_TERMS_PER_CALL):
+        cur.execute(
+            "select market.set_debt_terms(%s::jsonb)",
+            (json.dumps(rows[i : i + DEBT_TERMS_PER_CALL]),),
+        )
+        answer = cur.fetchone()
+        updated += int(answer[0]) if answer and answer[0] is not None else 0
+    return updated
 
 
 def _ensure_fund_securities(
