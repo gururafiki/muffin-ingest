@@ -50,6 +50,29 @@ def test_the_columns_are_openfigi_s_fields_with_the_fine_type_beside_the_coarse(
     assert rows[0]["ticker"]
 
 
+def test_every_line_carries_its_share_class_under_the_column_the_table_has() -> None:
+    """THE SHARE CLASS IS THE ONE KEY THE SAME ON EVERY VENUE, and this parse dropped it: every
+    stored page carried `shareClassFIGI` (54,332 classes over 99,459 lines, measured on the raw
+    files 2026-09-26) and not one reached `venue_listing`.
+
+    Read against the PAGE rather than restated: each row's value must be the provider's own for
+    that line, so a parse that shifted rows or took the composite would fail on the first mismatch.
+    And the key must be the table's spelling — the writer takes columns from the row's keys, which
+    is how `security_type_detail` once reached no table at all.
+    """
+    rows, _, _ = openfigi.parse_filter(_page(), exch_code="AU")
+    provider = {r["figi"]: r.get("shareClassFIGI") for r in json.loads(_page())["data"]}
+    assert all(r["share_class_figi"] == provider[r["figi"]] for r in rows), rows[:3]
+    assert all(r["share_class_figi"] for r in rows), "the captured page carries one on every line"
+    # And a line with none is None rather than an empty string, so the column's NULL means "the
+    # directory did not say" and never a value that joins to nothing.
+    body = json.dumps(
+        {"data": [{"figi": "BBG000000001", "ticker": "X", "securityType2": "Common Stock"}]}
+    ).encode()
+    lone, _, _ = openfigi.parse_filter(body, exch_code="AU")
+    assert lone[0]["share_class_figi"] is None, lone
+
+
 def test_the_fine_type_is_read_from_securityType_not_from_the_coarse_bucket() -> None:
     """THE TWO COINCIDE FOR A PLAIN COMMON STOCK, which is why the captured page cannot tell the
     rules apart — every row there reads `Common Stock` twice. An ETF is where they diverge, and it

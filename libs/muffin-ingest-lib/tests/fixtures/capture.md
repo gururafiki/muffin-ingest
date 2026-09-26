@@ -84,3 +84,27 @@ ssh muffin 'docker exec -i $(docker ps -qf name=muffin_muffin-ingest) python -' 
 ```
 
 The arrays are truncated to 600 points; `ils_history` fits whole.
+
+## `openfigi_mapping_local_ums.json` — an every-venue ISIN answer, captured 2026-09-26
+
+One entry of a real `/v3/mapping` body the local rung stored in production
+(`raw_figi_local_symbol`, UMS Holdings, `SG1J94892465`, fetched 2026-09-24), kept verbatim and
+wrapped as the one-job positional array a one-subject request returns. It is the shape the
+US-restricted captures cannot show:
+
+* **26 lines across 25 venues** — Singapore's own `UMSH SP`, the OTC `UMSSF US`, and the European
+  composite's many trading lines — so a picker has to choose by venue, not take the first line;
+* **one share class (`BBG001SGJVC9`) on 25 of them and none on the 26th** (`UMSHSGD X1`). Lines
+  without a class are ordinary — 2,340 of them sat in the stored answers, nearly all common stock —
+  so the share-class planner must ignore them rather than read them as disagreement.
+
+Measured over all 1,518 answers stored at the time: 1,393 named exactly one class, 125 none, and
+none named two. Re-capture from the node by reading any local-rung partition:
+
+```bash
+ssh muffin 'docker exec -i $(docker ps -qf name=muffin_muffin-ingest) python -' <<'PY'
+import json, pyarrow.parquet as pq
+r = pq.read_table("/var/lib/muffin-ingest/raw/raw_figi_local_symbol/<security_id>.parquet").to_pylist()[0]
+print(json.dumps([json.loads(bytes(r["body"]))[int(r["position"])]]))
+PY
+```

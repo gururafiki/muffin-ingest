@@ -434,9 +434,24 @@ def test_a_stale_miss_is_re_asked_only_while_its_evidence_is_still_missing() -> 
         def fetchall(self) -> list[tuple[str]]:
             return []
 
+    # AND THE SHARE CLASS IS RE-ASKED ON THE SAME TERMS, anti-joined on its own kind: a subject
+    # can hold its ticker and still lack its class, and one that gained a class from any source
+    # must leave the re-ask or it loops.
+    assert (
+        "p.scheme = %s and not exists (select 1 from market.security_identifier c "
+        "where c.security_id = p.security_id and c.kind_code = %s)"
+    ) in sql, sql
+
     symbology.stale_misses(Recording(), older_than_days=30)
     assert Recording.params == [
-        (30, symbology.TICKER_KIND, symbology.TICKER_KIND, symbology.SYMBOL_PROVIDER)
+        (
+            30,
+            symbology.TICKER_KIND,
+            symbology.TICKER_KIND,
+            symbology.SYMBOL_PROVIDER,
+            symbology.SHARE_CLASS_KIND,
+            symbology.SHARE_CLASS_KIND,
+        )
     ]
 
 
@@ -520,7 +535,11 @@ def test_a_population_query_anti_joins_over_the_entity_not_over_rows() -> None:
     Asserted structurally because the alternative needs a database: `not exists` scoped to the
     security is the only form that asks the question about the ENTITY.
     """
-    for sql in (symbology.SUBJECTS_NEEDING_TICKER, symbology.SUBJECTS_NEEDING_SYMBOL):
+    for sql in (
+        symbology.SUBJECTS_NEEDING_TICKER,
+        symbology.SUBJECTS_NEEDING_SYMBOL,
+        symbology.SUBJECTS_NEEDING_SHARE_CLASS,
+    ):
         flat = " ".join(sql.split())
         assert "not exists" in flat, flat
         assert "left join" not in flat, f"a left-join-and-filter cannot drain: {flat}"
@@ -540,10 +559,203 @@ def test_the_populations_are_scoped_to_equities() -> None:
     """A BOND IS NOT A SYMBOLOGY SUBJECT. The population these rungs shipped with was
     `security.is_tradeable = false` — 23,341 securities of which 15,159 were bonds, aimed at
     OpenFIGI's US *equity* lookup and at Yahoo's search, neither of which can serve one."""
-    for sql in (symbology.SUBJECTS_NEEDING_TICKER, symbology.SUBJECTS_NEEDING_SYMBOL):
+    for sql in (
+        symbology.SUBJECTS_NEEDING_TICKER,
+        symbology.SUBJECTS_NEEDING_SYMBOL,
+        symbology.SUBJECTS_NEEDING_SHARE_CLASS,
+    ):
         flat = " ".join(sql.split())
         assert "s.security_type_code = 'equity'" in flat, flat
         assert "is_tradeable" not in flat, (
             "is_tradeable is set by promotion, not by symbol resolution — it is false by default, "
             "so it selects almost the whole universe and says nothing about needing a symbol"
         )
+
+
+def test_the_share_class_population_asks_about_its_own_kind() -> None:
+    """ONE QUERY, TWO KINDS — so the parameter is the whole rule. Passing the ticker's kind would
+    ask "missing a ticker" and call it the share class, and every subject holding a ticker would
+    never be keyed."""
+
+    class Recording:
+        params: ClassVar[list[tuple[object, ...]]] = []
+
+        def cursor(self) -> Recording:
+            return self
+
+        def __enter__(self) -> Recording:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def execute(self, _sql: str, params: tuple[object, ...]) -> None:
+            Recording.params.append(params)
+
+        def fetchall(self) -> list[tuple[str]]:
+            return []
+
+    symbology.subjects_needing(Recording(), symbology.NEEDS_SHARE_CLASS)
+    assert Recording.params == [(symbology.SHARE_CLASS_KIND,)]
+
+
+# --- the share class ----------------------------------------------------------------------------
+
+#: A REAL every-venue answer, captured from production's `raw_figi_local_symbol` 2026-09-26: UMS
+#: Holdings (SG1J94892465), 26 lines across 25 venues, one share class on 25 of them and NONE on
+#: the 26th (`UMSHSGD X1`). The null line is the ordinary case the planner must ignore — 2,340 such
+#: lines sat in the stored answers, nearly all of them common stock.
+UMS = FIX / "openfigi_mapping_local_ums.json"
+UMS_CLASS = "BBG001SGJVC9"
+
+
+def _ums_hits() -> tuple[dict[str, object], ...]:
+    return symbology.parse_mapping(UMS.read_bytes(), asked=["SG1J94892465"])[0].hits
+
+
+def test_the_mapping_hits_carry_the_share_class_of_every_line() -> None:
+    hits = _ums_hits()
+    assert len(hits) == 26
+    assert sum(1 for h in hits if h["share_class_figi"] == UMS_CLASS) == 25
+    assert [h["ticker"] for h in hits if h["share_class_figi"] is None] == ["UMSHSGD"]
+    # The US-restricted capture carries it too, one line each.
+    entries = _mapping()
+    assert entries[0].hits[0]["share_class_figi"] == "BBG001S5N8V8"
+    assert entries[1].hits[0]["share_class_figi"] == "BBG001SCXK90"
+
+
+def test_one_isin_answer_names_one_class_and_the_null_lines_say_nothing() -> None:
+    sec = "11111111-1111-1111-1111-111111111111"
+    plan = symbology.plan_share_class(
+        sec, isin="SG1J94892465", hits=_ums_hits(), source="openfigi", asked=True
+    )
+    assert plan.identifiers == [
+        {
+            "kind_code": "share_class_figi",
+            "value": UMS_CLASS,
+            "security_id": sec,
+            "source_code": "openfigi",
+        }
+    ]
+    assert [(p["scheme"], p["provider"], p["outcome"], p["value"]) for p in plan.probes] == [
+        ("share_class_figi", "openfigi", "hit", UMS_CLASS)
+    ]
+    assert plan.conflicting == ()
+
+
+def test_a_class_nobody_asked_for_is_adopted_but_not_observed() -> None:
+    """A FINDING, NOT AN OBSERVATION — the rule the local line already keeps. Answers stored
+    before the local rung asked for classes name one on 1,393 of 1,518 subjects; adopting those
+    costs no request, and recording them as asked would put a question in the ledger that nobody
+    put to the provider."""
+    sec = "11111111-1111-1111-1111-111111111111"
+    plan = symbology.plan_share_class(
+        sec, isin="SG1J94892465", hits=_ums_hits(), source="openfigi", asked=False
+    )
+    assert [r["value"] for r in plan.identifiers] == [UMS_CLASS]
+    assert plan.probes == []
+
+
+def test_an_answer_with_no_class_is_a_miss_only_when_the_class_was_asked() -> None:
+    sec = "11111111-1111-1111-1111-111111111111"
+    asked = symbology.plan_share_class(
+        sec, isin="ZZ0000000000", hits=(), source="openfigi", asked=True
+    )
+    assert asked.identifiers == []
+    assert [(p["scheme"], p["outcome"], p["value"]) for p in asked.probes] == [
+        ("share_class_figi", "miss", None)
+    ]
+    skipped = symbology.plan_share_class(
+        sec, isin="ZZ0000000000", hits=(), source="openfigi", asked=False
+    )
+    assert skipped.identifiers == [] and skipped.probes == []
+
+
+def test_two_classes_in_one_answer_are_refused_never_chosen() -> None:
+    """NEVER MEASURED — 0 of 1,518 stored answers — which is exactly why the rule is written
+    down: taking the first would attach a company's identity by row order, and a miss would tell
+    the re-ask the provider had nothing. The fixture is the UMS answer with ONE line re-classed,
+    so a planner reading only the first line, or the most common class, adopts something."""
+    hits = [dict(h) for h in _ums_hits()]
+    hits[3]["share_class_figi"] = "BBG00OTHER00"
+    plan = symbology.plan_share_class(
+        "s", isin="SG1J94892465", hits=hits, source="openfigi", asked=True
+    )
+    assert plan.identifiers == [] and plan.probes == []
+    assert plan.conflicting == (UMS_CLASS, "BBG00OTHER00")  # sorted, so stable
+
+
+def test_one_class_is_never_given_to_two_securities() -> None:
+    """THE KEY REFUSES A SECOND HOLDER SILENTLY; THIS DECIDES IT FIRST SO THE REFUSAL IS COUNTED.
+
+    Every candidate rule disagrees on this fixture: A names a class B holds (withheld), C and D
+    name one class in the same batch (both refused, never broken by row order), E names a free one
+    (kept), and F restates the class F already holds (kept — a rule withholding every held class
+    would drop it, and one comparing only the value could not tell F from A).
+    """
+
+    def row(sid: str, value: str) -> dict[str, str]:
+        return {
+            "kind_code": "share_class_figi",
+            "value": value,
+            "security_id": sid,
+            "source_code": "openfigi",
+        }
+
+    rows = [row("A", "X"), row("C", "Y"), row("D", "Y"), row("E", "Z"), row("F", "W")]
+    adoption = symbology.adoptable_identifiers(rows, {"X": "B", "W": "F"})
+    assert [(r["security_id"], r["value"]) for r in adoption.kept] == [("E", "Z"), ("F", "W")]
+    assert adoption.held_elsewhere == [("A", "X", "B")]
+    assert adoption.ambiguous == {"Y": ["C", "D"]}
+
+
+def test_the_class_holders_are_asked_about_exactly_the_classes_in_the_batch() -> None:
+    class Conn:
+        calls: ClassVar[list[tuple[str, tuple[object, ...]]]] = []
+
+        def cursor(self) -> Conn:
+            return self
+
+        def __enter__(self) -> Conn:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def execute(self, sql: str, params: tuple[object, ...]) -> None:
+            Conn.calls.append((sql, params))
+
+        def fetchall(self) -> list[tuple[str, str]]:
+            return [("X", "B")]
+
+    rows = [
+        {"kind_code": "share_class_figi", "value": "X", "security_id": "A"},
+        {"kind_code": "ticker", "value": "AAPL", "security_id": "A"},
+        {"kind_code": "share_class_figi", "value": "Z", "security_id": "E"},
+    ]
+    assert symbology.identifier_holders(Conn(), "share_class_figi", rows) == {"X": "B"}
+    # Only the kind asked about, never the ticker riding in the same batch.
+    assert Conn.calls[0][1] == ("share_class_figi", ["X", "Z"])
+    assert symbology.identifier_holders(Conn(), "share_class_figi", []) == {}
+    assert len(Conn.calls) == 1, "no rows must not reach the database"
+
+
+def test_a_symbol_already_held_is_never_replaced_by_a_pick() -> None:
+    """ADOPTION FILLS A GAP; IT DOES NOT OVERRULE. The held symbol may have been verified against
+    the provider (`BRK-B`), and the ladder's pick is OpenFIGI's spelling plus a suffix (`BRK/B`) —
+    the shape the edge's repair existed to undo. Once the local rung also asks for classes it
+    answers for securities that hold a symbol, so the upsert would overwrite them routinely.
+
+    Three cases, each a different rule's failure: a gap is filled, a restatement is kept (a rule
+    refusing every held security would drop it), and a disagreement is refused with both names.
+    """
+
+    def row(sid: str, symbol: str) -> dict[str, str]:
+        return {"security_id": sid, "provider_code": "yfinance", "symbol": symbol}
+
+    kept, refused = symbology.unreplaced_symbols(
+        [row("gap", "UMSH.SI"), row("same", "BRK-B"), row("differs", "BRK/B")],
+        {"same": "BRK-B", "differs": "BRK-B"},
+    )
+    assert [r["security_id"] for r in kept] == ["gap", "same"]
+    assert refused == [("differs", "BRK-B", "BRK/B")]

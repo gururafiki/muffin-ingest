@@ -32,6 +32,8 @@ FIX = FIXTURES
 SID = "11111111-1111-1111-1111-111111111111"
 #: A second subject in the same run, used to make the population rules disagree.
 OTHER_SID = "22222222-2222-2222-2222-222222222222"
+#: A third, needing only its share class — the population added 2026-09-26.
+THIRD_SID = "44444444-4444-4444-4444-444444444444"
 MAPPING_BODY = (FIX / "openfigi_mapping.json").read_bytes()
 YAHOO_BODY = (FIX / "yahoo_search_aapl.json").read_bytes()
 #: THE PROVIDERS ANSWERING WITH NOTHING, both captured rather than typed out. The mapping body is
@@ -73,6 +75,19 @@ class FakeCursor:
             return
         if "from market.exchange" in text:
             self.rows = [("US", "US", "")]
+        elif "join market.security_identifier i on i.kind_code = %s and i.value = p.value" in text:
+            self.rows = list(self._state.duplicate_classes)  # one_security_per_share_class
+        elif "from market.security_identifier where kind_code = %s and value = any(%s)" in text:
+            asked = set(params[1]) if params else set()
+            self.rows = [(v, h) for v, h in self._state.class_holders.items() if v in asked]
+        elif (
+            "from market.security_provider_symbol where provider_code = %s "
+            "and security_id::text = any(%s)"
+        ) in text:  # current_symbols
+            asked = set(params[1]) if params else set()
+            self.rows = [
+                (sid, sym) for sid, sym in self._state.held_symbols.items() if sid in asked
+            ]
         elif "from market.security_provider_symbol where provider_code = any(%s)" in text:
             asked = set(params[1]) if params else set()
             self.rows = [
@@ -82,8 +97,14 @@ class FakeCursor:
             ]
         elif "from market.identifier_probe" in text:
             self.rows = [(sid,) for sid in self._state.stale_misses]
-        elif "market.security_identifier t" in text:  # subjects_needing(NEEDS_TICKER)
-            self.rows = [(sid,) for sid in self._state.needing_ticker]
+        elif "market.security_identifier t" in text:  # subjects_needing(ticker | share class)
+            # ONE QUERY, TWO KINDS: the parameter is what says which population is asked for.
+            needing = (
+                self._state.needing_share_class
+                if params and params[0] == "share_class_figi"
+                else self._state.needing_ticker
+            )
+            self.rows = [(sid,) for sid in needing]
         elif "market.security_provider_symbol p" in text:  # subjects_needing(NEEDS_SYMBOL)
             self.rows = [(sid,) for sid in self._state.needing_symbol]
         elif "i.security_id::text = any(%s)" in text:  # attributes_for
@@ -105,9 +126,18 @@ class _State:
 
     needing_ticker: set[str] = field(default_factory=lambda: {SID})
     needing_symbol: set[str] = field(default_factory=lambda: {SID})
+    #: EMPTY BY DEFAULT, so every older test here stays about symbols: the database says each
+    #: subject already has its class, and the local rung asks only what it asked before.
+    needing_share_class: set[str] = field(default_factory=set)
     stale_misses: set[str] = field(default_factory=set)
     #: symbol → the security already holding it in `security_provider_symbol`.
     symbol_holders: dict[str, str] = field(default_factory=dict)
+    #: security → the yfinance symbol it holds now (`current_symbols`).
+    held_symbols: dict[str, str] = field(default_factory=dict)
+    #: share class → the security already holding it in `security_identifier`.
+    class_holders: dict[str, str] = field(default_factory=dict)
+    #: (security, share class, holder) rows `one_security_per_share_class` reads.
+    duplicate_classes: list[tuple[str, str, str]] = field(default_factory=list)
 
 
 STATE = _State()
@@ -660,6 +690,7 @@ def test_the_sensor_only_adds_and_never_touches_the_price_grid() -> None:
 
     STATE.needing_ticker = {SID}
     STATE.needing_symbol = {OTHER_SID}
+    STATE.needing_share_class = {THIRD_SID}
     try:
         with dg.instance_for_test() as instance:
             context = dg.build_sensor_context(
@@ -669,6 +700,7 @@ def test_the_sensor_only_adds_and_never_touches_the_price_grid() -> None:
     finally:
         STATE.needing_ticker = {SID}
         STATE.needing_symbol = {SID}
+        STATE.needing_share_class = set()
 
     assert isinstance(result, dg.SensorResult)
     requests = list(result.dynamic_partitions_requests or ())
@@ -683,7 +715,11 @@ def test_the_sensor_only_adds_and_never_touches_the_price_grid() -> None:
         )
         assert request.partitions_def_name == SYMBOLOGY_PARTITIONS
     seeded = {k for r in requests for k in r.partition_keys}
-    assert seeded == {SID, OTHER_SID}, f"the seeded population is not the union: {seeded}"
+    # THREE POPULATIONS, EACH NAMING A DIFFERENT SUBJECT, so a union missing any one of them —
+    # the share class being the newest — seeds a set visibly short of it.
+    assert seeded == {SID, OTHER_SID, THIRD_SID}, (
+        f"the seeded population is not the union: {seeded}"
+    )
 
 
 def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
@@ -737,3 +773,147 @@ def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
     assert again.total_requested == 1, (
         f"expected only the stale miss to be re-asked, got {again.total_requested}"
     )
+
+
+# --- the share class ------------------------------------------------------------------------------
+
+AAPL_CLASS = "BBG001S5N8V8"  # position 0 of the captured mapping body
+ACN_CLASS = "BBG001SCXK90"  # position 1
+
+
+def _written(writes: list[tuple[str, tuple[Any, ...]]], table: str) -> list[Any]:
+    return [v for w, params in writes if w.startswith(f"insert into {table}") for v in params]
+
+
+def test_a_rung_asked_only_for_the_class_says_so_and_overwrites_no_symbol(tmp_path: Path) -> None:
+    """THE SUBJECT THIS CHANGE CREATES: it holds a ticker and a yfinance symbol and lacks only its
+    share class, so the local rung asks about it for the first time.
+
+    Three rules have to hold at once, and the fixture makes each one's failure visible:
+
+    * the row says what was asked (`asked_for`), because a row existing no longer means the symbol
+      was asked — without it, the probe below would read `("symbol", "openfigi", "hit")`;
+    * the class is adopted and observed;
+    * the local line the same answer names (`AAPL`, OpenFIGI's spelling) does NOT replace the
+      symbol the security holds (`AAPL-OLD` here; `BRK-B` against `BRK/B` in production).
+    """
+    STATE.needing_ticker = set()
+    STATE.needing_symbol = set()
+    STATE.needing_share_class = {SID}
+    STATE.held_symbols = {SID: "AAPL-OLD"}
+    FakeCursor.writes.clear()
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID])
+            result = materialise(tmp_path, instance, search_body=NOTHING_SEARCH)
+    finally:
+        STATE.needing_ticker = {SID}
+        STATE.needing_symbol = {SID}
+        STATE.needing_share_class = set()
+        STATE.held_symbols = {}
+    assert result.success
+
+    import pyarrow.parquet as pq
+
+    local = pq.read_table(tmp_path / "raw_figi_local_symbol" / f"{SID}.parquet").to_pylist()
+    assert [r["asked_for"] for r in local] == ["share_class_figi"], local
+    assert _probes(FakeCursor.writes) == [("share_class_figi", "openfigi", "hit")], _probes(
+        FakeCursor.writes
+    )
+    assert AAPL_CLASS in _written(FakeCursor.writes, "market.security_identifier")
+    assert not _written(FakeCursor.writes, "market.security_provider_symbol"), (
+        "a pick replaced a symbol the security already held"
+    )
+    meta = result.asset_materializations_for_node("security_symbology")[0].metadata
+    assert meta["symbols_already_held"].value == 1, meta
+    assert meta["share_classes_offered"].value == 1, meta
+
+
+def test_a_class_held_by_another_security_is_withheld_and_counted(tmp_path: Path) -> None:
+    """ONE SHARE CLASS, ONE SECURITY. The key would refuse the second holder anyway — silently.
+    Deciding it first is what makes the duplicate visible: counted here, and named by
+    `one_security_per_share_class` from the probe, which records what the provider said whoever
+    ends up holding the class.
+
+    TWO SUBJECTS, so "write the adoptable rows" and "write every row" disagree: AAPL's class is
+    held elsewhere and ACN's is free.
+    """
+    holder = "33333333-3333-3333-3333-333333333333"
+    STATE.needing_ticker = set()
+    STATE.needing_symbol = set()
+    STATE.needing_share_class = {SID, OTHER_SID}
+    STATE.class_holders = {AAPL_CLASS: holder}
+    FakeCursor.writes.clear()
+    saved_map, saved_search = openfigi.mapping, yahoo_search.search
+    openfigi.mapping = lambda jobs, **kw: _doc(MAPPING_BODY)
+    yahoo_search.search = lambda isin, **kw: _doc(NOTHING_SEARCH)
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID, OTHER_SID])
+            result = dg.materialize(
+                [
+                    symbology_raw.raw_figi_ticker,
+                    symbology_raw.raw_figi_local_symbol,
+                    symbology_raw.raw_yahoo_symbol,
+                    symbology_core.security_symbology,
+                ],
+                instance=instance,
+                resources={
+                    "postgres": FakePostgres(),
+                    "parquet_io": ParquetIOManager(str(tmp_path)),
+                },
+                tags={
+                    "dagster/asset_partition_range_start": SID,
+                    "dagster/asset_partition_range_end": OTHER_SID,
+                },
+            )
+    finally:
+        openfigi.mapping = saved_map
+        yahoo_search.search = saved_search
+        STATE.needing_ticker = {SID}
+        STATE.needing_symbol = {SID}
+        STATE.needing_share_class = set()
+        STATE.class_holders = {}
+
+    assert result.success
+    written = _written(FakeCursor.writes, "market.security_identifier")
+    assert ACN_CLASS in written, f"the free class was not adopted: {written}"
+    assert AAPL_CLASS not in written, f"wrote a class another security holds: {written}"
+    assert _probes(FakeCursor.writes).count(("share_class_figi", "openfigi", "hit")) == 2
+    meta = result.asset_materializations_for_node("security_symbology")[0].metadata
+    assert meta["share_classes_held_elsewhere"].value == 1, meta
+    assert meta["share_classes_ambiguous"].value == 0, meta
+
+
+def test_a_row_written_before_the_rung_asked_for_classes_was_asked_for_the_symbol() -> None:
+    """THE FILES ON DISK PREDATE THE COLUMN. Every local-rung file written before 2026-09-26 lacks
+    `asked_for`, and that rung asked for one thing only — so the default is its own scheme, and
+    those 1,518 answers keep their symbol observations while their classes are adopted as the
+    findings they are. No row is no question."""
+    asked_for = symbology_core._asked_for
+    assert asked_for([{"body": b"[]"}], default="symbol") == {"symbol"}
+    assert asked_for([{"asked_for": "share_class_figi"}], default="symbol") == {"share_class_figi"}
+    assert asked_for([{"asked_for": "share_class_figi,symbol"}], default="symbol") == {
+        "share_class_figi",
+        "symbol",
+    }
+    assert asked_for(None, default="symbol") == set()
+    assert asked_for([], default="symbol") == set()
+
+
+def test_a_class_named_for_two_securities_fails_the_check_and_names_them() -> None:
+    from muffin_ingest_dagster.defs.symbology.checks import one_security_per_share_class
+
+    holder = "33333333-3333-3333-3333-333333333333"
+    STATE.duplicate_classes = [(SID, AAPL_CLASS, holder)]
+    try:
+        failed = one_security_per_share_class(FakePostgres())
+    finally:
+        STATE.duplicate_classes = []
+    clean = one_security_per_share_class(FakePostgres())
+
+    assert isinstance(failed, dg.AssetCheckResult) and isinstance(clean, dg.AssetCheckResult)
+    assert failed.passed is False and failed.severity == dg.AssetCheckSeverity.WARN
+    assert failed.metadata["duplicates"].value == 1
+    assert AAPL_CLASS in str(failed.metadata["first"].value)
+    assert clean.passed is True
