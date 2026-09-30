@@ -136,6 +136,38 @@ def test_an_exhausted_venue_has_no_next_cursor() -> None:
     assert rows and next_ is None and total == 1
 
 
+def test_a_page_counts_every_result_the_total_counts_including_ones_the_parse_drops() -> None:
+    """THE COUNT IS COMPARED WITH THE PROVIDER'S `total`, SO IT COUNTS WHAT THE PROVIDER COUNTED.
+
+    `parse_filter` drops a result with no FIGI or no ticker, and the provider's `total` does not.
+    Counting the parsed rows would make every venue carrying such a result look capped by the
+    number it drops.
+    """
+    body = json.dumps(
+        {
+            "data": [
+                {"figi": "BBG000B9XBU4", "ticker": "SWP"},
+                {"figi": "BBG000B9XBU5", "ticker": ""},
+                {"ticker": "NOTICK"},
+            ],
+            "next": None,
+            "total": 3,
+        }
+    ).encode()
+    assert openfigi.filter_page_counts(body) == (3, 3)
+    assert len(openfigi.parse_filter(body, exch_code="AU")[0]) == 1
+    # The captured AU page: 100 results of a venue totalling 2,117.
+    assert openfigi.filter_page_counts(_page()) == (100, 2117)
+
+
+def test_a_page_that_cannot_be_read_counts_as_nothing_with_no_total() -> None:
+    """NOT A REFUSAL HERE. The check that reads these counts judges a whole walk, and one stored
+    page it cannot read must not raise out of it; it simply holds nothing and says no total."""
+    assert openfigi.filter_page_counts(b"not json") == (0, None)
+    assert openfigi.filter_page_counts(b'{"error": "There was an error"}') == (0, None)
+    assert openfigi.filter_page_counts(b'{"data": [], "total": true}') == (0, None)
+
+
 def test_an_unparseable_body_is_refused() -> None:
     with pytest.raises(openfigi.OpenFigiUnreadable, match="not JSON"):
         openfigi.parse_filter(b"<html>banana</html>", exch_code="AU")

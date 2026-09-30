@@ -91,3 +91,34 @@ def parse_filter(
             }
         )
     return rows, parsed.get("next"), parsed.get("total")
+
+
+#: OpenFIGI's documented ceiling for one `/v3/filter` query: "Max Results: 15,000", with or without
+#: a key. The cursor it hands back is signed and counts pages, so a walk cannot be resumed past it —
+#: the query has to be narrower.
+FILTER_MAX_RESULTS = 15_000
+
+
+def filter_page_counts(body: bytes) -> tuple[int, int | None]:
+    """One stored `/v3/filter` page → `(results on the page, the provider's total for the query)`.
+
+    Counts results as the provider sent them, including any `parse_filter` cannot key, because the
+    provider's `total` counts them too. A body that cannot be read counts as nothing, with no total.
+
+    WHY IT EXISTS: a walk that ends with no cursor is not necessarily complete. The provider stops
+    issuing cursors at `FILTER_MAX_RESULTS`, ordered by FIGI, so the US walk "finished" on
+    2026-09-21 holding 15,000 of 20,096 listings and missing every US FIGI newer than
+    `BBG013JYT8V4` — about every listing since 2022. Only the total can say so.
+    """
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return 0, None
+    if not isinstance(parsed, dict):
+        return 0, None
+    data = parsed.get("data")
+    total = parsed.get("total")
+    return (
+        len(data) if isinstance(data, list) else 0,
+        total if isinstance(total, int) and not isinstance(total, bool) else None,
+    )
