@@ -275,6 +275,39 @@ hundred runs of a long one that happened to be created a moment earlier: `daily_
 `dagster/priority` through the job's `run_tags`; `QueuedRunCoordinator` sorts by it before checking
 pools, so the short lane is first in line when the pool frees and waits at most one long run.
 
+## Do not scope a check on a partitioned asset to the run's partition
+
+In Dagster 1.13 a check on a partitioned asset records ONE result for the whole asset. It is
+unpartitioned unless declared with a preview `partitions_def`, and even then it records a partition
+only for a single-partition step. So a check that answered for `context.partition_key` reported
+whichever partition ran last: the directory's "did the walk finish" check passed the moment any
+other query finished, hiding a stalled one. Answer for the whole grid on every evaluation, and test
+it by running the check inside a real partitioned `dg.materialize` — `build_asset_check_context`
+takes no partition key, so a unit-level call cannot show the defect. The same fact rules out
+`any_checks_match(check_failed())` as a per-partition retry trigger: its status is the grid's, so one
+failure matches every partition.
+
+## Do not put several provider questions in one run that can partly fail
+
+A run that succeeds marks EVERY partition it covers as materialized, whatever it did for each. With
+four directory queries a run, a refusal in the second left the third and fourth unasked and claimed:
+a new query read as walked with nothing stored, and a monthly refresh read as done while the file
+still held last month's walk. Run one question per run (`multi_run(1)`), and FAIL a run that fetched
+nothing — failing loses nothing when there is nothing to file, and it leaves the partition's last
+materialization where it was, so freshness reports the age of the data rather than of the attempt.
+Wait out a refusal before giving up (the same page, after a cool-down): the provider's minute is
+ordinary, not a fault.
+
+## Do not refresh through a cache that is keyed on the request
+
+http-cache keeps an OpenFIGI 200 for 90 days keyed on the request body, and a monthly re-walk of a
+directory sends exactly last month's bodies: page one has no cursor and every later cursor follows
+from it. So the "refresh" would have been served the previous walk, page for page, for three
+months, with every run reporting a fresh one. A question whose answer changes over time and is
+asked again on purpose must bypass the cache (`X-Muffin-Cache-Bypass`, which also stores the fresh
+answer over the old). A bypassed request is never handed a stale entry either: nginx serves stale
+only for an expired lookup, and a bypass makes none.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies

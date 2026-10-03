@@ -93,10 +93,40 @@ def parse_filter(
     return rows, parsed.get("next"), parsed.get("total")
 
 
+def as_composite(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Lines of one LOCAL exchange → the COMPOSITE line each names, and how many named none.
+
+    A country's composite line (`US`) is what the model knows: `market.exchange` has one US row,
+    and every rule that picks "the" US line reads it. OpenFIGI caps a `/v3/filter` query at 15,000
+    results ordered by FIGI, so the US composite walk stops at `BBG013JYT8V4` and misses every US
+    listing since about 2022. A local exchange that lists every exchange-listed stock — NYSE Arca,
+    5,541 lines on 2026-10-03 — reaches them, and each of its lines carries `compositeFIGI`, the
+    composite line's own FIGI. BellRing's Arca line `BBG0154FBJJ5` names `BBG013QNJHP8`, the US
+    line the capped walk dropped.
+
+    So the line keeps everything it says about the security (ticker, name, share class, both type
+    fields) and takes the composite's FIGI as its own. `composite_figi` stays equal to it, as it is
+    on a composite line. A line naming no composite cannot be placed and is COUNTED, not guessed:
+    filing it under its own local FIGI would create a second "US" line for the same stock.
+    """
+    out: list[dict[str, Any]] = []
+    unplaced = 0
+    for row in rows:
+        composite = row.get("composite_figi")
+        if not composite:
+            unplaced += 1
+            continue
+        out.append({**row, "figi": composite})
+    return out, unplaced
+
+
 #: OpenFIGI's documented ceiling for one `/v3/filter` query: "Max Results: 15,000", with or without
 #: a key. The cursor it hands back is signed and counts pages, so a walk cannot be resumed past it —
 #: the query has to be narrower.
 FILTER_MAX_RESULTS = 15_000
+
+#: The same ceiling counted in pages: "Max Results Per Page: 100", "Max Amount of Pages: 150".
+FILTER_MAX_PAGES = 150
 
 
 def filter_page_counts(body: bytes) -> tuple[int, int | None]:
