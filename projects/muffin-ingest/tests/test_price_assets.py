@@ -1009,6 +1009,58 @@ def _history_run(
         openbb.price_history = saved
 
 
+def test_a_subject_the_sweep_cannot_ask_is_counted_so_the_outcomes_sum_to_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """EVERY PARTITION IN THE RUN LANDS IN ONE COUNTER, including one nobody asks about.
+
+    The nightly sweep names a contiguous slice of the grid, and `askable_subjects` leaves out a
+    security the ledger holds absent. Measured 2026-09-30: `requested 2500`, `answered 2463`, and
+    no other outcome, so 37 securities were accounted for nowhere. That hole looks like the
+    throttle-branch defect this file already tests for, so without its own counter a correct
+    exclusion reads as a counting bug and a real one can hide inside it.
+
+    Two partitions in one range run, one of them outside the askable universe, as a night's run
+    has.
+    """
+    from dagster._core.storage.tags import (
+        ASSET_PARTITION_RANGE_END_TAG,
+        ASSET_PARTITION_RANGE_START_TAG,
+    )
+
+    askable, held_absent = SUBJECTS[0][0], SUBJECTS[1][0]
+    monkeypatch.setattr(prices_partitions.PROVIDER, "min_seconds_between_calls", 0.0)
+    monkeypatch.setitem(globals(), "UNIVERSE", [SUBJECTS[0]])
+    saved = openbb.price_history
+    openbb.price_history = lambda symbols, **kw: bars_for(list(symbols))
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(
+                prices_partitions.SECURITY_PARTITION, [askable, held_absent]
+            )
+            result = dg.materialize(
+                [prices_raw.raw_price_history],
+                instance=instance,
+                tags={
+                    ASSET_PARTITION_RANGE_START_TAG: askable,
+                    ASSET_PARTITION_RANGE_END_TAG: held_absent,
+                },
+                resources={
+                    "postgres": FakePostgres(),
+                    "parquet_io": ParquetIOManager(str(tmp_path)),
+                    "raw_store": RawStore(base_path=str(tmp_path)),
+                },
+            )
+    finally:
+        openbb.price_history = saved
+
+    assert result.success
+    m = meta(result, prices_raw.raw_price_history)
+    assert (m["requested"], m["answered"], m["not_askable"]) == (2, 1, 1)
+    outcomes = ("answered", "empty", "dead", "throttled", "unasked", "transport", "not_askable")
+    assert sum(m.get(k, 0) for k in outcomes) == m["requested"], m
+
+
 def test_the_history_lane_extends_from_its_watermark_rather_than_refetching(tmp_path: Path) -> None:
     """The second run asks from the newest bar it already holds, not from the start of history.
 

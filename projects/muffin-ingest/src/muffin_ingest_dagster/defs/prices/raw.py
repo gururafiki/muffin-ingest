@@ -528,6 +528,13 @@ def raw_price_history(
     context.add_output_metadata(
         {
             "requested": len(wanted),
+            # A PARTITION NOBODY ASKED ABOUT IS STILL A PARTITION OF THIS RUN. `askable_subjects`
+            # leaves out a security the ledger holds absent (its symbol rejected alone, within 30
+            # days), one with no symbol, and anything not an equity, and they fell out of every
+            # counter: the 2026-09-30 night reported `requested 2500` beside `answered 2463` and no
+            # other outcome, 37 securities accounted for nowhere. Counted, the outcome counters sum
+            # to `requested` again, and that identity is how these runs are read.
+            "not_askable": len(wanted) - len(subjects),
             "rows": len(rows),
             "loading_full_history": len(loading),
             "extending_from_watermark": len(extending),
