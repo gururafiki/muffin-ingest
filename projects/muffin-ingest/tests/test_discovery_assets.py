@@ -814,7 +814,11 @@ def test_the_check_names_the_venues_an_operator_must_resume(
 
     instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU", "LN"])
     stalled: dict[str | None, bytes] = {None: _page(figi="BBG0000000P1", next_cursor="c1")}
-    finished: dict[str | None, bytes] = {None: _page(figi="BBG0000000R1", next_cursor=None)}
+    # A FINISHED WALK HOLDS WHAT THE PROVIDER COUNTED. With `_page`'s default `total` of 2,117 this
+    # one-row venue would now read as capped, which is a different failure from the one tested here.
+    finished: dict[str | None, bytes] = {
+        None: _page(figi="BBG0000000R1", next_cursor=None, total=1)
+    }
     _sweep(tmp_path, instance, stalled, venue="AU", throttle_after=1)
     _sweep(tmp_path, instance, finished, venue="LN")
 
@@ -833,6 +837,51 @@ def test_the_check_names_the_venues_an_operator_must_resume(
     # NAMED, NOT JUST COUNTED. A check reporting "1 venue is unfinished" cannot be acted on; this
     # assertion is what makes the count and the names disagree if only the count is kept.
     assert evaluation.metadata["resume_these"].value == "AU"
+    # A WALK STILL UNDER WAY IS SHORT OF ITS TOTAL BY DEFINITION, and calling it capped would tell
+    # the operator a re-walk cannot help, which is exactly wrong. AU's one page reports 2,117.
+    assert evaluation.metadata["capped"].value == 0
+
+
+def test_a_walk_the_provider_capped_is_not_finished(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """NO CURSOR LEFT IS NOT FINISHED WHEN THE PROVIDER STOPPED ISSUING THEM.
+
+    OpenFIGI answers at most 15,000 results per `/v3/filter` query, ordered by FIGI, and its last
+    page then carries no `next`. The US walk "finished" on 2026-09-21 holding 15,000 of 20,096, and
+    this check passed it. Only the provider's own `total` can tell the two apart.
+
+    THE FIXTURE MAKES THE TWO RULES DISAGREE. Both venues end with no cursor, so the old rule passes
+    both. US holds 2 of a total of 500: capped. GR holds 2 of 3, a few rows of drift between pages:
+    finished. And the capped venue is NOT offered for resuming, because a re-walk stops at the same
+    place.
+    """
+    from muffin_ingest_dagster.defs.discovery.checks import venue_sweep_reached_its_last_page
+
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["US", "GR"])
+    capped: dict[str | None, bytes] = {
+        None: _page(figi="BBG0000000U1", next_cursor="u1", total=500),
+        "u1": _page(figi="BBG0000000U2", next_cursor=None, total=500),
+    }
+    drifted: dict[str | None, bytes] = {
+        None: _page(figi="BBG0000000G1", next_cursor="g1", total=3),
+        "g1": _page(figi="BBG0000000G2", next_cursor=None, total=3),
+    }
+    _sweep(tmp_path, instance, capped, venue="US")
+    _sweep(tmp_path, instance, drifted, venue="GR")
+    assert _stored(tmp_path, "US")[-1]["cursor_at"] is None, "the walk ended as the provider said"
+
+    evaluation = venue_sweep_reached_its_last_page(
+        dg.build_asset_check_context(instance=instance), RawStore(base_path=str(tmp_path))
+    )
+    assert isinstance(evaluation, dg.AssetCheckResult)
+
+    assert evaluation.passed is False
+    assert evaluation.metadata["capped"].value == 1
+    assert evaluation.metadata["capped_venues"].value == "US (2 of 500)"
+    assert evaluation.metadata["unfinished"].value == 0
+    assert evaluation.metadata["resume_these"].value == "none"
 
 
 def _sweep_messages(instance: dg.DagsterInstance, result: Any) -> list[str]:

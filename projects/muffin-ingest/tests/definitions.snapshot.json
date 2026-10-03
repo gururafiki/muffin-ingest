@@ -16,6 +16,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "security_listing:listing_covers_legacy": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "security_symbology:one_security_per_share_class": {
       "additional_deps": [],
       "blocking": false
@@ -674,6 +678,32 @@
         "warn_window_seconds": null
       },
       "group_name": "registries",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_listing": {
+      "automation_condition": "on an upstream change, or daily (910c21a4e37c)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "security_symbology": null,
+        "venue_listing": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "discovery",
       "io_manager_key": "io_manager",
       "kinds": [
         "postgres"
