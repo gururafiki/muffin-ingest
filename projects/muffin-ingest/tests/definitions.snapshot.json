@@ -689,6 +689,31 @@
       ],
       "tags": {}
     },
+    "security_classification": {
+      "automation_condition": "on a fund holding, or daily (a6757337b1fd)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "fund_holding": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_listing": {
       "automation_condition": "on an upstream change, or daily (910c21a4e37c)",
       "backfill_policy": null,
