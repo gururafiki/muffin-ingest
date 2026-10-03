@@ -740,6 +740,31 @@
       ],
       "tags": {}
     },
+    "security_price_span": {
+      "automation_condition": "eager (b561cc032c71)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "price_bar_history": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "prices",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_return": {
       "automation_condition": "eager (b561cc032c71)",
       "backfill_policy": null,

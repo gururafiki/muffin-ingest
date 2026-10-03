@@ -4,7 +4,7 @@ from datetime import date, timedelta
 from typing import Any
 
 import dagster as dg
-from dagster import AssetExecutionContext
+from dagster import AssetExecutionContext, DagsterInstance
 from muffin_ingest.derive import returns
 from muffin_ingest.facets import prices
 
@@ -129,3 +129,122 @@ def security_return(
 
     context.add_output_metadata({**stats, "rows": len(out)})
     return out
+
+
+#: Securities per call of `market.derive_security_price_span`. Finding a security's first bar walks
+#: the yearly partitions up from 1970: measured on production 2026-09-30, 9.3 s per 500 securities
+#: with a cold cache, well inside `ingest_rw`'s 120 s statement timeout. Each call commits, so a
+#: failure late in a bootstrap keeps what the earlier calls wrote.
+SPAN_CHUNK = 500
+
+#: Where a run records how far into the history lane's materialisations it has read. The next run
+#: reads from there, so the cursor is the asset's own materialisation and needs no table of ours.
+WATERMARK = "watermark_storage_id"
+
+
+def _latest_storage_id(instance: DagsterInstance, key: dg.AssetKey) -> int | None:
+    records = instance.fetch_materializations(key, limit=1).records
+    return records[0].storage_id if records else None
+
+
+def _partitions_since(instance: DagsterInstance, key: dg.AssetKey, after: int) -> set[str]:
+    """The partitions of `key` materialised after storage id `after`, paged."""
+    found: set[str] = set()
+    cursor = None
+    while True:
+        result = instance.fetch_materializations(
+            dg.AssetRecordsFilter(asset_key=key, after_storage_id=after),
+            limit=1000,
+            cursor=cursor,
+            ascending=True,
+        )
+        for record in result.records:
+            materialization = record.asset_materialization
+            if materialization is not None and materialization.partition:
+                found.add(materialization.partition)
+        if not result.has_more:
+            return found
+        cursor = result.cursor
+
+
+def _previous_watermark(instance: DagsterInstance, key: dg.AssetKey) -> int | None:
+    event = instance.get_latest_materialization_event(key)
+    materialization = event.asset_materialization if event else None
+    value = materialization.metadata.get(WATERMARK) if materialization else None
+    raw = value.value if value is not None else None
+    return raw if isinstance(raw, int) else None
+
+
+@dg.asset(
+    deps=[price_bar_history],
+    # EAGER WITHOUT THE MISSING-DEPS GATE, for the reason `security_return` gives above: the
+    # history lane always has unfilled `security` keys, and plain `eager()` would wait for all of
+    # them. It fires after each night's sweep, once no upstream run is in progress.
+    #
+    # NOT ON ITS FIRST EVALUATION. `since_last_handled` counts a newly deployed asset's initial
+    # evaluation as handled, so `newly_missing` cancels against it — measured on `security_listing`
+    # the morning it shipped (2026-10-03). The first run comes with the next sweep, or by hand.
+    automation_condition=dg.AutomationCondition.eager().without(
+        ~dg.AutomationCondition.any_deps_missing()
+    ),
+    pool="sql",
+    group_name="prices",
+    kinds={"postgres"},
+    # Every night's sweep updates the history lane, so a day without a run means the condition
+    # stopped firing.
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
+    description=(
+        "The first and last bar each security holds (market.security_price_span), for the "
+        "securities whose history partition materialised since the last run. No provider call."
+    ),
+)
+def security_price_span(
+    context: AssetExecutionContext, postgres: Postgres
+) -> "dg.MaterializeResult[None]":
+    """Keep `market.security_price_span` in step with the history lane.
+
+    THE RUN'S OWN SECURITIES, NOT THE UNIVERSE. Re-deriving every span costs ~4 minutes cold; a
+    night touches ~2,500. So each run asks for the partitions of `price_bar_history` materialised
+    after the previous run's watermark, a storage id it recorded in its own metadata. The first run
+    has none and asks for every materialised partition: the bootstrap.
+    """
+    instance = context.instance
+    upstream = price_bar_history.key
+    # Read BEFORE choosing the securities: anything materialised after this point is picked up next
+    # time, and anything read twice is re-derived idempotently.
+    watermark = _latest_storage_id(instance, upstream)
+    since = _previous_watermark(instance, context.asset_key)
+    if since is None:
+        mode = "bootstrap"
+        securities = sorted(instance.get_materialized_partitions(upstream))
+    else:
+        mode = "incremental"
+        securities = sorted(_partitions_since(instance, upstream, since))
+
+    totals = {"asked": 0, "written": 0, "without_bars": 0}
+    with postgres.connect() as conn:
+        for start in range(0, len(securities), SPAN_CHUNK):
+            chunk = securities[start : start + SPAN_CHUNK]
+            with conn.cursor() as cur:
+                cur.execute("select market.derive_security_price_span(%s::uuid[])", (chunk,))
+                row = cur.fetchone()
+            conn.commit()
+            counts = row[0] if row else {}
+            for name in totals:
+                totals[name] += int(counts.get(name, 0))
+
+    context.log.info(
+        "%s: %s securities asked, %s spans written, %s with no bars",
+        mode,
+        totals["asked"],
+        totals["written"],
+        totals["without_bars"],
+    )
+    return dg.MaterializeResult(
+        metadata={
+            "mode": mode,
+            "securities": len(securities),
+            **totals,
+            WATERMARK: watermark if watermark is not None else (since or 0),
+        }
+    )
