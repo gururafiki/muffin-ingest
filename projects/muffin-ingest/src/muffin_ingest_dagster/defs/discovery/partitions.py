@@ -10,6 +10,8 @@ NPORT_PARTITIONS = "nport_filing"
 nport_filings = dg.DynamicPartitionsDefinition(name=NPORT_PARTITIONS)
 
 
+#: One key per row of `market.directory_query` (`US.common`, `US.arca`, …) since 2026-10-04; one per
+#: venue before it. The definition keeps its name: names are state.
 SWEEP_PARTITIONS = "exchange_sweep"
 
 
@@ -23,6 +25,17 @@ exchange_sweeps = dg.DynamicPartitionsDefinition(name=SWEEP_PARTITIONS)
 NPORT_PER_RUN = 20
 
 
-#: A swept venue's directory stays current for a month — venues change slowly, and a gate tighter
-#: than the monthly `new_exchange_sweeps` sensor would fire on a lane that is behaving as designed.
-VENUE_STALE_AFTER = timedelta(days=30)
+#: When every directory query is walked again from page one: the first of the month, 03:37 UTC —
+#: after the 00:00 lanes, off the hour. OpenFIGI has no as-of, so a refresh is a re-walk.
+DIRECTORY_REFRESH_CRON = "37 3 1 * *"
+
+
+#: A walk is stale once a monthly refresh has been missed: the longest month plus a pass (~65
+#: minutes keyed for all 237 queries) and margin. Tighter, and it would fail on a lane behaving as
+#: designed.
+VENUE_STALE_AFTER = timedelta(days=35)
+
+
+#: The tag `unfinished_sweeps` puts on the runs it requests. A run carrying it resumes a walk from
+#: the cursor in its file and never starts a new one (`raw_exchange_sweep`).
+SWEEP_RESUME_TAG = "muffin/sweep_resume"

@@ -317,9 +317,16 @@ class ParquetIOManager(dg.UPathIOManager):
         return merged
 
     def stored_rows_for(
-        self, asset_key: dg.AssetKey, partition_key: str
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        columns: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
         """What a partition already holds, asked OUTSIDE a run's output context.
+
+        `columns` reads only those (the ones the file has), for a caller that asks a question of
+        every partition and needs none of the bodies: the resume sensor reads 237 walks' last
+        cursors every 15 minutes, and US.common alone is 150 pages of JSON.
 
         An asset that extends rather than replaces has to know how far it got BEFORE it fetches,
         and Dagster offers nothing for it: self-dependency (`TimeWindowPartitionMapping`) is
@@ -331,17 +338,22 @@ class ParquetIOManager(dg.UPathIOManager):
         manager_wrote` drives the real seam and compares, so the two cannot diverge unnoticed.
         """
         path = self._base_path.joinpath(*asset_key.path, partition_key)
-        return self._stored_rows(self._with_extension(path))
+        return self._stored_rows(self._with_extension(path), columns)
 
-    def _stored_rows(self, path: UPath) -> Sequence[Mapping[str, Any]]:
+    def _stored_rows(
+        self, path: UPath, columns: Sequence[str] | None = None
+    ) -> Sequence[Mapping[str, Any]]:
         """What the partition already holds, or nothing if it holds nothing yet."""
         import pyarrow.parquet as pq
 
         if not path.exists():
             return []
-        table = pq.read_table(path.path if hasattr(path, "path") else str(path))
-        if table.column_names == ["collected_nothing"]:
+        local = path.path if hasattr(path, "path") else str(path)
+        names = pq.read_schema(local).names
+        if names == ["collected_nothing"]:
             return []
+        wanted = None if columns is None else [c for c in columns if c in names]
+        table = pq.read_table(local, columns=wanted)
         stored: list[dict[str, Any]] = table.to_pylist()
         return stored
 
@@ -372,9 +384,14 @@ class RawStore(dg.ConfigurableResource):  # type: ignore[type-arg]
     base_path: str
 
     def stored_rows_for(
-        self, asset_key: dg.AssetKey, partition_key: str
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        columns: Sequence[str] | None = None,
     ) -> Sequence[Mapping[str, Any]]:
-        return ParquetIOManager(base_path=self.base_path).stored_rows_for(asset_key, partition_key)
+        return ParquetIOManager(base_path=self.base_path).stored_rows_for(
+            asset_key, partition_key, columns
+        )
 
 
 class PostgresIOManager(dg.ConfigurableIOManager):

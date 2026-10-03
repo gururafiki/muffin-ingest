@@ -274,7 +274,10 @@ def _drive(
         return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
 
     monkeypatch.setattr(httpx, "post", posting)
-    provider.filter_exchange("AU")
+    # `/v3/mapping`, because it is the endpoint whose answers http-cache KEEPS. `/v3/filter` goes
+    # past the cache on every request (see the directory tests below), so it cannot show a retry
+    # turning a cached error into a fresh answer.
+    provider.mapping([{"idType": "ID_ISIN", "idValue": "US0378331005"}])
     return sent
 
 
@@ -288,7 +291,7 @@ def test_a_transient_error_is_retried_once_past_the_cache(
         monkeypatch,
         [
             (200, {"error": "There was an error while processing this request."}),
-            (200, {"data": [], "total": 0}),
+            (200, [{"data": []}]),
         ],
     )
     assert len(sent) == 2, "the transient must be asked again"
@@ -327,5 +330,90 @@ def test_an_ordinary_answer_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> N
     """The control: a page of listings costs exactly one request, so the retry cannot be doubling
     every call in the name of a fault that is not there."""
     monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
-    sent = _drive(monkeypatch, [(200, {"data": [{"figi": "X", "ticker": "T"}], "total": 1})])
+    sent = _drive(monkeypatch, [(200, [{"data": [{"figi": "X", "ticker": "T"}]}])])
     assert len(sent) == 1
+
+
+# --- a local exchange's lines filed as their composite --------------------------------------------
+
+
+def test_a_local_line_takes_its_composite_figi_and_keeps_what_it_says() -> None:
+    """NYSE Arca's line for BellRing is `BBG0154FBJJ5`; the US line the capped composite walk
+    dropped is `BBG013QNJHP8`, and the Arca line names it as `compositeFIGI` (measured
+    2026-10-03). Filed as the composite, it is the US row the directory was missing."""
+    body = json.dumps(
+        {
+            "data": [
+                {
+                    "figi": "BBG0154FBJJ5",
+                    "compositeFIGI": "BBG013QNJHP8",
+                    "shareClassFIGI": "BBG013QNJHW0",
+                    "ticker": "BRBR",
+                    "name": "BELLRING BRANDS INC",
+                    "exchCode": "UP",
+                    "securityType": "Common Stock",
+                    "securityType2": "Common Stock",
+                }
+            ],
+            "total": 1,
+        }
+    ).encode()
+    lines, _, _ = openfigi.parse_filter(body, exch_code="US")
+    composites, unplaced = openfigi.as_composite(lines)
+
+    assert unplaced == 0
+    assert composites == [
+        {
+            "figi": "BBG013QNJHP8",
+            "composite_figi": "BBG013QNJHP8",
+            "exch_code": "US",
+            "ticker": "BRBR",
+            "name": "BELLRING BRANDS INC",
+            "security_type": "Common Stock",
+            "figi_security_type": "Common Stock",
+            "share_class_figi": "BBG013QNJHW0",
+        }
+    ]
+    # THE INPUT IS NOT EDITED IN PLACE: stage 2 may still need the local line it parsed.
+    assert lines[0]["figi"] == "BBG0154FBJJ5"
+
+
+def test_a_local_line_naming_no_composite_is_counted_not_filed_under_its_own_figi() -> None:
+    """Filing it under its local FIGI would give one stock a second "US" line. The control line
+    beside it must survive, or "counted" and "everything dropped" would look the same."""
+    lines: list[dict[str, Any]] = [
+        {"figi": "BBG000LOCAL1", "composite_figi": None, "ticker": "ORPH"},
+        {"figi": "BBG000LOCAL2", "composite_figi": "BBG000COMP02", "ticker": "KEEP"},
+    ]
+    composites, unplaced = openfigi.as_composite(lines)
+    assert unplaced == 1
+    assert [row["figi"] for row in composites] == ["BBG000COMP02"]
+
+
+def test_every_directory_page_goes_past_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A MONTHLY RE-WALK SENDS LAST MONTH'S REQUEST BODIES. Page one carries no cursor and each
+    later cursor follows from it, while http-cache keys an OpenFIGI 200 on the body for 90 days —
+    so without the bypass the refresh is served the previous walk, page for page, and reports a
+    fresh one. The first page and a later one both say so."""
+    import httpx
+
+    from muffin_ingest.providers import openfigi as provider
+
+    monkeypatch.delenv("OPENFIGI_API_KEY", raising=False)
+    sent: list[dict[str, str]] = []
+
+    def posting(url: str, **kw: Any) -> httpx.Response:
+        headers: Mapping[str, str] = kw.get("headers") or {}
+        sent.append({k.lower(): v for k, v in headers.items()})
+        return httpx.Response(
+            200, json={"data": [], "total": 0}, request=httpx.Request("POST", url)
+        )
+
+    monkeypatch.setattr(httpx, "post", posting)
+    provider.filter_exchange("US", security_type2="REIT")
+    provider.filter_exchange("US", cursor="QW9Fc1Fr", security_type2="REIT")
+    assert [h.get("x-muffin-cache-bypass") for h in sent] == ["1", "1"]
+
+    # THE CONTROL: the mapping endpoint, whose answers are stable, still reads the cache.
+    provider.mapping([{"idType": "ID_ISIN", "idValue": "US0378331005"}])
+    assert "x-muffin-cache-bypass" not in sent[-1]

@@ -8,6 +8,7 @@ from muffin_ingest.facets import openfigi
 
 from muffin_ingest_dagster.defs.discovery.derived import security_listing
 from muffin_ingest_dagster.defs.discovery.partitions import SWEEP_PARTITIONS
+from muffin_ingest_dagster.defs.discovery.queries import directory_queries
 from muffin_ingest_dagster.defs.discovery.raw import raw_exchange_sweep
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
@@ -23,72 +24,123 @@ CAP_DRIFT_ROWS = 25
 def venue_sweep_reached_its_last_page(
     context: dg.AssetCheckExecutionContext, raw_store: RawStore
 ) -> dg.AssetCheckResult:
-    """Did this venue's walk get all the way to the end, or did it stop part-way?
+    """Did each query's walk get all the way to the end, or did it stop part-way?
 
-    WHY THIS EXISTS AT ALL. Resuming a sweep is an operator action — `new_exchange_sweeps` only
-    ever ADDS venues, and its own comment says "re-materialising them is an operator's call". That
-    is a sound design and it was missing its other half: NOTHING could tell a finished venue from a
-    stalled one. A venue that stopped on page 40 or on a 429 is a perfectly ordinary materialized
-    partition, and the freshness policy cannot see it either, because a half-swept venue is
-    "recently materialized" the moment it stops. So the operator would have re-walked all 59 to be
-    safe, or none of them.
+    A walk that stopped on a 429 is a perfectly ordinary materialized partition, and the freshness
+    policy cannot see it either, because a half-walked query is "recently materialized" the moment
+    it stops. This is the `exchange-listings` 429 defect and the DART windowed-sweep lesson in the
+    one form that closes them: a REFUSED SWEEP MUST NOT READ AS A FINISHED ONE. A partition whose
+    last page still carries a `cursor_at` has more of the query to fetch, and says so.
+    `unfinished_sweeps` resumes exactly these, from the same field.
 
-    This is the `exchange-listings` 429 defect and the DART windowed-sweep lesson, in the one form
-    that closes them: a REFUSED SWEEP MUST NOT READ AS A FINISHED ONE. A partition whose last page
-    still carries a `cursor_at` has more of the venue to fetch, and says so.
+    WARN, NOT ERROR, AND NOT BLOCKING: an unfinished walk is the expected state while a refresh or a
+    resume is under way, so failing the run would make every refresh red. The names are the point.
 
-    WARN, NOT ERROR, AND NOT BLOCKING. An unfinished venue is the expected state during a load — a
-    large venue exceeds `SWEEP_MAX_PAGES` by design and takes several runs — so failing the run
-    would make every load red. The check's job is to be READABLE: the partitions that fail are
-    exactly the backfill selection.
-
-    "NO CURSOR LEFT" IS NOT "FINISHED" WHEN THE PROVIDER STOPPED ISSUING THEM. OpenFIGI answers at
-    most 15,000 results per `/v3/filter` query, ordered by FIGI, and its last page then carries no
-    `next`. This check passed the US on 2026-09-21 while the walk held 15,000 of the 20,096 listings
-    the provider's own `total` reported, missing every US FIGI newer than `BBG013JYT8V4` — about
-    every listing since 2022. So a walk that ended short of its `total` is CAPPED. It is reported
-    apart from the unfinished venues because re-walking it cannot help: the query has to be
-    narrower (umbrella `docs/deferred/2026-09-27-the-us-directory-stops-at-15000.md`).
+    THE CAPPED VERDICT LIVES IN `directory_query_within_the_cap` SINCE 2026-10-04. A capped walk is
+    finished — the provider issues no cursor past 15,000 results — and re-walking cannot help it,
+    so it does not belong among the walks to resume.
     """
-    keys = _partitions(context)
+    keys = _every_query(context)
     unfinished: list[str] = []
     pages = 0
     never_swept: list[str] = []
-    capped: list[str] = []
-    for exch_code in keys:
-        stored = list(raw_store.stored_rows_for(raw_exchange_sweep.key, exch_code))
+    for key in keys:
+        stored = list(raw_store.stored_rows_for(raw_exchange_sweep.key, key, columns=["cursor_at"]))
         pages += len(stored)
         if not stored:
             # NOT THE SAME FAILURE, AND NOT PASSED EITHER. A partition with no file at all is one
             # the check ran against before its asset did; saying "finished" would be a claim about
-            # a venue nobody has asked the provider about.
-            never_swept.append(exch_code)
+            # a query nobody has asked the provider.
+            never_swept.append(key)
             continue
         if stored[-1].get("cursor_at"):
-            unfinished.append(exch_code)
-            continue
-        held, total = _held_and_total(stored)
-        if total is not None and total - held > max(CAP_DRIFT_ROWS, total // 1000):
-            capped.append(f"{exch_code} ({held} of {total})")
+            unfinished.append(key)
 
-    stalled = sorted(unfinished + never_swept)
     return dg.AssetCheckResult(
-        passed=not stalled and not capped,
+        passed=not (unfinished or never_swept),
         severity=dg.AssetCheckSeverity.WARN,
         metadata={
-            "venues": len(keys),
+            "queries": len(keys),
             "pages_held": pages,
             "unfinished": len(unfinished),
             "never_swept": len(never_swept),
-            # NAMED, NOT JUST COUNTED — the names are the backfill selection, and a count alone
-            # sends the reader to look them up by hand.
-            "resume_these": ", ".join(stalled[:20]) or "none",
-            "capped": len(capped),
-            "capped_venues": ", ".join(sorted(capped)) or "none",
-            "note": "a venue whose last page still carries a cursor has more to fetch; "
-            "re-materialise the partition and it resumes from the file. A CAPPED venue ended "
-            "short of the provider's own total at OpenFIGI's 15,000-result limit, and only a "
-            "narrower query reaches the rest",
+            # NAMED, NOT JUST COUNTED, and named APART: `unfinished_sweeps` resumes the first list
+            # from each file's cursor, while a query never walked has no cursor and is the
+            # automation condition's (or, after a failed run, an operator's).
+            "resume_these": ", ".join(sorted(unfinished)[:20]) or "none",
+            "not_yet_walked": ", ".join(sorted(never_swept)[:20]) or "none",
+            "note": "a query whose last page still carries a cursor has more to fetch; "
+            "unfinished_sweeps resumes it from the file within the hour",
+        },
+    )
+
+
+@dg.asset_check(asset=raw_exchange_sweep, blocking=False)
+def directory_query_within_the_cap(
+    context: dg.AssetCheckExecutionContext, raw_store: RawStore, postgres: Postgres
+) -> dg.AssetCheckResult:
+    """Did a finished walk hold what the provider counted, and if not, does another query cover it?
+
+    "NO CURSOR LEFT" IS NOT "FINISHED" WHEN THE PROVIDER STOPPED ISSUING THEM. OpenFIGI answers at
+    most 15,000 results per `/v3/filter` query ("Max Amount of Pages: 150", ordered by FIGI), and
+    its last page then carries no `next`. The US walk passed as finished on 2026-09-21 holding
+    15,000 of 20,096 and missing every US FIGI newer than `BBG013JYT8V4` — about every listing
+    since 2022. Only the provider's own `total` tells the two apart.
+
+    A CAPPED QUERY IS COVERED when an alias asks the same type, is filed under the same venue and
+    has FINISHED its own walk: `US.arca` (NYSE Arca) lists every exchange-listed US stock, each line
+    naming its US line. That passes, naming the alias — honestly partial, because OTC lines past the
+    cap stay unreached and no OpenFIGI filter narrows OTC enough (umbrella docs/deferred/2026-09-27-
+    the-us-directory-stops-at-15000.md). An alias still walking covers nothing yet. A capped query
+    nothing covers FAILS: the remedy is a `market.directory_alias` row, and Frankfurt (14,205 of
+    15,000 in September) is the next expected.
+
+    SEPARATE FROM `venue_sweep_reached_its_last_page` so that check names only walks a resume can
+    help. Non-blocking and WARN: a cap is a coverage gap, not bad data.
+    """
+    keys = _every_query(context)
+    with postgres.connect() as conn:
+        queries = directory_queries(conn)
+    covered: list[str] = []
+    uncovered: list[str] = []
+    for key in keys:
+        query = queries.get(key)
+        if query is None:
+            continue  # a stale key; `query_for` names the remedy wherever a run touches it
+        stored = list(raw_store.stored_rows_for(raw_exchange_sweep.key, key))
+        if not stored or stored[-1].get("cursor_at"):
+            continue  # not finished: the other check's subject
+        held, total = _held_and_total(stored)
+        if total is None or total - held <= max(CAP_DRIFT_ROWS, total // 1000):
+            continue
+        aliases = sorted(
+            q.key
+            for q in queries.values()
+            if q.maps_to_composite
+            and q.key != key
+            and q.files_under == query.files_under
+            and q.security_type2 == query.security_type2
+        )
+        described = f"{key} ({held} of {total})"
+        finished = [a for a in aliases if _walk_finished(raw_store, a)]
+        if finished:
+            covered.append(f"{described} covered by {', '.join(finished)}")
+        elif aliases:
+            uncovered.append(f"{described}, {', '.join(aliases)} not finished")
+        else:
+            uncovered.append(described)
+
+    return dg.AssetCheckResult(
+        passed=not uncovered,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "queries": len(keys),
+            "capped": len(covered) + len(uncovered),
+            "capped_and_covered": "; ".join(sorted(covered)) or "none",
+            "capped_and_uncovered": "; ".join(sorted(uncovered)) or "none",
+            "note": "a capped walk ended short of the provider's own total at OpenFIGI's "
+            "15,000-result limit; only a narrower query reaches the rest, added as a "
+            "market.directory_alias row",
         },
     )
 
@@ -105,17 +157,22 @@ def _held_and_total(stored: Sequence[Mapping[str, Any]]) -> tuple[int, int | Non
     return held, total
 
 
-def _partitions(context: dg.AssetCheckExecutionContext) -> list[str]:
-    """The venues this evaluation is about: the run's, or every registered one.
+def _walk_finished(raw_store: RawStore, key: str) -> bool:
+    """A walk is finished when it holds pages and the last one carries no cursor."""
+    stored = list(raw_store.stored_rows_for(raw_exchange_sweep.key, key, columns=["cursor_at"]))
+    return bool(stored) and not stored[-1].get("cursor_at")
 
-    A check on a partitioned asset runs with the run's partition context, which is what makes the
-    result land beside the partition it describes. Evaluated outside one — a bare check run — it
-    answers for the whole grid, which is the question an operator asks.
+
+def _every_query(context: dg.AssetCheckExecutionContext) -> list[str]:
+    """Every registered query, whichever run evaluates the check.
+
+    A CHECK ON A PARTITIONED ASSET RECORDS ONE RESULT FOR THE WHOLE ASSET in Dagster 1.13 — it is
+    unpartitioned unless declared with a preview `partitions_def`. This used to answer for the
+    run's partitions only, believing the result landed beside them; it did not, so the check's
+    status was whichever query ran last, and a stalled walk passed the moment any other query
+    finished. Answering for the grid every time makes the latest status the grid's status. The
+    cost is reading one column of each walk's file.
     """
-    if context.has_partition_key:
-        return [context.partition_key]
-    if context.has_partition_key_range:
-        return list(context.partition_keys)
     instance: Any = context.instance
     return sorted(instance.get_dynamic_partitions(SWEEP_PARTITIONS))
 

@@ -7,18 +7,22 @@ from muffin_ingest import settings
 from muffin_ingest.facets import nport
 from muffin_ingest.providers import sec_nport
 
-from muffin_ingest_dagster.defs.discovery.core import _exchanges, _tracked_funds
+from muffin_ingest_dagster.defs.discovery.core import _tracked_funds
 from muffin_ingest_dagster.defs.discovery.partitions import (
     NPORT_PARTITIONS,
     SWEEP_PARTITIONS,
+    SWEEP_RESUME_TAG,
     exchange_sweeps,
     nport_filings,
 )
+from muffin_ingest_dagster.defs.discovery.queries import directory_queries
 from muffin_ingest_dagster.defs.discovery.raw import (
+    _resume_state,
     raw_exchange_sweep,
     raw_fund_directory,
     raw_nport_filing,
 )
+from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
 # --- sensors ------------------------------------------------------------------------------------
@@ -64,7 +68,9 @@ def _directory_map() -> dict[str, tuple[str, str]]:
 #:
 #: CHANGED FOR FILINGS ON 2026-09-26: `raw_nport_filing` now carries `on_missing()`, because the
 #: lane replaces the edge's `fund-holdings` and had never once run by hand. A filing costs one SEC
-#: request a quarter. The venue sweep stays an operator's call — a pass is hours of OpenFIGI.
+#: request a quarter. CHANGED FOR THE DIRECTORY ON 2026-10-04: `raw_exchange_sweep` walks a new
+#: query on its own and every query monthly (umbrella spec 2026-10-04, decision D3), ~1,300 keyed
+#: requests a pass against a filter budget nothing else spends.
 #:
 #: That distinction is the whole reason these two go on while `new_symbols_needed` does not. The
 #: symbology sensor seeds a grid whose rungs carry `AutomationCondition.missing()`, so the daemon
@@ -131,24 +137,95 @@ def new_nport_filings(context: dg.SensorEvaluationContext, postgres: Postgres) -
 
 @dg.sensor(
     target=raw_exchange_sweep,
-    minimum_interval_seconds=7 * 24 * 3600,
+    minimum_interval_seconds=24 * 3600,
     default_status=dg.DefaultSensorStatus.RUNNING,
-    description="The enabled venues become sweep partitions.",
+    description="Each question in market.directory_query becomes a sweep partition.",
 )
 def new_exchange_sweeps(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:
+    """One partition per row of `market.directory_query` — a venue x type, or an alias.
+
+    STILL ADDS KEYS AND REQUESTS NOTHING ITSELF. What changed on 2026-10-04 is what follows a key:
+    `raw_exchange_sweep` carries `on_missing()`, so a key added here is walked on the daemon's next
+    tick. Daily rather than weekly, because a row added in Studio should be walked the same day.
+
+    A KEY THE VIEW NO LONGER LISTS IS NAMED, NEVER DELETED HERE: deleting a partition drops its
+    materialisation status, and a sensor that read a half-empty view during a deploy would erase
+    the grid. The 59 per-venue keys from before the re-key are the expected case, deleted by hand
+    once every query has been walked (umbrella spec 2026-10-04).
+    """
     with postgres.connect() as conn:
-        venues = _exchanges(conn)
+        queries = directory_queries(conn)
     existing = set(context.instance.get_dynamic_partitions(SWEEP_PARTITIONS))
-    add = [exch for exch in venues if exch not in existing]
-    context.log.info("%s venues, %s not yet swept", len(venues), len(add))
+    # SORTED, so the grid reads venue by venue. Each key is its own run (`SWEEP_QUERIES_PER_RUN`).
+    #
+    # A KEY MUST BE ADDED AFTER THE CONDITION HAS BEEN EVALUATED ONCE. `on_missing()` requests a
+    # partition that BECOMES missing between two evaluations; one already missing at the first
+    # evaluation is treated as handled (measured on 1.13.22, 2026-09-20: 0 of 2 such partitions).
+    # Steady state this is automatic — a row added in Studio lands days after the condition did.
+    add = sorted(key for key in queries if key not in existing)
+    stale = sorted(existing - set(queries))
+    context.log.info(
+        "%s queries, %s not yet partitions%s",
+        len(queries),
+        len(add),
+        f"; {len(stale)} partitions no query lists: {', '.join(stale[:20])}" if stale else "",
+    )
     return dg.SensorResult(
         run_requests=[],
         dynamic_partitions_requests=[exchange_sweeps.build_add_request(add)] if add else [],
     )
 
 
-#: The discovery directory is the one daily schedule in the lane; the filings and sweeps are
-#: seeded by their sensors, and re-materialising them is an operator's call.
+@dg.sensor(
+    target=raw_exchange_sweep,
+    minimum_interval_seconds=15 * 60,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+    description="A directory walk the provider refused part-way resumes from its file's cursor.",
+)
+def unfinished_sweeps(context: dg.SensorEvaluationContext, raw_store: RawStore) -> dg.SensorResult:
+    """Request every walk whose stored file still ends in a cursor — at most once an hour each.
+
+    WHY A SENSOR AND NOT `any_checks_match(check_failed())`. A check on a partitioned asset is
+    unpartitioned in Dagster 1.13 unless declared with a preview `partitions_def` (and even then it
+    records a partition only for a single-partition step), so its status is the WHOLE grid's: the
+    check-based condition would see one unfinished walk as every query failing and re-walk all 237.
+    This reads the same field `venue_sweep_reached_its_last_page` reads, per partition.
+
+    A WALK REFUSED ON ITS FIRST PAGE HAS NO CURSOR, and is not this sensor's: its run FAILED
+    (nothing fetched, nothing claimed), and the monthly tick or an operator asks again. Retrying
+    those hourly would keep asking a provider that has just refused three times in three minutes.
+
+    THE RUN KEY CARRIES THE CURSOR AND THE HOUR: a resume point is requested at most once an hour,
+    a walk that advanced gets a fresh request, and a run already queued for it is not doubled.
+    The run is tagged so `raw_exchange_sweep` only RESUMES: if another run finished the walk first,
+    this one finds no cursor and asks nothing.
+    """
+    import hashlib
+    import time
+
+    hour = int(time.time() // 3600)
+    requests: list[dg.RunRequest] = []
+    for key in context.instance.get_dynamic_partitions(SWEEP_PARTITIONS):
+        stored = raw_store.stored_rows_for(
+            raw_exchange_sweep.key, key, columns=["cursor_at", "page"]
+        )
+        cursor, _ = _resume_state(stored)
+        if cursor is None:
+            continue  # finished, or never walked — `on_missing()` owns a new key
+        mark = hashlib.sha1(cursor.encode()).hexdigest()[:12]
+        requests.append(
+            dg.RunRequest(
+                partition_key=key,
+                run_key=f"{key}:{mark}:{hour}",
+                tags={SWEEP_RESUME_TAG: "true"},
+            )
+        )
+    context.log.info("%s unfinished walks requested", len(requests))
+    return dg.SensorResult(run_requests=requests)
+
+
+#: The fund directory is the one daily schedule in the lane. Filings are fetched when their sensor
+#: adds them, and the venue directory refreshes itself monthly through its automation condition.
 fund_directory = dg.ScheduleDefinition(
     name="fund_directory_schedule",
     target=[raw_fund_directory],

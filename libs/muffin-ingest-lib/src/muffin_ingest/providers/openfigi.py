@@ -208,13 +208,24 @@ def filter_exchange(
 
     `securityType2='Common Stock'` IS THE FILTER, not decoration: unfiltered, "Samsung Electronics"
     returns 8,725 hits that are nearly all derivatives. ADRs are a SEPARATE coarse type
-    (`Depositary Receipt`), which is why a future sweep of the US must ask for both — a
+    (`Depositary Receipt`), so each type is its own question (`market.directory_query`) — a
     Common-Stock-only sweep loses every ADR, and TSM/NVO/BABA are exactly that.
+
+    EVERY PAGE GOES PAST THE CACHE. http-cache keeps an OpenFIGI 200 for 90 days, keyed on the
+    request body, and a directory question asked again next month is the SAME body — page one has
+    no cursor, and every later page's cursor follows from it. So a monthly re-walk would have been
+    served last month's pages, and would have kept being served them for three months, while every
+    run reported a fresh walk. A directory is the provider's answer AS OF NOW; there is nothing a
+    cached page could save but the request, and the request is the whole point. The bypass also
+    stores the fresh page over the old entry, so the cache still mirrors the latest walk.
+
+    A bypassed request never receives a stale entry either: nginx serves stale only for an EXPIRED
+    lookup, and a bypass performs no lookup, so a 429 arrives as a 429 rather than as an old page.
     """
     body: dict[str, object] = {"exchCode": exch_code, "securityType2": security_type2}
     if cursor:
         body["start"] = cursor
-    return _post("/v3/filter", body, timeout_s)
+    return _post("/v3/filter", body, timeout_s, bypass_cache=True)
 
 
 def mapping(jobs: list[dict[str, Any]], *, timeout_s: float = 20.0) -> Document:
