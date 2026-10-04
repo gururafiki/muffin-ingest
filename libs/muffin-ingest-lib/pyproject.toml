@@ -63,7 +63,7 @@ hub = [
 # dropping a declared dependency can remove something a provider reaches for implicitly —
 # pandas.read_html needs lxml, and openbb-finviz scrapes. Drop them in a change that measures it.
 filings = [
-  "edgartools>=4.14,<5",
+  "edgartools>=4.14,<6",
   "pdfplumber>=0.11,<0.12",
   "lxml>=5.3,<6",
 ]
