@@ -348,3 +348,37 @@ def test_a_range_run_over_merging_partitions_writes_them_all(tmp_path: Path) -> 
     assert meta["rows_fetched"].value == 6, "two fresh rows per partition, three partitions"
     assert meta["rows_superseded"].value == 3, "each partition's stored A row was re-asked"
     assert meta["rows_total"].value == 6
+
+
+def test_a_caller_can_ask_for_columns_without_reading_the_bodies(tmp_path: Path) -> None:
+    """The resume sensor and the finished check read one or two columns of every directory walk —
+    237 files, US.common alone 150 pages of JSON. Asking for those columns must return exactly
+    them, a column the file lacks must be skipped rather than raise, and the empty marker must
+    still read as nothing held."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from muffin_ingest_dagster.lib.io_managers import RawStore
+
+    folder = tmp_path / "raw_exchange_sweep"
+    folder.mkdir()
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"body": b"{...}", "cursor_at": "c1", "page": 0},
+                {"body": b"{...}", "cursor_at": None, "page": 1},
+            ]
+        ),
+        str(folder / "AU.common.parquet"),
+    )
+    pq.write_table(pa.table({"collected_nothing": [True]}), str(folder / "LN.common.parquet"))
+    store = RawStore(base_path=str(tmp_path))
+    key = dg.AssetKey("raw_exchange_sweep")
+
+    assert store.stored_rows_for(key, "AU.common", columns=["cursor_at", "page", "absent"]) == [
+        {"cursor_at": "c1", "page": 0},
+        {"cursor_at": None, "page": 1},
+    ]
+    assert len(store.stored_rows_for(key, "AU.common")[0]) == 3, "no columns named: every column"
+    assert store.stored_rows_for(key, "LN.common", columns=["cursor_at"]) == []
+    assert store.stored_rows_for(key, "US.common", columns=["cursor_at"]) == [], "no file: nothing"

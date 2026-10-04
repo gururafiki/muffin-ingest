@@ -8,6 +8,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "raw_exchange_sweep:directory_query_within_the_cap": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "raw_exchange_sweep:venue_sweep_reached_its_last_page": {
       "additional_deps": [],
       "blocking": false
@@ -274,16 +278,16 @@
       "tags": {}
     },
     "raw_exchange_sweep": {
-      "automation_condition": null,
+      "automation_condition": "monthly, and when a new query appears (4a214dbc0291)",
       "backfill_policy": {
-        "max_partitions_per_run": 4,
+        "max_partitions_per_run": 1,
         "type": "MULTI_RUN"
       },
       "code_version": null,
       "deps": {},
       "execution_type": "MATERIALIZATION",
       "freshness_policy": {
-        "fail_window_seconds": 2592000.0,
+        "fail_window_seconds": 3024000.0,
         "kind": "time_window",
         "warn_window_seconds": null
       },
@@ -846,7 +850,7 @@
       "tags": {}
     },
     "venue_listing": {
-      "automation_condition": null,
+      "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
         "max_partitions_per_run": 4,
         "type": "MULTI_RUN"
@@ -857,7 +861,7 @@
       },
       "execution_type": "MATERIALIZATION",
       "freshness_policy": {
-        "fail_window_seconds": 2592000.0,
+        "fail_window_seconds": 3024000.0,
         "kind": "time_window",
         "warn_window_seconds": null
       },
@@ -940,6 +944,16 @@
       "partitions": {
         "kind": "dynamic",
         "name": "symbology_subject"
+      }
+    },
+    "__anonymous_asset_job_unfinished_sweeps": {
+      "assets": [
+        "raw_exchange_sweep"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "exchange_sweep"
       }
     },
     "__anonymous_asset_job_weekly_registries": {
@@ -1083,7 +1097,7 @@
       "jobs": [
         "__anonymous_asset_job_new_exchange_sweeps"
       ],
-      "minimum_interval_seconds": 604800,
+      "minimum_interval_seconds": 86400,
       "type": "STANDARD"
     },
     "new_nport_filings": {
@@ -1115,6 +1129,14 @@
       "jobs": [],
       "minimum_interval_seconds": 30,
       "type": "AUTOMATION"
+    },
+    "unfinished_sweeps": {
+      "default_status": "RUNNING",
+      "jobs": [
+        "__anonymous_asset_job_unfinished_sweeps"
+      ],
+      "minimum_interval_seconds": 900,
+      "type": "STANDARD"
     }
   }
 }

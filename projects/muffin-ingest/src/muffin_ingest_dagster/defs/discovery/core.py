@@ -14,6 +14,7 @@ from muffin_ingest_dagster.defs.discovery.partitions import (
     exchange_sweeps,
     nport_filings,
 )
+from muffin_ingest_dagster.defs.discovery.queries import directory_queries, query_for
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -333,27 +334,56 @@ def fund_holding(
     kinds={"postgres"},
     metadata={"table": "market.venue_listing", "conflict": ["figi"]},
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=VENUE_STALE_AFTER),
-    description="The raw OpenFIGI directory for each swept venue.",
+    # The raw walk is automated (monthly, on a new query, on a resume), so its rows must follow it
+    # here without an operator naming both assets in one backfill, as they once had to be.
+    automation_condition=dg.AutomationCondition.eager(),
+    description="The OpenFIGI directory, one row per line, filed under the venue it belongs to.",
 )
 def venue_listing(
     context: AssetExecutionContext,
     postgres: Postgres,
     raw_exchange_sweep: Any,
 ) -> list[dict[str, Any]]:
-    """The sweep's pages as directory rows. `provider_symbol` joins the venue's suffix so the
-    directory is price-addressable (US has no suffix → the bare ticker)."""
+    """Each query's pages as directory rows, filed under the venue `market.directory_query` names.
+
+    A line keeps the venue its query is filed under, not the code it was asked of: `US.arca` asks
+    NYSE Arca (`UP`) and its lines become the `US` lines they name (`openfigi.as_composite`), since
+    the model has one US venue and every rule picking "the" US line reads it. A line that names no
+    composite is counted, never filed under its own FIGI. Where the capped `US.common` walk and
+    `US.arca` both hold a line, both write the same composite FIGI with the same facts, so the
+    upsert lands one row. `provider_symbol` joins the venue's suffix so the directory is
+    price-addressable (US has no suffix → the bare ticker).
+    """
     with postgres.connect() as conn:
         exchanges = _exchanges(conn)
+        queries = directory_queries(conn)
     parts = partitioned.rows_per_partition(context, raw_exchange_sweep)
     rows: list[dict[str, Any]] = []
-    for exch_code, doc_rows in parts.items():
-        suffix, _ = exchanges.get(exch_code, ("", None))
+    by_type: dict[str, int] = {}
+    mapped = unplaced = 0
+    for key, doc_rows in parts.items():
+        query = query_for(queries, key)
+        suffix, _ = exchanges.get(query.files_under, ("", None))
         for r in doc_rows:
-            listings, _, _ = openfigi.parse_filter(bytes(r["body"]), exch_code=exch_code)
+            listings, _, _ = openfigi.parse_filter(bytes(r["body"]), exch_code=query.files_under)
+            if query.maps_to_composite:
+                listings, lost = openfigi.as_composite(listings)
+                mapped += len(listings)
+                unplaced += lost
             for listing in listings:
                 listing["provider_symbol"] = (
                     f"{listing['ticker']}{suffix}" if suffix else listing["ticker"]
                 )
+                kind = listing.get("security_type") or "unknown"
+                by_type[kind] = by_type.get(kind, 0) + 1
                 rows.append(listing)
-    context.add_output_metadata({"venues": len(parts), "rows": len(rows)})
+    context.add_output_metadata(
+        {
+            "queries": len(parts),
+            "rows": len(rows),
+            "rows_by_type": ", ".join(f"{k} {v}" for k, v in sorted(by_type.items())) or "none",
+            "mapped_to_composite": mapped,
+            "unplaced_without_composite": unplaced,
+        }
+    )
     return rows
