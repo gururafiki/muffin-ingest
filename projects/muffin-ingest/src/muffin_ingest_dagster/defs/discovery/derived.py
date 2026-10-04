@@ -9,7 +9,11 @@ from typing import Any
 import dagster as dg
 from dagster import AssetExecutionContext
 
-from muffin_ingest_dagster.defs.discovery.core import fund_holding, venue_listing
+from muffin_ingest_dagster.defs.discovery.core import (
+    discovered_security,
+    fund_holding,
+    venue_listing,
+)
 from muffin_ingest_dagster.defs.discovery.queries import directory_queries
 from muffin_ingest_dagster.defs.discovery.raw import raw_exchange_sweep
 from muffin_ingest_dagster.defs.discovery.walks import read_walk
@@ -187,6 +191,54 @@ def security_listing(
         counts.get("without_primary"),
     )
     return dg.MaterializeResult(metadata=counts)
+
+
+#: The symbol map's floor, after the listing floor (05:43) so a primary moved this morning is in it.
+#: A safety net only: every writer of the map's inputs is an upstream here except `promote_listing`
+#: (the Track button), which refreshes the map itself.
+SYMBOL_MAP_FLOOR = "47 5 * * *"
+
+
+@dg.asset(
+    deps=[security_symbology, discovered_security, security_listing],
+    # EAGER, MINUS THE MISSING-DEPS GATE, for the reason `security_listing` gives: all three
+    # upstreams are partitioned or depend on partitioned assets, and some partitions are always
+    # unmaterialised.
+    automation_condition=(
+        dg.AutomationCondition.eager().without(~dg.AutomationCondition.any_deps_missing())
+        | dg.AutomationCondition.cron_tick_passed(SYMBOL_MAP_FLOOR)
+    ).with_label("on a symbol, security or listing change, or daily"),
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
+    pool="sql",
+    group_name="discovery",
+    kinds={"postgres"},
+    description=(
+        "The map every chart resolves a symbol through, rebuilt when what it is built from "
+        "changes. No provider call."
+    ),
+)
+def symbol_security(
+    context: AssetExecutionContext, postgres: Postgres
+) -> "dg.MaterializeResult[None]":
+    """Calls `market.refresh_symbol_map()` and records the symbols it holds and how long it took.
+
+    WHY HERE. `market.symbol_security` is a materialized view over the security, its yfinance
+    symbol, its ticker and its primary listing. Three assets write those (`security_symbology`,
+    `discovered_security`, `security_listing`), so a symbol adopted at 05:43 had no chart until the
+    edge's ten-minute refresh came round. The duration is recorded because a refresh grows with the
+    universe, and the walk toward a ceiling should be a chart before it is an outage.
+    Measured on production 2026-10-04: 0.31-0.33 s for 12,402 rows.
+    """
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute("select market.refresh_symbol_map()")
+        row = cur.fetchone()
+    outcome: dict[str, Any] = row[0] if row else {}
+    context.log.info(
+        "symbol map: %s symbols in %s ms", outcome.get("rows"), outcome.get("duration_ms")
+    )
+    return dg.MaterializeResult(
+        metadata={"rows": outcome.get("rows"), "duration_ms": outcome.get("duration_ms")}
+    )
 
 
 #: Classification's floor, at the edge job's old slot (`muffin-classify`). Most inputs are written
