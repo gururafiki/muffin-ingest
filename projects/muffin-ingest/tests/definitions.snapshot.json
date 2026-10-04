@@ -850,6 +850,33 @@
       ],
       "tags": {}
     },
+    "symbol_security": {
+      "automation_condition": "on a symbol, security or listing change, or daily (4697d16f40b3)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "discovered_security": null,
+        "security_listing": null,
+        "security_symbology": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "discovery",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "venue_listing": {
       "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
