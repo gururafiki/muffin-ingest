@@ -4,7 +4,7 @@ description:
   Use when running a muffin-ingest lane locally before shipping it — standing up Postgres for the
   pipeline, applying the committed migrations, materialising one partition of a tiny subset, and
   reading what it wrote. Also the way to find out what a database rebuilt from what is committed
-  actually does.
+  actually does, and to prove one SQL change on the node when Docker here is wedged.
 license: AGPL-3.0-or-later
 metadata:
   author: muffin
@@ -139,3 +139,35 @@ the node; the second only the live run answers.
 ## 5. Tear it down
 
 `scripts/local_stack.sh down`. Leave nothing running on the host.
+
+## When Docker on this machine is wedged: prove the SQL on the node
+
+Docker Desktop can hang with its backend running while its API answers nothing (`docker version`
+times out). Read docker's own exit status, never `cmd | head`'s. Restarting it is the user's call.
+The node can stand in for one SQL change. Run a throwaway Postgres, with the **production image** as
+the client, sharing its network namespace:
+
+```bash
+docker run -d --name t-pg -e POSTGRES_PASSWORD=x postgres:17-alpine
+until docker logs t-pg 2>&1 | grep -q "PostgreSQL init process complete"; do sleep 1; done
+docker exec -i t-pg psql -U postgres -v ON_ERROR_STOP=1 --single-transaction < ddl.sql
+docker run --rm -i --network container:t-pg --entrypoint python \
+  ghcr.io/gururafiki/muffin-ingest:latest - < test.py
+docker rm -f t-pg; docker image rm postgres:17-alpine
+```
+
+- **`ddl.sql`** holds the table's own `create table` and partition block, cut from its migration by
+  line range. Stub only the tables its foreign keys reference.
+- **`test.py` embeds the branch's module source** and execs it into a registered module
+  (`types.ModuleType` plus `sys.modules`; `@dataclass` under postponed annotations looks the module
+  up). The code under test is the branch's, and psycopg is production's. That is what exercises the
+  real binding, such as `%s::uuid[]` from a Python list, which no fake reaches.
+- **Mutate by rebinding the SQL constant** (`mod.SQL = mutated`), since the function reads it from its
+  module globals. Assert that each mutation changed the string, and run each variant in a transaction
+  you roll back.
+- **Measure cost separately, on production, as the lane's role.** Run from the code-location container
+  (`INGEST_DATABASE_URL`). Use `explain (analyze)` of the real statement, with inputs chosen so it
+  changes nothing, inside a transaction you roll back. **Bound what you load into that container:**
+  its memory limit is shared with the gRPC server and every run. A probe that loaded ~50M dates there
+  was OOM-killed on 2026-10-04; the kernel picked the probe, and could as well have picked a run.
+  Batch, and watch the RSS.
