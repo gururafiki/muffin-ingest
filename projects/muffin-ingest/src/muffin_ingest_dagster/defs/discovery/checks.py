@@ -1,23 +1,16 @@
 """Asset checks of the discovery family."""
 
-from collections.abc import Mapping, Sequence
 from typing import Any
 
 import dagster as dg
-from muffin_ingest.facets import openfigi
 
 from muffin_ingest_dagster.defs.discovery.derived import security_listing
 from muffin_ingest_dagster.defs.discovery.partitions import SWEEP_PARTITIONS
 from muffin_ingest_dagster.defs.discovery.queries import directory_queries
 from muffin_ingest_dagster.defs.discovery.raw import raw_exchange_sweep
+from muffin_ingest_dagster.defs.discovery.walks import is_finished, read_walk
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
-
-#: How far a walk that ENDED may fall short of the provider's own `total` and still count as
-#: finished. `total` is re-counted on every page, so a venue that gains or loses a listing during a
-#: walk ends a few rows off: measured 2026-09-27, GR held 14,202 against 14,205. The cap it exists
-#: to catch is thousands (the US held 15,000 of 20,096).
-CAP_DRIFT_ROWS = 25
 
 
 @dg.asset_check(asset=raw_exchange_sweep, blocking=False)
@@ -107,12 +100,10 @@ def directory_query_within_the_cap(
         query = queries.get(key)
         if query is None:
             continue  # a stale key; `query_for` names the remedy wherever a run touches it
-        stored = list(raw_store.stored_rows_for(raw_exchange_sweep.key, key))
-        if not stored or stored[-1].get("cursor_at"):
-            continue  # not finished: the other check's subject
-        held, total = _held_and_total(stored)
-        if total is None or total - held <= max(CAP_DRIFT_ROWS, total // 1000):
-            continue
+        walk = read_walk(raw_store, key)
+        if not walk.capped:
+            continue  # unfinished (the other check's subject), or held what the provider counted
+        held, total = walk.held, walk.total
         aliases = sorted(
             q.key
             for q in queries.values()
@@ -122,7 +113,7 @@ def directory_query_within_the_cap(
             and q.security_type2 == query.security_type2
         )
         described = f"{key} ({held} of {total})"
-        finished = [a for a in aliases if _walk_finished(raw_store, a)]
+        finished = [a for a in aliases if is_finished(raw_store, a)]
         if finished:
             covered.append(f"{described} covered by {', '.join(finished)}")
         elif aliases:
@@ -143,24 +134,6 @@ def directory_query_within_the_cap(
             "market.directory_alias row",
         },
     )
-
-
-def _held_and_total(stored: Sequence[Mapping[str, Any]]) -> tuple[int, int | None]:
-    """The results a walk's pages hold, and the provider's `total` read off the newest page."""
-    held = 0
-    total: int | None = None
-    for row in stored:
-        results, page_total = openfigi.filter_page_counts(bytes(row["body"]))
-        held += results
-        if page_total is not None:
-            total = page_total
-    return held, total
-
-
-def _walk_finished(raw_store: RawStore, key: str) -> bool:
-    """A walk is finished when it holds pages and the last one carries no cursor."""
-    stored = list(raw_store.stored_rows_for(raw_exchange_sweep.key, key, columns=["cursor_at"]))
-    return bool(stored) and not stored[-1].get("cursor_at")
 
 
 def _every_query(context: dg.AssetCheckExecutionContext) -> list[str]:

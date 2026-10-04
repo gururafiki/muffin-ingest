@@ -1,6 +1,8 @@
 """Stage 3 of the discovery family: derived from tables the database already holds."""
 
+import json
 import time
+from collections.abc import Iterable
 from datetime import timedelta
 from typing import Any
 
@@ -8,8 +10,122 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest_dagster.defs.discovery.core import fund_holding, venue_listing
+from muffin_ingest_dagster.defs.discovery.queries import directory_queries
+from muffin_ingest_dagster.defs.discovery.raw import raw_exchange_sweep
+from muffin_ingest_dagster.defs.discovery.walks import read_walk
 from muffin_ingest_dagster.defs.symbology.core import security_symbology
+from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
+
+#: The absence mark's slot: after the monthly refresh (03:37) and its filing, and two minutes before
+#: the listing floor, so a line marked today leaves `security_listing` the same morning.
+ABSENCE_MARK = "41 5 * * *"
+
+
+@dg.asset(
+    deps=[venue_listing],
+    # DAILY, AND NOT ON EVERY FILING. A month's refresh files ~237 partitions one run at a time;
+    # judging after each would judge most queries against a half-filed directory, and the answer
+    # only changes when a walk finishes. A query not yet filed at the tick is judged the next day.
+    automation_condition=(
+        dg.AutomationCondition.cron_tick_passed(ABSENCE_MARK)
+        & ~dg.AutomationCondition.in_progress()
+    ).with_label("daily"),
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
+    pool="sql",
+    group_name="universe",
+    kinds={"postgres"},
+    description=(
+        "Marks each directory line the latest complete walks able to see it stopped returning. "
+        "No provider call."
+    ),
+)
+def venue_listing_absence(
+    context: AssetExecutionContext, raw_store: RawStore, postgres: Postgres
+) -> "dg.MaterializeResult[None]":
+    """Reads each query's current walk from its raw file and calls `market.mark_venue_absence`.
+
+    THE RULES LIVE IN THE DATABASE, where CI tests them against real Postgres with fixtures that
+    make them disagree (muffin-deployment `tests/a-walk-marks-only-what-it-could-see.sql`): a walk
+    vouches only for its scope, a capped one only up to the last FIGI it holds, and past that only
+    the aliases, once all have finished. A mass mark is refused rather than applied.
+
+    THE FACTS LIVE WITH THE FILES, and one more comes from Dagster: whether stage 2 has FILED the
+    walk. A finished walk whose `venue_listing` run has not happened yet has stamped none of its
+    lines, so judging it would mark every line it returned. It is passed as unfinished, and named.
+    """
+    with postgres.connect() as conn:
+        keys = sorted(directory_queries(conn))
+    filed = _filed_walks(context.instance, keys)
+    facts: dict[str, dict[str, Any]] = {}
+    not_filed: list[str] = []
+    capped: list[str] = []
+    for key in keys:
+        walk = read_walk(raw_store, key)
+        fact = walk.as_fact()
+        if walk.complete and key not in filed:
+            fact["complete"] = False
+            not_filed.append(key)
+        if walk.capped:
+            capped.append(f"{key} to {walk.window_end}")
+        facts[key] = fact
+
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute("select market.mark_venue_absence(%s::jsonb)", (json.dumps(facts),))
+        row = cur.fetchone()
+    outcome: dict[str, Any] = row[0] if row else {}
+    context.log.info(
+        "absence: %s windows judged, %s lines marked (%s absent in all); unfinished %s; "
+        "refused %s; not yet filed %s",
+        outcome.get("windows_judged"),
+        outcome.get("marked"),
+        outcome.get("absent"),
+        outcome.get("unfinished"),
+        outcome.get("refused"),
+        not_filed,
+    )
+    return dg.MaterializeResult(
+        metadata={
+            "queries": len(keys),
+            "windows_judged": outcome.get("windows_judged"),
+            "marked": outcome.get("marked"),
+            "absent": outcome.get("absent"),
+            "marked_by_window": dg.MetadataValue.json(outcome.get("marked_by_window") or {}),
+            # NAMED, NOT JUST COUNTED: each is a window nothing was decided about today.
+            "unfinished": "; ".join(outcome.get("unfinished") or []) or "none",
+            "refused": "; ".join(outcome.get("refused") or []) or "none",
+            "not_yet_filed": "; ".join(not_filed) or "none",
+            "capped": "; ".join(capped) or "none",
+        }
+    )
+
+
+def _filed_walks(instance: dg.DagsterInstance, keys: Iterable[str]) -> set[str]:
+    """The queries whose latest walk stage 2 has filed: a `venue_listing` materialization
+    recorded after the partition's latest `raw_exchange_sweep` one.
+
+    Storage ids are the event log's own order, so this needs no clock: a re-walk or a resume moves
+    the raw id past the filing until `venue_listing` runs again.
+    """
+    filed: set[str] = set()
+    for key in keys:
+        raw = _latest_storage_id(instance, raw_exchange_sweep.key, key)
+        if raw is None:
+            continue
+        listed = _latest_storage_id(instance, venue_listing.key, key)
+        if listed is not None and listed > raw:
+            filed.add(key)
+    return filed
+
+
+def _latest_storage_id(
+    instance: dg.DagsterInstance, asset_key: dg.AssetKey, key: str
+) -> int | None:
+    records = instance.fetch_materializations(
+        dg.AssetRecordsFilter(asset_key=asset_key, asset_partitions=[key]), limit=1
+    ).records
+    return records[0].storage_id if records else None
+
 
 #: A DAILY FLOOR, because not every writer of the inputs is a Dagster asset.
 #: `market.promote_listing` (the app's Track button) mints a security with its share class outside
@@ -20,7 +136,7 @@ DAILY_FLOOR = "43 5 * * *"
 
 
 @dg.asset(
-    deps=[venue_listing, security_symbology],
+    deps=[venue_listing, venue_listing_absence, security_symbology],
     # EAGER, MINUS THE GATE THAT WOULD KEEP IT FROM EVER FIRING. An unpartitioned asset depends on
     # every upstream partition, and both upstreams always have some unmaterialised: a venue added
     # to `market.exchange` waits for an operator's sweep, and a new symbology subject waits for
