@@ -221,6 +221,7 @@ def plan_symbols(
     source: str,
     asked_local: bool,
     asked_yahoo: bool,
+    dead_symbol: str | None,
     local_hits: Sequence[dict[str, Any]] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """One security's ladder evidence → the rows to write.
@@ -264,6 +265,12 @@ def plan_symbols(
     key. Neither was live only because the Yahoo rung had never run. Now each rung that asked earns
     its own row: an OpenFIGI miss beside a Yahoo hit is two true observations, not one false one.
     The adopted symbol still prefers OpenFIGI's local line, then Yahoo's home-market line.
+
+    `dead_symbol` IS NEVER A CANDIDATE. It is the symbol the price lane last rejected alone, with a
+    healthy control in the same attempt (`dead_symbols`), so proposing it again proposes a known
+    failure — and because OpenFIGI's pick comes first, it would also stop Yahoo's answer from ever
+    being adopted. The observations are untouched: OpenFIGI did name it, and that stays recorded.
+    REQUIRED for the same reason as the asked flags: `None` is a claim that nothing is known dead.
 
     `local_hits` ARE THE LOCAL RUNG'S OWN MATCHES, AND THEY BELONG ON THIS LADDER, NOT BESIDE IT.
     The local line used to be picked here only from the TICKER rung's hits — restricted to
@@ -342,7 +349,8 @@ def plan_symbols(
     # A VALUE WITHOUT A QUESTION IS STILL NOT AN OBSERVATION, and it is reachable: the ticker
     # rung's own hits can name a local line while both symbol rungs were skipped. The adopted
     # symbol is written either way — it is a finding — and only the rungs that asked are observed.
-    value = local_value or home
+    dead = (dead_symbol or "").upper()
+    value = next((v for v in (local_value, home) if v and v.upper() != dead), None)
     if value:
         symbol_rows.append(
             {"security_id": security_id, "provider_code": SYMBOL_PROVIDER, "symbol": value}
@@ -467,11 +475,29 @@ select distinct i.security_id::text
                     where t.security_id = s.security_id and t.kind_code = %s)
 """
 
+#: THE SYMBOL A SECURITY HOLDS, WHEN THE PRICE LANE HAS SINCE REJECTED IT ALONE. The price lane
+#: records its verdict under the provider the symbol is for (`yfinance`) with `asked_with` the
+#: symbol it asked, and `identifier_probe` keeps one row per (security, scheme, provider), so the
+#: row is the latest verdict: a symbol that answers again replaces its own miss with a hit. Matching
+#: `asked_with` to the HELD symbol is what makes a corrected symbol leave by construction — the
+#: old miss names the old spelling. Measured 2026-10-04: 262 equities, every one holding an ISIN.
+_DEAD_HELD_SYMBOL = """
+select 1 from market.security_provider_symbol p
+  join market.identifier_probe d
+    on d.security_id = p.security_id and d.scheme = 'symbol' and d.provider = p.provider_code
+   and d.outcome = 'miss' and d.asked_with = p.symbol
+ where p.security_id = s.security_id and p.provider_code = %s
+"""
+
+#: A SECURITY NEEDS A SYMBOL WHEN IT HAS NONE, OR WHEN THE ONE IT HAS IS DEAD. The second arm is
+#: Stage 3b (umbrella docs/specs/2026-09-26-finishing-the-universe-family.md): the price lane's
+#: verdict is the evidence that the held symbol is wrong, and the ladder is what can name another.
 SUBJECTS_NEEDING_SYMBOL = f"""
 select distinct i.security_id::text
 {_EQUITY_WITH_ISIN}
-   and not exists (select 1 from market.security_provider_symbol p
-                    where p.security_id = s.security_id and p.provider_code = %s)
+   and (not exists (select 1 from market.security_provider_symbol p
+                     where p.security_id = s.security_id and p.provider_code = %s)
+        or exists ({_DEAD_HELD_SYMBOL}))
 """
 
 #: The ticker's anti-join, parameterised by the identifier kind, so the two cannot drift apart.
@@ -489,10 +515,11 @@ NEEDS_SHARE_CLASS = SHARE_CLASS_KIND
 
 def subjects_needing(conn: Any, evidence: str) -> set[str]:
     """The security_ids a rung supplying `evidence` still has something to say about."""
+    params: tuple[str, ...]
     if evidence == NEEDS_TICKER:
         sql, params = SUBJECTS_NEEDING_TICKER, (TICKER_KIND,)
     elif evidence == NEEDS_SYMBOL:
-        sql, params = SUBJECTS_NEEDING_SYMBOL, (SYMBOL_PROVIDER,)
+        sql, params = SUBJECTS_NEEDING_SYMBOL, (SYMBOL_PROVIDER, SYMBOL_PROVIDER)
     elif evidence == NEEDS_SHARE_CLASS:
         sql, params = SUBJECTS_NEEDING_SHARE_CLASS, (SHARE_CLASS_KIND,)
     else:
@@ -667,20 +694,23 @@ def adoptable_identifiers(
     )
 
 
-# --- a symbol already held is never replaced here -----------------------------------------------
+# --- a live symbol is never replaced; a dead one may be -------------------------------------------
 #
-# ADOPTION FILLS A GAP; IT DOES NOT OVERRULE. A yfinance symbol this ladder did not write may have
-# been verified against the provider — the edge's `security-symbol-repair` adopted `BRK-B`,
-# `ESSITY-B.ST` and `0006.HK` only after the provider answered for them — while the ladder's local
-# pick is OpenFIGI's spelling plus a suffix, which is exactly the `BRK/B` and `ESSITYB.ST` shape the
-# repair existed to undo. The upsert is keyed `(security_id, provider_code)` and UPDATES, so any
-# pick reaching it for a security that already holds a symbol overwrites it.
+# ADOPTION FILLS A GAP; IT DOES NOT OVERRULE A SYMBOL THAT WORKS. A yfinance symbol this ladder did
+# not write may have been verified against the provider — the edge's `security-symbol-repair`
+# adopted `BRK-B`, `ESSITY-B.ST` and `0006.HK` only after the provider answered for them — while the
+# ladder's local pick is OpenFIGI's spelling plus a suffix, which is exactly the `BRK/B` and
+# `ESSITYB.ST` shape that repair existed to undo. The insert is DO NOTHING on `(security_id,
+# provider_code)`, so it can only ever fill a gap; a replacement is a separate, guarded UPDATE.
 #
-# That was reachable before (the ticker rung's US hit is "a finding" even when the symbol rungs
-# were skipped) and becomes routine once the local rung also asks for share classes, because then
-# it answers for securities that hold a symbol already. So the write keeps every current symbol,
-# and says how many picks disagreed with one. Replacing a symbol the provider has refused is a
-# separate rule with its own evidence (Phase 3 stage 3).
+# A DEAD SYMBOL IS THE EXCEPTION, AND THE PRICE LANE IS THE EVIDENCE. A held symbol the provider
+# rejected ALONE, with a control proving it healthy in the same attempt (`prices.symbol_probes`),
+# is not a verified symbol any more, so replacing it can break nothing that works. Replacing a LIVE
+# one stays refused and counted. The write re-checks the death in SQL, in the same statement, so a
+# symbol that answered between the read and the write is not replaced.
+#
+# A REPLACEMENT IS NOT VERIFIED HERE. If it is dead too, the price lane finds out the same way, and
+# the ladder is asked once more; the cycle is bounded by `dead_unasked` (one re-ask per death).
 
 CURRENT_SYMBOLS = """
 select security_id::text, symbol
@@ -698,20 +728,83 @@ def current_symbols(conn: Any, security_ids: Sequence[str]) -> dict[str, str]:
         return {sid: symbol for sid, symbol in cur.fetchall()}
 
 
-def unreplaced_symbols(
-    rows: Sequence[dict[str, Any]], current: dict[str, str]
-) -> tuple[list[dict[str, Any]], list[tuple[str, str, str]]]:
-    """Split symbol rows into the ones that fill a gap (or restate the held symbol) and the ones
-    that would replace a different held symbol — `(security_id, held, proposed)`."""
+DEAD_SYMBOLS = """
+select security_id::text, asked_with
+  from market.identifier_probe
+ where scheme = 'symbol' and provider = %s and outcome = 'miss'
+   and security_id::text = any(%s)
+"""
+
+
+def dead_symbols(conn: Any, security_ids: Sequence[str]) -> dict[str, str]:
+    """security_id → the symbol the price lane last rejected alone, for the securities named.
+
+    One row per security at most: `identifier_probe` is keyed (security, scheme, provider), and the
+    price lane's latest verdict replaces its earlier one, so a symbol that answers again leaves.
+    """
+    if not security_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(DEAD_SYMBOLS, (SYMBOL_PROVIDER, sorted(set(security_ids))))
+        return {sid: symbol for sid, symbol in cur.fetchall()}
+
+
+@dataclass(frozen=True)
+class SymbolRepair:
+    """Which symbol rows fill a gap, which replace a dead symbol, and which were refused."""
+
+    #: No held symbol, or the held one restated.
+    kept: list[dict[str, Any]]
+    #: A different symbol for a security whose held one the provider rejected alone.
+    repairs: list[dict[str, Any]]
+    #: (security_id, held, proposed) — the held symbol is not known dead, so it stays.
+    refused: list[tuple[str, str, str]]
+
+
+def repairable_symbols(
+    rows: Sequence[dict[str, Any]], current: dict[str, str], dead: dict[str, str]
+) -> SymbolRepair:
+    """Split symbol rows by what writing them would do to the symbol each security holds."""
     kept: list[dict[str, Any]] = []
+    repairs: list[dict[str, Any]] = []
     refused: list[tuple[str, str, str]] = []
     for row in rows:
-        held = current.get(str(row["security_id"]))
-        if held is not None and held != row["symbol"]:
-            refused.append((str(row["security_id"]), held, str(row["symbol"])))
-            continue
-        kept.append(row)
-    return kept, refused
+        sid, proposed = str(row["security_id"]), str(row["symbol"])
+        held = current.get(sid)
+        if held is None or held == proposed:
+            kept.append(row)
+        elif dead.get(sid) == held:
+            repairs.append(row)
+        else:
+            refused.append((sid, held, proposed))
+    return SymbolRepair(kept=kept, repairs=repairs, refused=refused)
+
+
+#: THE GUARD IS THE STATEMENT'S, NOT THE CALLER'S. `p.symbol` in the WHERE is the row BEFORE the
+#: update, so the death is checked against the symbol actually being replaced, at the moment it is
+#: replaced. The trigger on `UPDATE OF symbol` then clears every symbol-keyed negative cache.
+REPAIR_DEAD_SYMBOLS = """
+update market.security_provider_symbol p
+   set symbol = r.symbol
+  from unnest(%s::uuid[], %s::text[]) as r(security_id, symbol)
+ where p.security_id = r.security_id
+   and p.provider_code = %s
+   and exists (select 1 from market.identifier_probe d
+                where d.security_id = p.security_id and d.scheme = 'symbol'
+                  and d.provider = p.provider_code and d.outcome = 'miss'
+                  and d.asked_with = p.symbol)
+returning p.security_id::text
+"""
+
+
+def repair_dead_symbols(cur: Any, rows: Sequence[dict[str, Any]]) -> list[str]:
+    """Replace each security's dead yfinance symbol with the row's; the ids actually replaced."""
+    if not rows:
+        return []
+    ids = [str(r["security_id"]) for r in rows]
+    symbols = [str(r["symbol"]) for r in rows]
+    cur.execute(REPAIR_DEAD_SYMBOLS, (ids, symbols, SYMBOL_PROVIDER))
+    return [row[0] for row in cur.fetchall()]
 
 
 STALE_MISSES = """
@@ -755,4 +848,42 @@ def stale_misses(conn: Any, *, older_than_days: int) -> set[str]:
                 SHARE_CLASS_KIND,
             ),
         )
+        return {row[0] for row in cur.fetchall()}
+
+
+#: THE RUNG THAT IS RE-ASKED ABOUT A DEAD SYMBOL, recorded under this provider by `plan_symbols`.
+#: OpenFIGI's mapping is the automated symbol rung; Yahoo's is an operator's backfill.
+REASKED_BY = "openfigi"
+
+DEAD_UNASKED = """
+select distinct p.security_id::text
+  from market.security_provider_symbol p
+  join market.identifier_probe d
+    on d.security_id = p.security_id and d.scheme = 'symbol' and d.provider = p.provider_code
+   and d.outcome = 'miss' and d.asked_with = p.symbol
+  join market.security s on s.security_id = p.security_id
+ where p.provider_code = %s
+   and s.security_type_code = 'equity'
+   and exists (select 1 from market.security_identifier i
+                where i.security_id = p.security_id and i.kind_code = 'isin')
+   and not exists (select 1 from market.identifier_probe q
+                    where q.security_id = p.security_id and q.scheme = 'symbol'
+                      and q.provider = %s and q.observed_at > d.observed_at)
+"""
+
+
+def dead_unasked(conn: Any) -> set[str]:
+    """Securities whose held symbol the price lane rejected alone after OpenFIGI last answered.
+
+    ONCE PER DEATH, OR IT NEVER ENDS. A dead symbol OpenFIGI names again (Taiwan's TPEx lines are
+    filed under `TT`, the TWSE code, so the pick is `.TW` however often it is asked) earns a fresh
+    OpenFIGI observation and leaves; it comes back only when the price lane rejects the symbol
+    again, after its own 30-day window. Measured 2026-10-04: 262 such securities, about three keyed
+    requests a month.
+
+    The population is the one `SUBJECTS_NEEDING_SYMBOL` adds for a dead symbol (an equity with an
+    ISIN), so a re-asked subject is one the rung will actually ask about.
+    """
+    with conn.cursor() as cur:
+        cur.execute(DEAD_UNASKED, (SYMBOL_PROVIDER, REASKED_BY))
         return {row[0] for row in cur.fetchall()}
