@@ -308,6 +308,27 @@ asked again on purpose must bypass the cache (`X-Muffin-Cache-Bypass`, which als
 answer over the old). A bypassed request is never handed a stale entry either: nginx serves stale
 only for an expired lookup, and a bypass makes none.
 
+## Do not judge what stage 1 fetched before stage 2 has filed it
+
+`venue_listing_absence` marks a directory line when the latest finished walk able to see it did not
+return it, judged by the `last_seen_at` that stage 2 stamps from each page. For the hour after a
+monthly refresh, every walk is finished in raw and not yet filed: its lines still carry last
+month's sighting, so judging it marks every line it returned. A stage-3 asset that reads stage-1
+facts must ask whether stage 2 has applied them, per partition. The event log answers without a
+clock: `instance.fetch_materializations(AssetRecordsFilter(asset_key, asset_partitions=[key]),
+limit=1)` for both assets, and the walk is filed when the stage-2 storage id is the larger. A
+re-walk moves the raw id past the filing again until stage 2 runs. Pass a walk that is not filed as
+unfinished, and name it.
+
+## Do not let the writer's last-wins dedupe choose between two sightings
+
+`US.common` and `US.arca` both return a US line, and a run filing both hands `postgres_io` two rows
+for one FIGI, of which `dedupe_by` keeps the LAST. `rows_per_partition` sorts by key, so which copy
+is last is an accident of naming; when it is the older one, the newer sighting is lost and the
+capped walk looks as if it had not returned a line it did. Keep the newer copy explicitly before
+returning, count the duplicates, and test both fetch orders: one of the two always puts the older
+copy last, so a single order can pass a rule that keeps the last row.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
