@@ -10,7 +10,7 @@ not a tidiness point — it has decided the behaviour of at least five resources
     display         the primary listing      — 365 of 900 non-US securities were LABELLED as a
                                                thin OTC line while being priced off the local one
 
-So a provider declares the KIND of key it wants and the ledger stores what was actually asked with.
+So a provider declares the KIND of key it wants and a probe stores what was actually asked with.
 A mark made under the wrong spelling is a statement about our typo, not about the company: `BRK/B`,
 `WALMEX*.MX`, `6.HK` and `ESSITYB.ST` all return nothing while `BRK-B`, `WALMEX.MX`, `0006.HK` and
 `ESSITY-B.ST` return full histories.
@@ -48,10 +48,10 @@ class SecurityRef:
 
 @runtime_checkable
 class Provider(Protocol):
-    """One external source, and everything the ledger needs to know about how to treat it."""
+    """One external source, and everything a lane needs to know about how to treat it."""
 
     code: str
-    """Matches `ingest.provider_budget.provider_code` and the Dagster pool name."""
+    """Matches the Dagster pool name and the `provider` of the probes this source answers."""
 
     batch_size: int
     """1 where the provider does not batch, and that is a MEASUREMENT rather than a default:

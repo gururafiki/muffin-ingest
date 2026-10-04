@@ -94,7 +94,7 @@ muffin-ingest/                       dg workspace
       definitions.py                 load_from_defs_folder
       lib/                           I/O managers, partition helpers, resource classes
       defs/resources.py              resource bindings
-      defs/platform/                 heartbeat, storage retention, automation sensor
+      defs/platform/                 heartbeat, automation sensor
       defs/<family>/                 partitions.py raw.py core.py derived.py checks.py automation.py
     envs/<name>/                     Pipes venvs — only for a dependency that must be isolated
 ```

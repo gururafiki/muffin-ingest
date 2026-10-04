@@ -8,8 +8,8 @@ the single most expensive defect this codebase has had, in both directions:
 * treating an absence as a failure stalled weight-ordered backlogs on their own head for weeks,
   because the same unanswerable securities returned at the front of every page.
 
-So the classifier returns an `Outcome`, never a boolean, and `ledger.mark()` is the only code
-allowed to turn one into a stored fact.
+So the classifier returns an `Outcome`, never a boolean, and a stored fact is written only from
+the evidence behind one (`prices.symbol_probes` for the price lane).
 """
 
 from __future__ import annotations

@@ -15,7 +15,7 @@ muffin-ingest/
       providers/openbb.py               the hub in-process; one typed function per route
       facets/<family>.py                parse and normalise raw into core rows (pure)
       derive/<thing>.py                 computations over data already held (pure)
-      writers.py  ledger.py  metrics.py  settings.py
+      writers.py  metrics.py  settings.py
     tests/unit/                         unit tests, run with no Dagster installed
     tests/fixtures/                     captured payloads and how to re-capture them — the ONE copy,
                                         read by the project's tests through `tests.FIXTURES`
@@ -28,7 +28,7 @@ muffin-ingest/
       definitions.py                    starts the exporter; load_from_defs_folder
       lib/                              io_managers.py  partitioned.py  resources.py — classes only
       defs/resources.py                 @dg.definitions — the resource bindings
-      defs/platform/                    heartbeat asset and checks, storage retention, automation sensor
+      defs/platform/                    heartbeat asset and its schedule, automation sensor
       defs/<family>/
         partitions.py                   PartitionsDefinitions and constants the family shares
         raw.py                          stage 1 assets (pool = the provider)

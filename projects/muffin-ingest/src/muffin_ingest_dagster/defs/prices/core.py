@@ -1,6 +1,6 @@
 """Stage 2 of the prices family: raw parsed and normalised into core rows."""
 
-from datetime import date, timedelta
+from datetime import date
 from typing import Any
 
 import dagster as dg
@@ -12,56 +12,11 @@ from muffin_ingest_dagster.defs.prices.partitions import (
     HISTORY_START,
     PROVIDER,
     security_partitions,
-    trading_day,
 )
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.resources import Postgres
 
 _loaded_rows = partitioned.loaded_rows
-
-
-@dg.asset(
-    partitions_def=trading_day,
-    backfill_policy=dg.BackfillPolicy.single_run(),
-    pool="sql",
-    io_manager_key="postgres_io",
-    group_name="prices",
-    kinds={"postgres"},
-    metadata={"table": "market.price_bar", "conflict": ["security_id", "trade_date"]},
-    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
-    description="Raw bars as typed core rows. Never calls a provider, so a fix here is free.",
-)
-def price_bar(
-    context: AssetExecutionContext, postgres: Postgres, raw_price_bars: Any
-) -> list[dict[str, Any]]:
-    with postgres.connect() as conn:
-        currencies = prices.currency_by_security(conn)
-
-    # EACH PARTITION PUBLISHES ITS OWN DAY, FROM ITS OWN FILE — applied here, against files, so a
-    # correction costs a re-parse rather than a re-fetch. PER FILE rather than over the run's
-    # window, because raw keeps the bars the provider sent outside the range it was asked (see
-    # `_collect`): a stray sits in one partition's file while the real bar sits in its own, and
-    # windowing the flattened run would let the writer's last-wins dedupe choose between them by
-    # file order. Per file, a stray is never published at all.
-    parts = partitioned.rows_per_partition(context, raw_price_bars)
-    raw = [row for part in parts.values() for row in part]
-    rows: list[dict[str, Any]] = []
-    for key, part in parts.items():
-        day = trading_day.time_window_for_partition_key(key)
-        rows += prices.normalise(
-            part, currencies, source_code=PROVIDER.code, window=(day.start.date(), day.end.date())
-        )
-    # THE SECURITIES WITH NO CURRENCY ARE COUNTED, NOT HIDDEN. 425 of 10,894 have neither a listing
-    # currency nor one of their own; the column is nullable so they still get a price, and this is
-    # what stops that becoming normal.
-    context.add_output_metadata(
-        {
-            "rows": len(rows),
-            "dropped": len(raw) - len(rows),
-            "without_a_currency": sum(1 for r in rows if not r["currency_code"]),
-        }
-    )
-    return rows
 
 
 @dg.asset(
@@ -81,10 +36,9 @@ def price_bar_history(
 ) -> list[dict[str, Any]]:
     """The other half of Lane B, which was missing: raw was landing and nothing normalised it.
 
-    SAME TABLE AS `price_bar`, DELIBERATELY, and keyed the same way — `(security_id, trade_date)`.
-    Two assets writing one table is the cost of two lanes with different partition schemes, and the
-    key is what makes the overlap harmless: whichever lane last collected a day writes the same
-    value for it.
+    `market.price_bar`, keyed `(security_id, trade_date)`. Until 2026-10-04 the day lane's
+    `price_bar` asset wrote the same table under the same key, which is what made a cutover with a
+    rollback harmless; this is the only writer now.
 
     NOT `replace_scope`. A security's history is APPENDED to by successive runs — a bounded page
     that fetched 2010-2015 must not retract 2016 onwards written by the last one. Retraction is for

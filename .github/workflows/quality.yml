@@ -35,7 +35,7 @@ jobs:
       - name: Install (the library and its dev group; uv fetches the interpreter it needs)
         run: uv sync --frozen
 
-      # NO DAGSTER AND NO HUB, AND BOTH ABSENCES ARE THE POINT. The ledger takes a PROTOCOL
+      # NO DAGSTER AND NO HUB, AND BOTH ABSENCES ARE THE POINT. The writers take a PROTOCOL
       # (`DbConn`) rather than a driver, the library imports no orchestrator, and `providers/openbb`
       # imports the hub inside a function — so this job passing is what proves all three rather
       # than a comment asserting them.

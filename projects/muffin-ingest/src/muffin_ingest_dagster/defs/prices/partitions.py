@@ -8,20 +8,6 @@ from muffin_ingest.providers.yfinance import Yfinance
 PROVIDER = Yfinance()
 
 
-#: FROM GO-LIVE, NOT FROM 1996. A partition here asserts that the whole cross-section for its
-#: window was collected; pre-go-live history is Lane B's, which makes no such claim.
-#:
-#: IN THE PAST, AND THE PARITY GATE IS WHY. A daily partition is only valid once its window has
-#: CLOSED, so "go-live" as a literal today leaves the asset with no materialisable partition at all
-#: — which broke every test on the day it was written, and would also make the dual-run comparison
-#: impossible: that comparison needs days the OLD resource has already covered.
-#:
-#: The partitions between here and the schedule being switched on are honestly unmaterialised.
-#: Nobody collected those days, and a grid that says so is worth more than one that hides them by
-#: starting later.
-trading_day = dg.DailyPartitionsDefinition(start_date="2026-09-01", timezone="UTC")
-
-
 #: One key per `security_id`, kept in step with the universe by `new_securities_need_history`.
 #: The name is a constant because `DynamicPartitionsDefinition.name` is typed `str | None`, and
 #: reading it back to look partitions up would hand the instance an optional.

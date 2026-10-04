@@ -8,7 +8,7 @@ from dagster import AssetExecutionContext, DagsterInstance
 from muffin_ingest.derive import returns
 from muffin_ingest.facets import prices
 
-from muffin_ingest_dagster.defs.prices.core import price_bar, price_bar_history
+from muffin_ingest_dagster.defs.prices.core import price_bar_history
 from muffin_ingest_dagster.defs.prices.partitions import PROVIDER
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -29,26 +29,19 @@ class ReturnsRun(dg.Config):
 
 
 @dg.asset(
-    deps=[price_bar, price_bar_history],
-    # EAGER, MINUS THE GATE THAT MADE IT NEVER FIRE, AND DEAF TO THE HISTORY LANE.
+    deps=[price_bar_history],
+    # EAGER, MINUS THE GATE THAT MADE IT NEVER FIRE.
     #
     # Plain `eager()` requires that NO upstream partition is missing, and an unpartitioned asset
     # depends on every one. `price_bar_history` has unfilled `security` keys by design, so every
     # production materialisation of this asset was a hand-run. The daemon's evaluation on
     # 2026-09-17 named `~any_deps_missing` as the false branch.
     #
-    # THE `.ignore(price_bar_history)` THAT SAT HERE WAS REMOVED WITH THE CUTOVER, 2026-09-19, and
-    # removing it was not optional. It existed so a multi-day history backfill could not hold the
-    # nightly rebuild, back when `price_bar` — the DAY lane — was what triggered this asset. Since
-    # `nightly_prices` replaced that lane, `daily_prices_schedule` is stopped and `price_bar` is no
-    # longer materialised at all: ignoring the security lane would have left this asset with
-    # nothing whatsoever to fire on, and returns would have silently stopped rebuilding while every
-    # run stayed green. That is the same defect the 09-17 decision fixed, arrived at from the other
-    # side.
-    #
-    # Waiting for the nightly sweep to finish is now the CORRECT behaviour rather than a cost:
-    # returns computed halfway through a sweep are returns off half a night's bars. Lineage keeps
-    # both dependencies, so a rollback to the day lane needs no change here.
+    # THE HISTORY LANE IS THE ONLY UPSTREAM since the day lane was deleted on 2026-10-04 (it had
+    # been stopped since the 09-19 cutover, which is when an `.ignore(price_bar_history)` here had
+    # to go: ignoring the security lane would have left this asset nothing to fire on). Waiting for
+    # the nightly sweep to finish is the CORRECT behaviour rather than a cost: returns computed
+    # halfway through a sweep are returns off half a night's bars.
     automation_condition=dg.AutomationCondition.eager().without(
         ~dg.AutomationCondition.any_deps_missing()
     ),
@@ -77,6 +70,7 @@ def security_return(
 ) -> list[dict[str, Any]]:
     today = date.today()
     out: list[dict[str, Any]] = []
+    withheld: list[str] = []
     stats = {"securities": 0, "with_returns": 0, "periods": 0, "with_total_return": 0}
 
     with postgres.connect() as conn:
@@ -95,6 +89,7 @@ def security_return(
                     # NOT AN ERROR AND NOT A ZERO. A series too short, too stale or flat across
                     # every window yields nothing, and writing zeros would be inventing numbers the
                     # rules exist to withhold.
+                    withheld.append(security_id)
                     continue
                 stats["with_returns"] += 1
                 # THE DATE OF THE LAST BAR ACTUALLY USED, NEVER THE RUN'S OWN DATE. Every one of
@@ -127,7 +122,26 @@ def security_return(
                         }
                     )
 
-    context.add_output_metadata({**stats, "rows": len(out)})
+        # WHAT THE RULES WITHHOLD IS RETRACTED, NOT LEFT. `replace_scope` rewrites only the
+        # securities this run produced rows for, so a security whose returns are all withheld kept
+        # the last ones written, for ever, looking current. The ingest ledger deleted them each
+        # time it marked a symbol dead, this asset rewrote them from the last bars until the series
+        # went stale (10 days), and from then until the next mark, 30 days on, they stood. A
+        # security this run EVALUATED and found nothing for is one it has an answer about: no
+        # current number. A 7-day holiday cannot trigger it; `STALE_DAYS` is 10.
+        retracted = 0
+        if withheld:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "delete from market.security_return where security_id = any(%s::uuid[])",
+                    (withheld,),
+                )
+                retracted = cur.rowcount
+            conn.commit()
+
+    context.add_output_metadata(
+        {**stats, "rows": len(out), "withheld": len(withheld), "retracted": retracted}
+    )
     return out
 
 

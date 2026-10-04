@@ -1,9 +1,5 @@
 {
   "asset_checks": {
-    "ledger_health:every_symbol_keyed_facet_retracts": {
-      "additional_deps": [],
-      "blocking": false
-    },
     "price_bar_history:no_security_is_far_behind_the_sweep": {
       "additional_deps": [],
       "blocking": false
@@ -13,10 +9,6 @@
       "blocking": false
     },
     "raw_exchange_sweep:venue_sweep_reached_its_last_page": {
-      "additional_deps": [],
-      "blocking": false
-    },
-    "raw_price_bars:every_askable_security_was_asked": {
       "additional_deps": [],
       "blocking": false
     },
@@ -156,6 +148,27 @@
       ],
       "tags": {}
     },
+    "heartbeat": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 10800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "platform",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [],
+      "tags": {}
+    },
     "index_return": {
       "automation_condition": null,
       "backfill_policy": {
@@ -174,63 +187,6 @@
         "warn_window_seconds": null
       },
       "group_name": "indices",
-      "io_manager_key": "postgres_io",
-      "kinds": [
-        "postgres"
-      ],
-      "owners": [],
-      "partitions": {
-        "cron_schedule": "0 0 * * *",
-        "end": null,
-        "end_offset": 0,
-        "fmt": "%Y-%m-%d",
-        "kind": "time_window",
-        "start": "2026-09-01T00:00:00+00:00",
-        "timezone": "UTC"
-      },
-      "pools": [
-        "sql"
-      ],
-      "tags": {}
-    },
-    "ledger_health": {
-      "automation_condition": null,
-      "backfill_policy": null,
-      "code_version": null,
-      "deps": {},
-      "execution_type": "MATERIALIZATION",
-      "freshness_policy": {
-        "fail_window_seconds": 10800.0,
-        "kind": "time_window",
-        "warn_window_seconds": null
-      },
-      "group_name": "ledger",
-      "io_manager_key": "io_manager",
-      "kinds": [
-        "postgres"
-      ],
-      "owners": [],
-      "partitions": null,
-      "pools": [],
-      "tags": {}
-    },
-    "price_bar": {
-      "automation_condition": null,
-      "backfill_policy": {
-        "max_partitions_per_run": null,
-        "type": "SINGLE_RUN"
-      },
-      "code_version": null,
-      "deps": {
-        "raw_price_bars": "TimeWindowPartitionMapping"
-      },
-      "execution_type": "MATERIALIZATION",
-      "freshness_policy": {
-        "fail_window_seconds": 129600.0,
-        "kind": "time_window",
-        "warn_window_seconds": null
-      },
-      "group_name": "prices",
       "io_manager_key": "postgres_io",
       "kinds": [
         "postgres"
@@ -533,41 +489,6 @@
       ],
       "tags": {}
     },
-    "raw_price_bars": {
-      "automation_condition": null,
-      "backfill_policy": {
-        "max_partitions_per_run": null,
-        "type": "SINGLE_RUN"
-      },
-      "code_version": null,
-      "deps": {},
-      "execution_type": "MATERIALIZATION",
-      "freshness_policy": {
-        "fail_window_seconds": 129600.0,
-        "kind": "time_window",
-        "warn_window_seconds": null
-      },
-      "group_name": "prices",
-      "io_manager_key": "parquet_io",
-      "kinds": [
-        "parquet",
-        "yfinance"
-      ],
-      "owners": [],
-      "partitions": {
-        "cron_schedule": "0 0 * * *",
-        "end": null,
-        "end_offset": 0,
-        "fmt": "%Y-%m-%d",
-        "kind": "time_window",
-        "start": "2026-09-01T00:00:00+00:00",
-        "timezone": "UTC"
-      },
-      "pools": [
-        "yfinance"
-      ],
-      "tags": {}
-    },
     "raw_price_history": {
       "automation_condition": null,
       "backfill_policy": {
@@ -800,7 +721,6 @@
       "backfill_policy": null,
       "code_version": null,
       "deps": {
-        "price_bar": null,
         "price_bar_history": null
       },
       "execution_type": "MATERIALIZATION",
@@ -942,9 +862,9 @@
       "ops": [],
       "partitions": null
     },
-    "__anonymous_asset_job_ledger_heartbeat": {
+    "__anonymous_asset_job_heartbeat": {
       "assets": [
-        "ledger_health"
+        "heartbeat"
       ],
       "ops": [],
       "partitions": null
@@ -1052,22 +972,6 @@
         "timezone": "UTC"
       }
     },
-    "daily_prices": {
-      "assets": [
-        "price_bar",
-        "raw_price_bars"
-      ],
-      "ops": [],
-      "partitions": {
-        "cron_schedule": "0 0 * * *",
-        "end": null,
-        "end_offset": 0,
-        "fmt": "%Y-%m-%d",
-        "kind": "time_window",
-        "start": "2026-09-01T00:00:00+00:00",
-        "timezone": "UTC"
-      }
-    },
     "nightly_prices": {
       "assets": [
         "price_bar_history",
@@ -1099,23 +1003,17 @@
       "execution_timezone": "UTC",
       "job": "daily_indices"
     },
-    "daily_prices_schedule": {
-      "cron_schedule": "0 0 * * *",
-      "default_status": "STOPPED",
-      "execution_timezone": "UTC",
-      "job": "daily_prices"
-    },
     "fund_directory_schedule": {
       "cron_schedule": "0 5 * * *",
       "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "__anonymous_asset_job_fund_directory_schedule"
     },
-    "ledger_heartbeat": {
+    "heartbeat": {
       "cron_schedule": "7 * * * *",
       "default_status": "RUNNING",
       "execution_timezone": "UTC",
-      "job": "__anonymous_asset_job_ledger_heartbeat"
+      "job": "__anonymous_asset_job_heartbeat"
     },
     "nightly_prices": {
       "cron_schedule": "0 0 * * *",

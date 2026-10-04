@@ -13,13 +13,13 @@ from dagster._core.storage.tags import (
 from muffin_ingest.facets import prices
 
 from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
-from muffin_ingest_dagster.defs.prices.core import price_bar, price_bar_history
+from muffin_ingest_dagster.defs.prices.core import price_bar_history
 from muffin_ingest_dagster.defs.prices.partitions import (
     PROVIDER,
     SECURITY_PARTITION,
     security_partitions,
 )
-from muffin_ingest_dagster.defs.prices.raw import raw_price_bars, raw_price_history
+from muffin_ingest_dagster.defs.prices.raw import raw_price_history
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
@@ -274,25 +274,3 @@ def _night_of(run: dg.DagsterRun) -> date | None:
         except ValueError:
             return None
     return None
-
-
-# THE DAY LANE, KEPT AND STOPPED — this is the rollback, not dead code.
-#
-# `nightly_prices` above replaced it on 2026-09-19 because the provider is asked once per TICKER
-# whatever we batch (measured: four symbols, six `/v8/finance/chart/<ticker>` requests), so a
-# day-partitioned cross-section was one partition standing for ~12,000 independent requests — all
-# or nothing, and a refusal mid-way left a materialised partition whose completeness claim was
-# false.
-#
-# IT IS DEFINED RATHER THAN DELETED SO THE CUTOVER IS REVERSIBLE BY FLIPPING A SWITCH. Starting
-# this schedule and stopping the other restores the previous behaviour with no deploy — which is
-# what expand/contract means here, and is why the assets, their checks and the whole offline replay
-# suite over captured provider bytes are all still in place. It goes, with them, once the sweep has
-# proven itself live.
-daily_prices = dg.build_schedule_from_partitioned_job(
-    dg.define_asset_job(
-        "daily_prices",
-        selection=dg.AssetSelection.assets(raw_price_bars, price_bar),
-    ),
-    default_status=dg.DefaultScheduleStatus.STOPPED,
-)

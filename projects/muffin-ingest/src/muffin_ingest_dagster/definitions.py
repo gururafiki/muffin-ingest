@@ -6,10 +6,12 @@ module exists to start the exporter and to name that folder, so the container's 
 
 TWO CONVENTIONS THAT ARE LOAD-BEARING AND EASY TO LOSE:
 
-* AN ASSET IS A TABLE, never a security. Dagster's per-item primitive is partitions, bounded around
-  25,000 per asset and meant for time windows, against ~12,350 securities times ~40 facets here —
-  so the per-item grain lives in `ingest.task` and an asset materialises "as much of a backlog as
-  fits in this run".
+* AN ASSET IS A TABLE, never a security. Where a provider is asked about one subject at a time,
+  the asset is partitioned by that subject (`prices.partitions.security_partitions`, ~12,350 keys
+  against Dagster's documented 100,000 per asset), so a partition is exactly what one ask claims.
+  What the provider said about a subject's IDENTIFIER, such as a symbol it rejected when asked
+  alone, is an observation in `market.identifier_probe`, not a partition. Until 2026-10-04 a ledger
+  (`ingest.task`) carried that grain; it left with the day-partitioned price lane.
 * A POOL IS A PROVIDER. `concurrency.pools` in `dagster.yaml` gives each provider a limit of one,
   which is what replaced the five-minute rotation as the guarantee that nothing bursts. Requests
   per second and per day are a separate concern and belong to the limiter, because a pool cannot

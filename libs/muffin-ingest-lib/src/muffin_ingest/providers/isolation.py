@@ -3,8 +3,8 @@
 A faithful port of `fetchWithIsolation` from the edge function, including the two rules that were
 each added after an incident and the one that was added after the FIX for an incident.
 
-It returns EVIDENCE and never writes. Deciding what the evidence means is `ledger.mark()`'s job, and
-recording it is `ingest.mark_absent()`'s, which refuses without the two facts this produces:
+It returns EVIDENCE and never writes. Deciding what the evidence means is the caller's:
+`prices.symbol_probes` records a symbol as rejected only with the two facts this produces —
 whether the subject was asked ALONE, and whether a control subject proved the provider healthy in
 the same attempt.
 """
@@ -41,8 +41,8 @@ class BatchVerdict:
     rows: list[dict[str, object]] = field(default_factory=list)
     dead: list[str] = field(default_factory=list)
     error: str | None = None
-    #: True when every subject in `dead` was asked on its own. `ingest.mark_absent` refuses without
-    #: it, because a run-wide tally is only ever a floor on the provider's health.
+    #: True when every subject in `dead` was asked on its own. `prices.symbol_probes` records no
+    #: miss without it, because a run-wide tally is only ever a floor on the provider's health.
     isolated: bool = False
     #: True only when a known-good subject answered in this same attempt. None when not probed.
     control_answered: bool | None = None
