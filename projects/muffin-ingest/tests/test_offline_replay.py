@@ -287,6 +287,105 @@ def test_the_window_asked_for_is_half_open_and_never_degenerate(tmp_path: Path) 
     assert start == today - timedelta(days=1), "start == end makes the provider ignore the range"
 
 
+def _asking(group: str, asked: dict[str, Any]) -> Any:
+    """The captured answer, recording the window it was asked for."""
+
+    def fetch(symbols: Sequence[str], **kwargs: Any) -> Answer:
+        asked.update(kwargs, symbols=list(symbols))
+        return Answer(rows=list(CAPTURED[group]["rows"]))
+
+    return fetch
+
+
+def test_a_symbol_change_restarts_the_history_instead_of_extending_another_listing(
+    tmp_path: Path,
+) -> None:
+    """A STORED HISTORY ASKED WITH ANOTHER SYMBOL IS ANOTHER LISTING'S.
+
+    Measured 2026-10-04: 69 partitions held two asked symbols, years of an OTC line in dollars and
+    then days of the home line — SATS as `SPASF` from 2010, then `S58.SI` from 2026-09-17 — because
+    the extension read only the newest stored date. The capture answers a one-symbol request
+    whatever it is called, so the same rows stand in for both listings here.
+    """
+    sid = "55555555-5555-5555-5555-555555555555"
+    group = "single_symbol_no_symbol_column"
+    own = tmp_path / "raw_price_history" / f"{sid}.parquet"
+    materialise(tmp_path, group, [(sid, "SPASF", 1.0)])
+    assert sql(own, "select distinct asked_symbol from {f}") == [("SPASF",)]
+
+    asked: dict[str, Any] = {}
+    result = _history(
+        tmp_path, _asking(group, asked), [(sid, "S58.SI", 1.0)], [prices_raw.raw_price_history]
+    )
+
+    assert asked["symbols"] == ["S58.SI"]
+    assert asked["start"] == prices_partitions.HISTORY_START, (
+        "a history asked with another symbol is reloaded in full, never extended"
+    )
+    assert sql(own, "select distinct asked_symbol from {f}") == [("S58.SI",)], (
+        "the reload replaces the file; a merge would keep the other listing's rows beside it"
+    )
+    meta = result.asset_materializations_for_node("raw_price_history")[0].metadata
+    assert meta["restarting_history"].value == 1
+    assert meta["loading_full_history"].value == 1
+
+
+def test_the_same_symbol_extends_from_its_watermark(tmp_path: Path) -> None:
+    """THE CONTROL. The rule above must not turn every extension into a reload, which would fetch
+    ten years of every security every night."""
+    sid = "55555555-5555-5555-5555-555555555555"
+    group = "single_symbol_no_symbol_column"
+    materialise(tmp_path, group, [(sid, "NESN.SW", 1.0)])
+
+    asked: dict[str, Any] = {}
+    result = _history(
+        tmp_path, _asking(group, asked), [(sid, "NESN.SW", 1.0)], [prices_raw.raw_price_history]
+    )
+
+    assert asked["start"] > prices_partitions.HISTORY_START
+    meta = result.asset_materializations_for_node("raw_price_history")[0].metadata
+    assert meta["restarting_history"].value == 0
+    assert meta["extending_from_watermark"].value == 1
+
+
+def test_the_clean_stage_retracts_within_each_raw_range_and_only_where_raw_has_rows(
+    tmp_path: Path,
+) -> None:
+    """THE OTHER HALF OF A RESTART. Stage 2 only upserts, so a reloaded history left the old
+    listing's bars on every day the new one did not trade: 5,097 bars across 95 securities on
+    2026-10-04, Hong Kong lines holding their OTC line's dollar bars on HK holidays.
+
+    The statement's own bounds were proved against a real Postgres, with mutations, before this
+    shipped; it cannot be reached here. This pins what stage 2 hands it: every security with raw
+    rows, its first and last raw date, and every date its raw holds.
+    """
+    fakes.RETRACTIONS.clear()
+    _, published = materialise_both(tmp_path, "batch_mixed_venues", BATCH_SUBJECTS)
+    assert published, "the batch publishes bars"
+
+    assert len(fakes.RETRACTIONS) == 1, "one retraction for the run"
+    ids, firsts, lasts, pair_ids, pair_dates = fakes.RETRACTIONS[0]
+    assert ids == sorted(sid for sid, _, _ in BATCH_SUBJECTS)
+    days = [date(2026, 9, 8), date(2026, 9, 9)]
+    assert firsts == [days[0]] * 4 and lasts == [days[1]] * 4
+    assert sorted(zip(pair_ids, pair_dates, strict=True)) == sorted(
+        (sid, day) for sid in ids for day in days
+    )
+
+
+def test_a_security_with_no_raw_rows_is_never_retracted(tmp_path: Path) -> None:
+    """AN EMPTY HISTORY IS A REFUSAL OR A DEAD SYMBOL, NOT A STATEMENT THAT NO BAR EXISTS.
+    Retracting on it would delete a whole history to record a quiet night."""
+    fakes.RETRACTIONS.clear()
+    _history(
+        tmp_path,
+        replaying("provider_has_nothing"),
+        [("66666666-6666-6666-6666-666666666666", "ZZZZ.NOPE", 0.1)],
+        [prices_raw.raw_price_history, prices_core.price_bar_history],
+    )
+    assert fakes.RETRACTIONS == [], "no raw rows, no retraction"
+
+
 def test_a_single_run_covering_several_partitions_writes_one_file_each(tmp_path: Path) -> None:
     """A MULTI-PARTITION RUN MUST FILE EACH ROW UNDER ITS OWN PARTITION. `UPathIOManager` refuses a
     multi-partition output outright —
