@@ -20,7 +20,8 @@ from muffin_ingest.facets import prices
 from muffin_ingest.providers import openbb
 from muffin_ingest.providers.openbb import Answer, ProviderRefused
 
-from muffin_ingest_dagster.defs.platform.ledger import ledger_health
+from muffin_ingest_dagster.defs.platform.heartbeat import heartbeat
+from muffin_ingest_dagster.defs.prices import checks as prices_checks
 from muffin_ingest_dagster.defs.prices import core as prices_core
 from muffin_ingest_dagster.defs.prices import derived as prices_derived
 from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
@@ -29,10 +30,10 @@ from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import loaded_defs
 
-#: DERIVED FROM THE DEFINITION, NEVER HARDCODED. The first version pinned a date that had not
-#: happened yet, so every asset test failed with "could not find a partition" — a daily partition is
-#: only valid once its window has closed, and a literal date silently expires in both directions.
-KEY = prices_partitions.trading_day.get_last_partition_key() or "2026-09-10"
+#: The day the fake provider's bars carry. A FIXED PAST DATE, which the day lane could not use (a
+#: daily partition is only valid once its window has closed, and a literal expires) but the
+#: security lane can: its window runs from 1970 to today, so a past date stays inside it for ever.
+KEY = "2026-09-10"
 
 SUBJECTS = [
     ("11111111-1111-1111-1111-111111111111", "AAPL", 5.0),
@@ -45,11 +46,21 @@ CURRENCIES = [
 ]
 
 
-#: Every ledger call the price lane makes, in order — `(function, params)`. A MODULE-LEVEL LIST for
-#: the same reason `UNIVERSE` is one, and the thing the absent-marking tests assert on: the question
-#: "which function does a dead subject reach, and which does an empty one reach" is the single most
-#: expensive confusion in this codebase's history, and it is now a unit test rather than a reading.
-LEDGER_CALLS: list[tuple[str, Any]] = []
+#: Every `identifier_probe` row the price lane writes, in order. A MODULE-LEVEL LIST for the same
+#: reason `UNIVERSE` is one, and the thing the dead-symbol tests assert on: the question "which
+#: subject becomes a miss, and which an unrecorded unknown" is the single most expensive confusion
+#: in this codebase's history, and it is a unit test rather than a reading.
+PROBES: list[dict[str, Any]] = []
+
+
+def _inserted(text: str, params: Sequence[Any]) -> list[dict[str, Any]]:
+    """The rows of an `insert into t (a, b) values (...), (...)` the writer sent, as dicts."""
+    columns = [c.strip() for c in text.split("(", 1)[1].split(")", 1)[0].split(",")]
+    values = list(params)
+    return [
+        dict(zip(columns, values[i : i + len(columns)], strict=True))
+        for i in range(0, len(values), len(columns))
+    ]
 
 
 class FakeCursor:
@@ -68,18 +79,9 @@ class FakeCursor:
         # Answered by SHAPE rather than by exact text, so reformatting a query does not silently
         # turn a test into one that asserts nothing.
         text = " ".join(sql.split())
-        for fn in ("ingest.mark_absent", "ingest.complete", "ingest.sync_population"):
-            if fn in text:
-                LEDGER_CALLS.append((fn.split(".")[1], tuple(params)))
-                self.one = (0,)
-                return
-        if "insert into ingest.attempt" in text:
-            LEDGER_CALLS.append(("attempt", tuple(params)))
-            self.one = (1,)
-            return
-        if "update ingest.attempt" in text:
-            LEDGER_CALLS.append(("close", tuple(params)))
-            self.one = None
+        assert "ingest." not in text, f"the ledger is retired; nothing may reach it: {text[:80]}"
+        if text.startswith("insert into market.identifier_probe"):
+            PROBES.extend(_inserted(text, params))
             return
         if "market.listing" in text:
             self.rows = [(sid, "USD") for sid, _, _ in self._subjects]
@@ -118,19 +120,43 @@ class FakePostgres(Postgres):
 
 
 def materialise(
-    tmp_path: Path, fetch: Any, assets: list[Any] | None = None, key: str = KEY
+    tmp_path: Path, fetch: Any, *, with_core: bool = False
 ) -> dg.ExecuteInProcessResult:
+    """The security lane over every security in `UNIVERSE`, as one range run — a night's shape.
+
+    WAS THE DAY LANE until 2026-10-04. The rules these tests hold (attribution, empty versus dead,
+    a throttle counted, a window refused in stage 2) are the security lane's too, so they drive it
+    now rather than leaving with the lane that first carried them.
+    """
+    from dagster._core.storage.tags import (
+        ASSET_PARTITION_RANGE_END_TAG,
+        ASSET_PARTITION_RANGE_START_TAG,
+    )
+
+    keys = [sid for sid, _, _ in UNIVERSE]
+    assets: list[Any] = [prices_raw.raw_price_history]
+    resources: dict[str, Any] = {
+        "postgres": FakePostgres(),
+        "parquet_io": ParquetIOManager(str(tmp_path)),
+        "raw_store": RawStore(base_path=str(tmp_path)),
+    }
+    if with_core:
+        assets.append(prices_core.price_bar_history)
+        resources["postgres_io"] = _Capture()
     saved = openbb.price_history
     openbb.price_history = fetch
     try:
-        return dg.materialize(
-            assets or [prices_raw.raw_price_bars],
-            partition_key=key,
-            resources={
-                "postgres": FakePostgres(),
-                "parquet_io": ParquetIOManager(str(tmp_path)),
-            },
-        )
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
+            return dg.materialize(
+                assets,
+                instance=instance,
+                tags={
+                    ASSET_PARTITION_RANGE_START_TAG: keys[0],
+                    ASSET_PARTITION_RANGE_END_TAG: keys[-1],
+                },
+                resources=resources,
+            )
     finally:
         openbb.price_history = saved
 
@@ -152,22 +178,26 @@ def meta(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
 def test_a_batched_answer_is_attributed_by_symbol(tmp_path: Path) -> None:
     result = materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
     assert result.success
-    m = meta(result, prices_raw.raw_price_bars)
-    assert (m["subjects"], m["answered"], m["rows"]) == (2, 2, 2)
+    m = meta(result, prices_raw.raw_price_history)
+    assert (m["requested"], m["answered"], m["rows"]) == (2, 2, 2)
 
 
 def test_a_symbol_the_batch_omitted_is_empty_and_not_dead(tmp_path: Path) -> None:
-    """The distinction the whole ledger turns on. A symbol missing from an answer has NOT been
+    """The distinction the whole price lane turns on. A symbol missing from an answer has NOT been
     shown to be unanswerable — only asking it alone with a healthy control can show that, and a run
     that blurs the two is how ~8,300 securities were negative-cached in an afternoon."""
 
     def only_apple(symbols: Sequence[str], **kw: Any) -> Answer:
         return bars_for([s for s in symbols if s == "AAPL"])
 
-    m = meta(materialise(tmp_path, only_apple), prices_raw.raw_price_bars)
+    PROBES.clear()
+    m = meta(materialise(tmp_path, only_apple), prices_raw.raw_price_history)
     assert m["answered"] == 1
     assert m["empty"] == 1
     assert m["dead"] == 0, "a batch that answered for someone proves nothing about the rest"
+    assert [(p["asked_with"], p["outcome"]) for p in PROBES] == [("AAPL", "hit")], (
+        "the omitted symbol is unknown, so nothing is recorded about it"
+    )
 
 
 def test_a_throttle_stops_the_run_and_marks_nothing(tmp_path: Path) -> None:
@@ -177,24 +207,26 @@ def test_a_throttle_stops_the_run_and_marks_nothing(tmp_path: Path) -> None:
     def refusing(symbols: Sequence[str], **kw: Any) -> Answer:
         raise ProviderRefused("equity.price.historical: YFRateLimitError: Too Many Requests")
 
-    m = meta(materialise(tmp_path, refusing), prices_raw.raw_price_bars)
+    PROBES.clear()
+    m = meta(materialise(tmp_path, refusing), prices_raw.raw_price_history)
     assert m["throttled"] >= 1
     assert m["dead"] == 0, "a provider refusing us is evidence about the provider, never a symbol"
     assert m["rows"] == 0
+    assert PROBES == [], "a refused batch established nothing about anybody"
 
 
 def test_a_throttle_halfway_counts_every_subject_it_never_asked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A DAY PARTITION CLAIMS ITS WHOLE CROSS-SECTION, and the throttle branch hid half of one.
+    """THE THROTTLE BRANCH ONCE HID HALF A NIGHT, and the sweep's counters must still sum.
 
-    Measured on the 2026-09-16 partition: yfinance refused call 329 of ~601, the loop broke, and the
-    run reported `answered=5974 empty=586 throttled=1 unasked=0` against 12,017 subjects — 5,437
-    securities never asked, the partition materialised as complete, and
-    `every_askable_security_was_asked` passed. The budget and transport branches both counted the
-    remainder; this one did not. A refused ask is not an answer, so its batch counts as unasked.
+    Measured on the day lane's 2026-09-16 partition: yfinance refused call 329 of ~601, the loop
+    broke, and the run reported `answered=5974 empty=586 throttled=1 unasked=0` against 12,017
+    subjects — 5,437 securities never asked, and the partition read as complete. The budget and
+    transport branches both counted the remainder; this one did not. A refused ask is not an answer,
+    so its batch counts as unasked — in the security lane, whose run reads the same identity.
     """
-    monkeypatch.setattr(prices_partitions.PROVIDER, "batch_size", 1)
+    monkeypatch.setattr(prices_partitions.PROVIDER, "history_batch_size", 1)
     monkeypatch.setattr(prices_partitions.PROVIDER, "min_seconds_between_calls", 0.0)
     calls: list[list[str]] = []
 
@@ -204,19 +236,21 @@ def test_a_throttle_halfway_counts_every_subject_it_never_asked(
             raise ProviderRefused("equity.price.historical: YFRateLimitError: Too Many Requests")
         return bars_for(symbols)
 
-    m = meta(materialise(tmp_path, answers_once_then_refuses), prices_raw.raw_price_bars)
-    assert (m["subjects"], m["answered"], m["throttled"]) == (2, 1, 1)
+    m = meta(materialise(tmp_path, answers_once_then_refuses), prices_raw.raw_price_history)
+    assert (m["requested"], m["answered"], m["throttled"]) == (2, 1, 1)
     assert m["unasked"] == 1, "the refused batch and everything after it were never answered"
-    accounted = m["answered"] + m["empty"] + m["dead"] + m["transport"] + m["unasked"]
-    missing = m["subjects"] - accounted
+    accounted = (
+        m["answered"] + m["empty"] + m["dead"] + m["transport"] + m["unasked"] + m["not_askable"]
+    )
+    missing = m["requested"] - accounted
     assert missing == 0, f"{missing} subjects fell out of every count"
 
 
-def test_an_empty_day_still_materialises(tmp_path: Path) -> None:
-    """A market holiday produces no bars, and the partition is still a fact we collected."""
+def test_an_answer_with_no_bars_still_materialises(tmp_path: Path) -> None:
+    """A security the provider has nothing for yet is a fact we collected, not a failed run."""
     result = materialise(tmp_path, lambda symbols, **kw: Answer(rows=[]))
     assert result.success
-    assert meta(result, prices_raw.raw_price_bars)["rows"] == 0
+    assert meta(result, prices_raw.raw_price_history)["rows"] == 0
 
 
 def test_normalisation_carries_the_currency_it_has_and_withholds_the_one_it_does_not(
@@ -292,18 +326,20 @@ def test_a_batch_that_never_answered_is_transport_and_never_empty(tmp_path: Path
     openbb could not import in the deployed image — it rebuilds its extension map inside
     site-packages and the container runs as a non-root user — so every call raised. The asset
     reported `empty: 50`: fifty securities that had answered nothing, when the truth was that we
-    had never asked one of them. Nothing was marked, because `mark_absent` refuses without an
-    isolated attempt and a healthy control, so the damage was a wasted run rather than a month of
-    negative caching. The counter was still lying.
+    had never asked one of them. Nothing was marked, because a miss needs an isolated ask and a
+    healthy control, so the damage was a wasted run rather than a month of negative caching. The
+    counter was still lying.
     """
 
     def broken(symbols: Sequence[str], **kw: Any) -> Answer:
         raise PermissionError("[Errno 13] Permission denied: '.../openbb/.build.lock'")
 
-    m = meta(materialise(tmp_path, broken), prices_raw.raw_price_bars)
+    PROBES.clear()
+    m = meta(materialise(tmp_path, broken), prices_raw.raw_price_history)
     assert m["empty"] == 0, "a call that raised says nothing about its subjects"
     assert m["dead"] == 0, "and it certainly does not make them unanswerable"
-    assert m["transport"] == m["subjects"], "every subject we failed to ask is counted as such"
+    assert m["transport"] == m["requested"], "every subject we failed to ask is counted as such"
+    assert PROBES == [], "an outage is evidence about the provider, never about a symbol"
 
 
 def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything(
@@ -325,14 +361,14 @@ def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything
     assert len(calls) > 0
 
 
-def test_a_partition_contains_only_its_own_window(tmp_path: Path) -> None:
-    """MEASURED AGAINST THE REAL HUB, NOT IMAGINED. `start_date=2026-09-09&end_date=2026-09-09`
-    returns bars for BOTH 09-09 and 09-10 — a degenerate range is widened rather than refused — and
-    a run made while Tokyo was trading brought back a bar dated 09-11 as well.
+def test_a_bar_outside_the_window_is_kept_in_raw_and_refused_in_core(tmp_path: Path) -> None:
+    """MEASURED AGAINST THE REAL HUB, NOT IMAGINED. The provider widens a degenerate range rather
+    than refusing it, and a run made while Tokyo was trading brought back a bar for a session still
+    in progress — whose "close" is not a close, and looks exactly like a real one.
 
-    The second is the dangerous half: that is a session in progress, so its "close" is not a close,
-    and it looks exactly like a real one. The first production run wrote all three dates into a
-    partition that had asked for one day.
+    The security lane asks for `[watermark, today)`, so a bar dated today or later is outside its
+    window. Raw keeps it, because it is what the provider said; stage 2 refuses it, so a rule change
+    costs a re-parse rather than a re-fetch.
     """
 
     def spilling(symbols: Sequence[str], **kw: Any) -> Answer:
@@ -342,28 +378,15 @@ def test_a_partition_contains_only_its_own_window(tmp_path: Path) -> None:
                 rows.append({"symbol": s, "date": d, "close": 100.0})
         return Answer(rows=rows)
 
-    saved = openbb.price_history
-    openbb.price_history = spilling
-    try:
-        result = dg.materialize(
-            [prices_raw.raw_price_bars, prices_core.price_bar],
-            partition_key=KEY,
-            resources={
-                "postgres": FakePostgres(),
-                "parquet_io": ParquetIOManager(str(tmp_path)),
-                "postgres_io": _Capture(),
-            },
-        )
-    finally:
-        openbb.price_history = saved
+    result = materialise(tmp_path, spilling, with_core=True)
 
     assert result.success
-    m = meta(result, prices_raw.raw_price_bars)
+    m = meta(result, prices_raw.raw_price_history)
     assert m["outside_window"] == m["answered"], "the spillover is counted, not dropped in silence"
     # RAW KEEPS IT. The spilled bar is what the provider said; deleting it at fetch is what made
     # stage 1 the judge of a window, so that a rule change there cost a re-fetch.
     assert m["rows"] == 2 * m["answered"]
-    # AND THE CORE TABLE DOES NOT: exactly one bar per answering security, on the partition's day.
+    # AND THE CORE TABLE DOES NOT: exactly one bar per answering security, on the real day.
     assert {r["trade_date"] for r in _Capture.last} == {KEY}
     assert len(_Capture.last) == m["answered"]
 
@@ -394,38 +417,21 @@ def test_the_history_lane_does_NOT_retract(tmp_path: Path) -> None:
     assert meta["conflict"] == ["security_id", "trade_date"]
 
 
-def test_both_lanes_write_the_same_table_on_the_same_key(tmp_path: Path) -> None:
-    """Two assets over one table is the cost of two partition schemes, and the shared key is what
-    makes the overlap harmless: whichever lane last collected a day writes the same value for it."""
-    a = prices_core.price_bar.metadata_by_key[prices_core.price_bar.key]
-    b = prices_core.price_bar_history.metadata_by_key[prices_core.price_bar_history.key]
-    assert a["table"] == b["table"] == "market.price_bar"
-    assert a["conflict"] == b["conflict"] == ["security_id", "trade_date"]
+def test_the_security_lane_s_run_width_is_a_memory_budget() -> None:
+    """A SECURITY PARTITION DOES NOT BATCH — and the cost of getting it wrong is an OOM after the
+    provider has been paid. (The day lane, deleted 2026-10-04, was the opposite case: a date
+    partition is one batched sweep, and `single_run` made a week-long gap cost one run.)
 
-
-def test_the_two_lanes_have_opposite_backfill_policies_and_that_is_deliberate() -> None:
-    """A DATE partition batches; A SECURITY PARTITION DOES NOT — and the cost of getting it wrong
-    is an OOM after the provider has been paid.
-
-    Lane A is partitioned by trading day, so one run is one batched sweep over the whole universe
-    and `single_run` is what makes a week-long gap cost one run instead of seven.
-
-    Lane B is partitioned by security. `openbb_yfinance` calls `yf.download(..., threads=False)`,
+    The lane is partitioned by security. `openbb_yfinance` calls `yf.download(..., threads=False)`,
     so the vendor is asked once per symbol however many partitions a run covers — there is nothing
     to batch across them, and all `single_run` bought was an unbounded memory footprint. Measured:
     96 securities is 683,391 raw bars and the child process was OOM-killed at 2.4 GB, because
     `UPathIOManager.load_input` is eager and the clean stage holds the raw rows and their
     normalised copies at once.
 
-    Pinned because the tidying instinct runs the wrong way: four assets in one file, three words
-    different, and making them "consistent" reintroduces the failure.
+    Pinned because the tidying instinct runs the wrong way: making the widths "consistent" with an
+    unpartitioned asset's reintroduces the failure.
     """
-    for asset in (prices_raw.raw_price_bars, prices_core.price_bar):
-        policy = asset.backfill_policy
-        assert policy is not None and policy.max_partitions_per_run is None, (
-            f"{asset.key.to_user_string()} is partitioned by DATE — one run per range"
-        )
-
     for asset in (prices_raw.raw_price_history, prices_core.price_bar_history):
         policy = asset.backfill_policy
         assert policy is not None, f"{asset.key.to_user_string()} has no backfill policy"
@@ -587,27 +593,24 @@ def meta_of(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
     return {k: v.value for k, v in events[0].metadata.items()}
 
 
-def test_a_dead_symbol_is_OFFERED_to_mark_absent_and_an_empty_one_is_not(tmp_path: Path) -> None:
+def test_a_dead_symbol_becomes_a_miss_and_an_answering_one_a_hit(tmp_path: Path) -> None:
     """THE MOST EXPENSIVE CONFUSION IN THIS CODEBASE, AS A UNIT TEST.
 
     A symbol yfinance will never serve costs a REAL vendor request every day, because the vendor is
     asked once per symbol whatever we batch — ~425 dead symbols is ~155,000 wasted requests a year,
-    spent re-learning an answer we already had. So the marking has to happen.
+    spent re-learning an answer we already had. So the verdict has to be recorded.
 
-    And it has to happen for the right subjects. `dead` is populated only after the isolation pass
-    asked each subject ALONE and a control answered; `empty` means asked, answered nothing, and NOT
-    justified — that one must back off and be asked again. Recording the second as the first is how
-    ~8,300 securities were negative-cached in one afternoon.
-
-    The assertion is on which ledger FUNCTION each subject reaches, because `ingest.mark_absent`
-    refuses what `ingest.complete` accepts.
+    And for the right subjects. `dead` is populated only after the isolation pass asked each
+    subject ALONE and a control answered; anything else is unknown and must be asked again.
+    Recording the second as the first is how ~8,300 securities were negative-cached in one
+    afternoon. The miss carries the symbol it was asked with, so a corrected spelling is askable at
+    once.
     """
-    LEDGER_CALLS.clear()
+    PROBES.clear()
 
     # ONE DEAD SYMBOL POISONS ITS WHOLE BATCH, which is the realistic shape and the only one that
-    # can justify a mark. A PARTIAL answer must NOT: yfinance throttles by omitting symbols from a
-    # 200, so a symbol missing from a batch that answered for others is `empty`, never `dead` —
-    # deliberately, and the reason the first version of this fixture proved nothing.
+    # can justify a miss. A PARTIAL answer must NOT: yfinance throttles by omitting symbols from a
+    # 200, so a symbol missing from a batch that answered for others is unknown, never dead.
     #
     # So: the batch raises, isolation re-asks each subject alone, AAPL answers alone (and is also
     # the control, proving the provider healthy), and the Korean line fails alone.
@@ -619,113 +622,27 @@ def test_a_dead_symbol_is_OFFERED_to_mark_absent_and_an_empty_one_is_not(tmp_pat
     result = materialise(tmp_path, selective)
     assert result.success
 
-    marked = [params for fn, params in LEDGER_CALLS if fn == "mark_absent"]
-    completed = [params for fn, params in LEDGER_CALLS if fn == "complete"]
-
-    korean = SUBJECTS[1][0]
-    apple = SUBJECTS[0][0]
-
-    assert any(korean in p for p in marked), (
-        f"the dead subject never reached mark_absent — ledger calls were "
-        f"{[fn for fn, _ in LEDGER_CALLS]}"
-    )
-    assert not any(apple in p for p in marked), "a security that ANSWERED must never be marked"
-    assert any(apple in p for p in completed), "an answering security is completed, not marked"
+    by_security = {str(p["security_id"]): p for p in PROBES}
+    korean, apple = SUBJECTS[1][0], SUBJECTS[0][0]
+    assert by_security[korean]["outcome"] == "miss", f"probes were {PROBES}"
+    assert by_security[korean]["asked_with"] == "005930.KS", "a miss is bound to its spelling"
+    assert by_security[apple]["outcome"] == "hit", "a security that ANSWERED must never be a miss"
+    assert {(p["scheme"], p["provider"]) for p in PROBES} == {("symbol", "yfinance")}
 
 
-def test_the_population_is_enqueued_before_anything_is_asked(tmp_path: Path) -> None:
-    """`mark_absent` UPDATES `ingest.task`; with no row there is nothing to update and the mark is
-    silently lost. Every count would still look right, because the marks would be written and never
-    read — which is this file's most repeated shape.
+def test_a_batch_that_answers_records_no_miss_at_all(tmp_path: Path) -> None:
+    """A BATCH THAT ANSWERS IS NEVER ISOLATED, so it can prove nothing dead.
 
-    Ordering matters as much as presence: enqueue, then ask.
+    The ledger this replaced kept the proof rule in SQL; it lives in `prices.symbol_probes` now,
+    unit-tested there on the flags, and this is the same rule driven through the real asset: an
+    answering batch yields hits only.
     """
-    LEDGER_CALLS.clear()
-    result = materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
-    assert result.success
-
-    order = [fn for fn, _ in LEDGER_CALLS]
-    assert "sync_population" in order, "a security promoted since the last run needs a ledger row"
-    assert order.index("sync_population") < order.index("attempt"), (
-        f"the population must be enqueued before the provider is called, got {order[:4]}"
-    )
-
-
-def test_an_attempt_is_opened_BEFORE_the_call_and_closed_after(tmp_path: Path) -> None:
-    """A worker killed mid-call writes nothing at all — it goes silent rather than red — so the row
-    that says "something started here" has to exist before the thing that might kill us.
-
-    `ingest.reap()` is what closes whatever is left open; it can only find rows that exist.
-    """
-    LEDGER_CALLS.clear()
+    PROBES.clear()
     materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
-
-    order = [fn for fn, _ in LEDGER_CALLS]
-    assert order.count("attempt") == order.count("close") == 1
-    assert order.index("attempt") < order.index("close")
-
-
-def test_the_attempt_records_what_the_isolation_pass_ACTUALLY_established(tmp_path: Path) -> None:
-    """THE ONE LIE THAT WOULD LET AN OUTAGE NEGATIVE-CACHE THE UNIVERSE.
-
-    `ingest.mark_absent` reads exactly two fields off the attempt — `isolated` and
-    `control_answered` — and refuses without both. That refusal is the whole guard, and it is only
-    as good as what the caller writes there: passing `isolated=True` on a batch that was never
-    isolated walks straight around it, and the database has no way to know.
-
-    Mutation-proven, because hardcoding both to True passed every other test in this file.
-    """
-    LEDGER_CALLS.clear()
-
-    # A batch that ANSWERS never triggers the isolation pass, so the attempt must say so.
-    materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
-    closed = [params for fn, params in LEDGER_CALLS if fn == "close"]
-    assert closed, "the attempt must be closed"
-    # `Attempt.close` binds (outcome, rows_written, error, duration_ms, isolated, control_answered)
-    isolated, control = closed[0][4], closed[0][5]
-    assert isolated is False, (
-        "a batch that answered was never isolated, and claiming otherwise is what lets a run-wide "
-        "tally masquerade as evidence about one subject"
-    )
-    assert control is not True, "no control was probed, so `control_answered` cannot be true"
-
-    # And a batch that FAILED and was isolated must say THAT — or the guard refuses a real mark and
-    # the negative cache can never fill, which is the opposite failure and equally silent.
-    LEDGER_CALLS.clear()
-
-    def poisoned(symbols: Sequence[str], **kw: Any) -> Answer:
-        if any(s != "AAPL" for s in symbols):
-            raise RuntimeError("No data found, symbol may be delisted")
-        return bars_for(list(symbols))
-
-    materialise(tmp_path, poisoned)
-    closed = [params for fn, params in LEDGER_CALLS if fn == "close"]
-    assert closed[0][4] is True, "the isolation pass ran and the attempt must record it"
-    assert closed[0][5] is True, "the control answered and the attempt must record it"
-
-
-def test_the_cross_section_budget_can_actually_cover_the_universe() -> None:
-    """A DAY-PARTITIONED ASSET CLAIMS ITS CROSS-SECTION; THE BUDGET DECIDES WHETHER IT CAN.
-
-    Measured on the node: 200 securities in 244 seconds, so ~1.22 s each, and the 11,446 askable
-    equities are **3.9 hours**. At the previous default of one hour a nightly run would have covered
-    a quarter of them and stopped — materialising a partition that still claims the full
-    cross-section, which is the false claim the whole partitioning argument exists to prevent.
-
-    Pinned as arithmetic rather than as a number, so that if the universe grows or the provider
-    slows, this fails instead of the claim quietly becoming untrue.
-    """
-    seconds_per_security = 244 / 200
-    askable = 11_446
-    needed = askable * seconds_per_security
-
-    assert prices_raw.PriceRun().budget_seconds >= needed, (
-        f"the universe needs {needed / 3600:.1f}h and the budget is "
-        f"{prices_raw.PriceRun().budget_seconds / 3600:.1f}h — a run that stops early still "
-        f"materialises its partition, and the partition is the claim"
-    )
-    # And not absurdly generous either: a budget far past what the work takes stops being a bound.
-    assert prices_raw.PriceRun().budget_seconds <= needed * 2
+    assert sorted((p["asked_with"], p["outcome"]) for p in PROBES) == [
+        ("005930.KS", "hit"),
+        ("AAPL", "hit"),
+    ]
 
 
 def test_the_automation_sensor_is_declared_and_running() -> None:
@@ -765,12 +682,10 @@ def test_security_return_rebuilds_when_daily_bars_land_whatever_else_is_missing(
     Decided 2026-09-17: rebuild whenever bars land, whatever is missing. The sequence below is
     production's: built once by hand, earlier days missing, a history key unfilled, then new bars.
 
-    AMENDED BY THE 2026-09-19 CUTOVER. The security lane used to be IGNORED, so only the day lane
-    triggered a rebuild. `nightly_prices` replaced that lane and `daily_prices_schedule` is
-    stopped, so `price_bar` is no longer materialised — an ignored security lane would now leave
-    this asset with no trigger whatsoever, and returns would stop rebuilding with every run still
-    green. Both lanes trigger it now; the day lane's leg below is kept because that lane is the
-    rollback and must still work if it is started.
+    AMENDED BY THE 2026-09-19 CUTOVER, AND AGAIN WHEN THE DAY LANE WAS DELETED ON 2026-10-04. The
+    security lane used to be IGNORED, so only the day lane triggered a rebuild; an ignored security
+    lane would now leave this asset with no trigger whatsoever, and returns would stop rebuilding
+    with every run still green. The security lane is its only upstream now.
     """
 
     instance = dg.DagsterInstance.ephemeral()
@@ -783,24 +698,12 @@ def test_security_return_rebuilds_when_daily_bars_land_whatever_else_is_missing(
             loaded_defs(), instance, asset_selection=selection, cursor=cursor
         )
 
+    # A SECOND KEY, NEVER FILLED: the production state in which plain eager() refused.
+    instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
     first = tick()
     instance.report_runless_asset_event(dg.AssetMaterialization(asset_key=key))
-    quiet = tick(first.cursor)
-    assert quiet.get_num_requested(key) == 0, "nothing upstream changed, so nothing to rebuild"
-
-    newest = prices_partitions.trading_day.get_last_partition_key()
-    assert newest is not None
-    instance.report_runless_asset_event(
-        dg.AssetMaterialization(asset_key=prices_core.price_bar.key, partition=newest)
-    )
-    after_bars = tick(quiet.cursor)
-    assert after_bars.get_num_requested(key) == 1, (
-        "a day of bars landed while earlier days and history keys were missing — exactly the "
-        "production state in which eager() refused"
-    )
-
-    instance.report_runless_asset_event(dg.AssetMaterialization(asset_key=key))
-    settled = tick(after_bars.cursor)
+    settled = tick(first.cursor)
+    assert settled.get_num_requested(key) == 0, "nothing upstream changed, so nothing to rebuild"
     instance.report_runless_asset_event(
         dg.AssetMaterialization(
             asset_key=prices_core.price_bar_history.key, partition=SUBJECTS[0][0]
@@ -818,12 +721,12 @@ def test_the_heartbeat_waits_on_no_pool() -> None:
     """THE CANARY MUST NOT QUEUE BEHIND THE WORK IT WATCHES.
 
     It shared `sql` with every stage-2 asset at run granularity, so it started 111 s late behind
-    `daily_prices` on 2026-09-17 and sat QUEUED behind a 40-minute recovery run the same morning.
-    Behind a multi-hour run its 3-hour freshness window would read as a dead daemon. It is a
-    five-second read, not a writer, so it takes no pool (decided 2026-09-17).
+    the day lane on 2026-09-17 and sat QUEUED behind a 40-minute recovery run the same morning.
+    Behind a multi-hour run its 3-hour freshness window would read as a dead daemon. It is one
+    round trip, not a writer, so it takes no pool (decided 2026-09-17).
     """
 
-    assert ledger_health.op.pool is None
+    assert heartbeat.op.pool is None
 
 
 def test_every_collection_schedule_is_running() -> None:
@@ -843,15 +746,11 @@ def test_every_collection_schedule_is_running() -> None:
     }
     assert collecting <= running, f"not running: {sorted(collecting - running)}"
 
-    # AND EXACTLY ONE PRICE LANE COLLECTS. `daily_prices_schedule` is kept as the rollback — the
-    # assets, their checks and the offline replay suite are all still in place — but running BOTH
-    # would ask the provider for the same securities twice a night, against an allowance measured
-    # at ~2,740 requests. Which one is live is the whole cutover, so it is asserted rather than
-    # left to a default nobody re-reads.
-    assert "daily_prices_schedule" not in running, (
-        "the day lane is the rollback, not a second collector; starting it means stopping "
-        "nightly_prices in the same breath"
-    )
+    # AND EXACTLY ONE PRICE LANE CAN COLLECT. The day lane was deleted on 2026-10-04: two lanes
+    # asking the provider about the same securities is what the migration order existed to
+    # prevent, and a stopped schedule was one click from doing it.
+    defined = {s.name for s in (loaded_defs().schedules or [])}
+    assert "daily_prices_schedule" not in defined, "a second price lane is defined again"
 
 
 def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
@@ -1015,10 +914,10 @@ def test_a_subject_the_sweep_cannot_ask_is_counted_so_the_outcomes_sum_to_reques
     """EVERY PARTITION IN THE RUN LANDS IN ONE COUNTER, including one nobody asks about.
 
     The nightly sweep names a contiguous slice of the grid, and `askable_subjects` leaves out a
-    security the ledger holds absent. Measured 2026-09-30: `requested 2500`, `answered 2463`, and
-    no other outcome, so 37 securities were accounted for nowhere. That hole looks like the
-    throttle-branch defect this file already tests for, so without its own counter a correct
-    exclusion reads as a counting bug and a real one can hide inside it.
+    security whose symbol was rejected alone within 30 days. Measured 2026-09-30: `requested 2500`,
+    `answered 2463`, and no other outcome, so 37 securities were accounted for nowhere. That hole
+    looks like the throttle-branch defect this file already tests for, so without its own counter a
+    correct exclusion reads as a counting bug and a real one can hide inside it.
 
     Two partitions in one range run, one of them outside the askable universe, as a night's run
     has.
@@ -1199,3 +1098,70 @@ def test_a_partition_stored_in_an_older_shape_is_replaced_rather_than_doubled(
     assert not [r for r in held if r.get("trade_date") is not None], (
         "the older shape survived beside the history that supersedes it"
     )
+
+
+#: What the staleness check's two counts answer, set per test. Module-level for the same reason as
+#: `UNIVERSE`: a class attribute on a `ConfigurableResource` becomes a config field.
+COUNTS: dict[str, int] = {"stale": 0, "equities": 0}
+
+
+class CountingCursor:
+    def __init__(self) -> None:
+        self.one: tuple[int] | None = None
+
+    def __enter__(self) -> CountingCursor:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Sequence[Any] = ()) -> None:
+        text = " ".join(sql.split())
+        if "market.price_bar" in text:
+            assert tuple(params) == (prices_checks.STALE_AFTER_DAYS,), "the window is the constant"
+            self.one = (COUNTS["stale"],)
+        else:
+            self.one = (COUNTS["equities"],)
+
+    def fetchone(self) -> tuple[int] | None:
+        return self.one
+
+
+class CountingConn:
+    def cursor(self) -> CountingCursor:
+        return CountingCursor()
+
+
+class CountingPostgres(Postgres):
+    @contextmanager
+    def connect(self) -> Iterator[Any]:
+        yield CountingConn()
+
+
+@pytest.mark.parametrize(
+    ("stale", "passed", "severity"),
+    [
+        (5, True, dg.AssetCheckSeverity.WARN),
+        (15, False, dg.AssetCheckSeverity.WARN),
+        (25, False, dg.AssetCheckSeverity.ERROR),
+    ],
+)
+def test_the_staleness_check_judges_the_share_of_equities_left_behind(
+    stale: int, passed: bool, severity: dg.AssetCheckSeverity
+) -> None:
+    """THE ONE COMPLETENESS CLAIM THE SECURITY LANE MAKES, AND NOTHING EXERCISED IT.
+
+    Deleting the day lane's check took this check's constants with it, and every test still passed:
+    no test had ever run it, so a `NameError` would have been its first production evaluation. It
+    passes up to `STALE_FRACTION` of the equities, warns up to twice that, and errors beyond, so a
+    rotation that stops reads as an error within days while a few dead symbols stay a warning.
+    """
+    COUNTS.update(stale=stale, equities=100)
+    result = prices_checks.no_security_is_far_behind_the_sweep(postgres=CountingPostgres())
+    assert isinstance(result, dg.AssetCheckResult)
+    assert result.passed is passed
+    assert result.severity == severity
+    metadata = {k: getattr(v, "value", v) for k, v in result.metadata.items()}
+    assert metadata["stale_securities"] == stale
+    assert metadata["equities"] == 100
+    assert metadata["stale_after_days"] == prices_checks.STALE_AFTER_DAYS

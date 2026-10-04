@@ -4,42 +4,7 @@ import dagster as dg
 
 from muffin_ingest_dagster.defs.prices.automation import SWEEP_SLICE
 from muffin_ingest_dagster.defs.prices.core import price_bar_history
-from muffin_ingest_dagster.defs.prices.raw import raw_price_bars
 from muffin_ingest_dagster.lib.resources import Postgres
-
-
-@dg.asset_check(asset=raw_price_bars, blocking=False)
-def every_askable_security_was_asked(
-    context: dg.AssetCheckExecutionContext,
-) -> dg.AssetCheckResult:
-    """THE DAY LANE'S CLAIM, KEPT WHILE THE DAY LANE IS KEPT.
-
-    It is no longer what production runs — `nightly_prices` sweeps the security grid instead — but
-    the lane it checks is still defined and still rollback-able, and a check retired ahead of the
-    asset it guards would make that rollback silent. It goes when `raw_price_bars` goes.
-    """
-    key = raw_price_bars.key
-    event = context.instance.get_latest_materialization_events([key]).get(key)
-    materialization = event.asset_materialization if event is not None else None
-    unasked = 0
-    partition = "none"
-    subjects = 0
-    if materialization is not None:
-        partition = materialization.partition or "none"
-        unasked = int(getattr(materialization.metadata.get("unasked"), "value", 0) or 0)
-        subjects = int(getattr(materialization.metadata.get("subjects"), "value", 0) or 0)
-
-    return dg.AssetCheckResult(
-        passed=unasked == 0,
-        severity=dg.AssetCheckSeverity.WARN,
-        metadata={
-            "unasked": unasked,
-            "subjects": subjects,
-            "partition": partition,
-            "note": "a partition claims its whole cross-section; unasked subjects make that false",
-        },
-    )
-
 
 #: How stale a security's newest bar may be before the sweep is judged to be falling behind.
 #:

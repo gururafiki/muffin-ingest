@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -481,3 +481,114 @@ def test_the_enumeration_asks_about_the_window_it_is_given_and_pages_the_answer(
     sql, params = conn.calls[0]
     assert params == [since, 5]
     assert sql.startswith(prices.SECURITIES_WITH_BARS) and sql.rstrip().endswith("limit %s")
+
+
+# --- what a batch establishes about a symbol ------------------------------------------------------
+
+
+AT = datetime(2026, 10, 4, 0, 30, tzinfo=UTC)
+
+
+def _subjects(*symbols: str) -> dict[str, prices.Subject]:
+    return {s: prices.Subject(security_id=f"id-{s}", symbol=s, weight=0.0) for s in symbols}
+
+
+def _probes(
+    by_symbol: dict[str, prices.Subject],
+    *,
+    rows: list[dict[str, object]] | None = None,
+    dead: list[str] | None = None,
+    error: str | None = None,
+    isolated: bool = False,
+    control_answered: bool | None = None,
+    throttled_out: bool = False,
+) -> list[dict[str, object]]:
+    from muffin_ingest.providers.isolation import BatchVerdict
+
+    verdict = BatchVerdict(
+        rows=rows or [],
+        dead=dead or [],
+        error=error,
+        isolated=isolated,
+        control_answered=control_answered,
+        throttled_out=throttled_out,
+    )
+    return prices.symbol_probes(by_symbol, verdict, provider="yfinance", observed_at=AT)
+
+
+def test_an_answered_symbol_is_a_hit_and_a_proven_dead_one_a_miss() -> None:
+    """THE TWO FACTS A BATCH CAN ESTABLISH, each under the symbol it was asked with: the key that
+    lets a corrected spelling be asked again at once, and a later answer replace the miss."""
+    got = _probes(
+        _subjects("AAPL", "BRK/B", "MSFT"),
+        rows=[{"symbol": "AAPL", "close": 1.0}, {"symbol": "MSFT", "close": 2.0}],
+        dead=["BRK/B"],
+        isolated=True,
+        control_answered=True,
+    )
+    assert sorted((r["asked_with"], r["outcome"], r["value"]) for r in got) == [
+        ("AAPL", "hit", "AAPL"),
+        ("BRK/B", "miss", None),
+        ("MSFT", "hit", "MSFT"),
+    ]
+    assert {(r["scheme"], r["provider"], r["observed_at"]) for r in got} == {
+        ("symbol", "yfinance", AT)
+    }
+
+
+def test_a_single_symbol_answer_has_no_symbol_column_and_is_still_a_hit() -> None:
+    """The provider adds `symbol` only when several were requested."""
+    got = _probes(_subjects("7203.T"), rows=[{"close": 2900.0}])
+    assert [(r["asked_with"], r["outcome"]) for r in got] == [("7203.T", "hit")]
+
+
+@pytest.mark.parametrize(
+    ("isolated", "control_answered"),
+    [(False, True), (True, False), (True, None)],
+    ids=["not-asked-alone", "control-failed", "control-not-probed"],
+)
+def test_no_miss_without_both_proofs(isolated: bool, control_answered: bool | None) -> None:
+    """FAIL CLOSED. A symbol the batch named dead is recorded only when it was asked alone AND a
+    control answered in the same attempt; otherwise an outage reads as a rejection, which is how
+    1,369 ordinary securities were once marked dead in an afternoon."""
+    got = _probes(
+        _subjects("ITGR"), dead=["ITGR"], isolated=isolated, control_answered=control_answered
+    )
+    assert got == []
+
+
+def test_a_refused_batch_records_nothing_even_about_its_answers() -> None:
+    """THROTTLED IS NOT A VERDICT about anybody, including a subject that slipped through."""
+    got = _probes(
+        _subjects("AAPL", "SAP.DE"),
+        rows=[{"symbol": "AAPL", "close": 1.0}],
+        dead=["SAP.DE"],
+        isolated=True,
+        control_answered=True,
+        throttled_out=True,
+    )
+    assert got == []
+
+
+def test_a_subject_neither_answered_nor_proven_dead_is_not_recorded() -> None:
+    """UNKNOWN IS NOT A MISS: a batch that answered others and never isolated this one, or failed in
+    transport, established nothing about it."""
+    got = _probes(
+        _subjects("AAPL", "KO"),
+        rows=[{"symbol": "AAPL", "close": 1.0}],
+        error="connection reset",
+        isolated=False,
+    )
+    assert [(r["asked_with"], r["outcome"]) for r in got] == [("AAPL", "hit")]
+
+
+def test_the_askable_query_binds_a_miss_to_its_symbol_and_its_age() -> None:
+    """THE RULE IS IN THE SQL, so its three conditions are pinned on the text: the scheme and
+    provider, the symbol the miss was asked with, and the expiry. Behaviour on real Postgres is the
+    muffin-ingest PR's node check; this keeps a refactor from dropping a condition silently."""
+    sql = " ".join(prices.ASKABLE_SUBJECTS.split())
+    assert "p.scheme = %(scheme)s and p.provider = %(provider)s" in sql
+    assert "p.outcome = 'miss'" in sql
+    assert "p.asked_with = coalesce(ps.symbol, sym.symbol)" in sql
+    assert "p.observed_at > now() - make_interval(days => %(dead_for_days)s)" in sql
+    assert "ingest." not in sql, "the ledger is gone; nothing may read it"

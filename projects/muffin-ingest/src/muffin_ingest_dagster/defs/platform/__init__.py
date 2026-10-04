@@ -1,4 +1,4 @@
-"""The code location itself: the ledger heartbeat and the automation sensor.
+"""The code location itself: the heartbeat and the automation sensor.
 
 STORAGE RETENTION USED TO LIVE HERE AND WAS RETIRED 2026-09-19. `prune_dagster_storage` deleted runs
 older than 90 days along with their events — and `get_materialized_partitions` reads exactly those

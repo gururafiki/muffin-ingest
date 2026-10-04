@@ -72,7 +72,7 @@ class Yfinance:
         ticker)` and only the display symbol was wrong.
 
         Returning None is a real answer meaning "this provider cannot be asked about this security",
-        and it must never reach the ledger as an absence: a security we could not ASK about has not
+        and it must never be recorded as an absence: a security we could not ASK about has not
         been found to have no data.
         """
         return security.provider_symbol or security.us_ticker

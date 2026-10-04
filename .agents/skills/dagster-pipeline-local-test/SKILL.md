@@ -73,7 +73,7 @@ export DAGSTER_HOME=$PWD/../../deployments/local/dagster_home
 export INGEST_DATABASE_URL="postgresql://postgres:muffin-local@localhost:55432/muffin"
 export MUFFIN_RAW_ROOT=/tmp/muffin-raw            # default is /var/lib/muffin-ingest/raw
 
-uv run dagster asset materialize --select ledger_health -m muffin_ingest_dagster.definitions
+uv run dagster asset materialize --select heartbeat -m muffin_ingest_dagster.definitions
 uv run dagster asset materialize --select raw_fx_spot --partition 2026-09-18 \
   --config-json '{"ops": {"raw_fx_spot": {"config": {"limit": 3}}}}' \
   -m muffin_ingest_dagster.definitions

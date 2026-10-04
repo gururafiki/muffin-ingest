@@ -1,7 +1,7 @@
 # muffin-ingest
 
-Market-data ingestion for [Muffin](https://github.com/gururafiki/muffin): a provider library, a
-task ledger in Postgres, and Dagster assets over both.
+Market-data ingestion for [Muffin](https://github.com/gururafiki/muffin): a provider library and
+the Dagster code location that runs it.
 
 It replaces the 7,891-line Deno edge function that ingests `market.*` today. The design, with the
 measurements behind every decision, is
@@ -37,26 +37,29 @@ docker build -f projects/muffin-ingest/Dockerfile -t muffin-ingest:local .
 Conventions — what belongs in which stage, and why a rename is a migration — are in
 `.agents/skills/dagster-ingestion-best-practices`.
 
-## The three parts, and why they are separate
+## The two parts, and why they are separate
 
 - **`muffin_ingest`** is a plain Python library with no Dagster import anywhere in it. Providers
-  know how to ask and how to classify an answer; the ledger knows what to ask next and what an
-  answer means; parsers turn a document into rows. It is testable without an orchestrator, and it
-  outlives any choice of one.
+  know how to ask and how to classify an answer; facets turn an answer into rows; parsers turn a
+  document into rows. It is testable without an orchestrator, and it outlives any choice of one.
 - **`muffin_ingest_dagster`** is the thin layer that makes each table an asset, each provider a
   concurrency pool, and each production invariant an asset check.
-- **The ledger** (`ingest.task`, `ingest.attempt`, `ingest.facet`) lives in the database and is
-  defined by a migration in `muffin-deployment`, because the schema belongs with the rest of the
-  schema.
 
-## Why the orchestrator does not own the queue
+## Where per-item state lives
 
-Dagster manages runs, schedules, retries, checks and freshness, and this repo uses it for all of
-them. What it does not model is per-ITEM state — which of ~12,350 securities × ~40 facets is due,
-absent, throttled or leased. Its only per-item primitive is partitions: Dagster documents 100,000
-per asset, which is why a subject grid is the right shape for one facet's collection and still
-cannot carry 12,350 × 40 of them, nor the leasing, backoff and absence rules around each. So the
-ledger is the one deliberately custom piece, and it is three tables.
+Dagster's per-item primitive is partitions, documented at 100,000 per asset. Where a provider is
+asked about one subject at a time, the asset is partitioned by that subject, so a partition is
+exactly what one ask claims: the price history lane has one partition per security (~12,350).
+
+What a provider said about a subject's IDENTIFIER is a different fact. A symbol the provider
+rejected when asked alone, with a control symbol answering in the same run, is an observation in
+`market.identifier_probe`, keyed by the symbol it was asked with. The askable population skips a
+miss younger than 30 days only while the security still carries that symbol, so a corrected symbol
+is asked again with no step to remember.
+
+Until 2026-10-04 a task ledger in the database (`ingest.task`, `ingest.attempt`, `ingest.facet`)
+held that state. It served only the day-partitioned price lane and left with it; dropping the
+schema is a deferred step in `muffin-deployment`.
 
 ## Licence
 

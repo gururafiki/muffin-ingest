@@ -1,7 +1,8 @@
 """Daily bars: reading what the provider said, and refusing what it cannot have meant.
 
 Everything in this module is PURE — it takes rows and returns rows. The network call lives in the
-Dagster asset, the write lives in an I/O manager, and the per-subject verdict lives in the ledger.
+Dagster asset, the write lives in an I/O manager, and the per-subject verdict is an
+`identifier_probe` row (`symbol_probes`).
 That separation is what makes these rules testable against frozen bytes instead of against a
 provider, which is how the transformation half of this pipeline stops costing requests to fix.
 
@@ -22,8 +23,10 @@ from __future__ import annotations
 import math
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any
+
+from muffin_ingest.providers.isolation import BatchVerdict
 
 
 @dataclass(frozen=True)
@@ -143,13 +146,15 @@ class Subject:
     weight: float
 
 
-#: Securities that are equities, that this provider has a name for, and that the ledger has not
-#: recorded as unanswerable.
+#: Securities that are equities, that this provider has a name for, and whose symbol this provider
+#: has not rejected on its own within `DEAD_FOR_DAYS`.
 #:
-#: THE LEFT JOIN IS CORRECT BEFORE THE FACET EXISTS. `ingest.task` held no `prices` rows until the
-#: facet was seeded, and a LEFT JOIN excludes nothing when there is nothing to exclude — so this
-#: query was right on day one and stayed right afterwards, rather than needing to be revisited at
-#: exactly the moment it started to matter.
+#: THE REJECTION IS BOUND TO THE SYMBOL IT WAS ASKED WITH. `asked_with` must equal the symbol this
+#: query would ask with now, so a corrected spelling is askable the moment it is written — the
+#: contract `clear_symbol_caches` used to enforce by hand, made structural. A miss also EXPIRES: a
+#: security can gain a listing, and a symbol repair must be allowed to prove the provider wrong.
+#: The ledger this replaced had to be taught the expiry after it locked securities out for ever;
+#: here it is the predicate.
 #:
 #: `coalesce(provider_symbol, ticker)`, never the ticker first: OpenFIGI's US lookup is a thin OTC
 #: foreign-ordinary line for most foreign companies, and pricing off it prices a different
@@ -161,42 +166,108 @@ select s.security_id::text,
   from market.security s
   join market.security_symbol sym on sym.security_id = s.security_id
   left join market.security_provider_symbol ps
-         on ps.security_id = s.security_id and ps.provider_code = %s
+         on ps.security_id = s.security_id and ps.provider_code = %(provider)s
   left join market.fund_holding_current h on h.security_id = s.security_id
-  -- AN ABSENCE EXPIRES, AND THE FIRST VERSION OF THIS JOIN MADE IT PERMANENT. `mark_absent` sets
-  -- `next_due_at = now() + absent_ttl` precisely so a 30-day mark is thirty days and not for ever —
-  -- a security can gain a listing, and a symbol repair must be allowed to prove the provider wrong.
-  -- Matching on `status = 'absent'` alone ignored that and would have locked a security out
-  -- permanently on one bad afternoon, which is the 1,369-security incident's exact shape.
-  left join ingest.task t
-         on t.facet = %s and t.security_id = s.security_id
-        and t.status = 'absent' and t.next_due_at > now()
  where s.security_type_code = 'equity'
    and coalesce(ps.symbol, sym.symbol) is not null
-   and t.subject is null
+   and not exists (
+         select 1 from market.identifier_probe p
+          where p.security_id = s.security_id
+            and p.scheme = %(scheme)s and p.provider = %(provider)s
+            and p.outcome = 'miss'
+            and p.asked_with = coalesce(ps.symbol, sym.symbol)
+            and p.observed_at > now() - make_interval(days => %(dead_for_days)s))
  group by s.security_id, coalesce(ps.symbol, sym.symbol)
  order by weight desc, s.security_id
 """
 
+#: The probe scheme a price lane's verdict on a symbol is recorded under — the same scheme the
+#: symbology lane uses for the symbol it adopts, with this provider as `provider`, so the two never
+#: share a key (`identifier_probe` is keyed by security, scheme and provider).
+SYMBOL_SCHEME = "symbol"
 
-#: THE LEDGER'S NAME FOR THIS FACET, DECLARED ONCE. It was defaulted to `price_daily` here and
-#: seeded as `prices` in the migration — two spellings of one thing, so the join that excludes an
-#: absent security would have matched NOTHING and marking would have had no effect at all, silently.
-#: Every count would have looked right: the marks would be written and never read.
-FACET = "prices"
+#: How long a symbol the provider rejected alone stays unasked. The ledger's `absent_ttl` for this
+#: facet, carried over unchanged.
+DEAD_FOR_DAYS = 30
 
 
 def askable_subjects(
-    conn: Any, *, provider: str = "yfinance", facet: str = FACET, limit: int | None = None
+    conn: Any, *, provider: str = "yfinance", limit: int | None = None
 ) -> list[Subject]:
     """The universe this run will ask about, heaviest holdings first."""
-    sql = ASKABLE_SUBJECTS + (" limit %s" if limit is not None else "")
-    params: list[Any] = [provider, facet]
-    if limit is not None:
-        params.append(limit)
+    sql = ASKABLE_SUBJECTS + (" limit %(limit)s" if limit is not None else "")
+    params: dict[str, Any] = {
+        "provider": provider,
+        "scheme": SYMBOL_SCHEME,
+        "dead_for_days": DEAD_FOR_DAYS,
+        "limit": limit,
+    }
     with conn.cursor() as cur:
         cur.execute(sql, params)
         return [Subject(security_id=r[0], symbol=r[1], weight=r[2]) for r in cur.fetchall()]
+
+
+def symbol_probes(
+    by_symbol: Mapping[str, Subject],
+    verdict: BatchVerdict,
+    *,
+    provider: str,
+    observed_at: datetime,
+) -> list[dict[str, Any]]:
+    """What one batch ESTABLISHED about each subject's symbol, as `identifier_probe` rows.
+
+    THREE OUTCOMES BECOME NOTHING, and each is a fact this pipeline has paid for confusing:
+      * a throttled batch was REFUSED, so it established nothing about anybody;
+      * a subject the batch did not answer and did not isolate is unknown, not dead;
+      * a transport failure is ours or the provider's, never the symbol's.
+
+    A MISS NEEDS BOTH PROOFS: the subject was asked ALONE, and a control subject answered in the
+    same attempt. `fetch_with_isolation` populates `dead` only then, and this checks the two flags
+    anyway, because the ledger this replaced kept the rule in SQL precisely so an over-eager caller
+    could not mark an outage as an absence — the 1,369-security incident's shape. The rule is here
+    now, beside the only code that writes the row, and a test holds it.
+
+    A HIT IS RECORDED TOO. It replaces an earlier miss under the same key, so a symbol that starts
+    answering again is visibly alive rather than merely expired.
+    """
+    if verdict.throttled_out:
+        return []
+    answered = _answered_symbols(by_symbol, verdict)
+    proven = verdict.isolated and verdict.control_answered is True
+    dead = {d.upper() for d in verdict.dead} if proven else set()
+    rows: list[dict[str, Any]] = []
+    for symbol, subject in by_symbol.items():
+        if symbol.upper() in answered:
+            outcome, value = "hit", symbol
+        elif symbol.upper() in dead:
+            outcome, value = "miss", None
+        else:
+            continue
+        rows.append(
+            {
+                "security_id": subject.security_id,
+                "scheme": SYMBOL_SCHEME,
+                "provider": provider,
+                "asked_with": symbol,
+                "value": value,
+                "outcome": outcome,
+                "observed_at": observed_at,
+            }
+        )
+    return rows
+
+
+def _answered_symbols(by_symbol: Mapping[str, Subject], verdict: BatchVerdict) -> set[str]:
+    """The upper-cased symbols with at least one row. A single-symbol batch carries no `symbol`
+    column, so its rows belong to the one symbol asked (`bars_by_symbol` reads it the same way)."""
+    answered: set[str] = set()
+    for row in verdict.rows:
+        symbol = str(row.get("symbol") or "").upper()
+        if symbol:
+            answered.add(symbol)
+        elif len(by_symbol) == 1:
+            answered.add(next(iter(by_symbol)).upper())
+    return answered
 
 
 def currency_by_security(conn: Any) -> dict[str, str]:
@@ -276,7 +347,7 @@ def raw_rows(
     six of ten.
 
     CONTEXT IS ADDED, NEVER SUBTRACTED. `security_id` is recorded even though it is OURS: it is a
-    fact about the REQUEST, exactly as `ingest.attempt.asked_with` is. Without it stage 2 would
+    fact about the REQUEST, exactly as `identifier_probe.asked_with` is. Without it stage 2 would
     re-resolve the symbol with TODAY's mapping, so a symbol repaired between the fetch and the
     transform would silently re-attribute a whole series. `asked_symbol` beside `observed_symbol`
     is what makes "what did we actually request" answerable when a value turns out wrong.

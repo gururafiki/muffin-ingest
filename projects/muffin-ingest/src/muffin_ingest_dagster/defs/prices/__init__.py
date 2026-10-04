@@ -6,10 +6,9 @@
           the next run to collect. Each run extends a security from its own newest stored bar —
           see `merge_on` on the asset — so a partition accumulates rather than being replaced.
 
-  `raw_price_bars`     DAILY partitions. RETIRED as a collector, KEPT as the rollback.
-          `daily_prices_schedule` ships STOPPED; the assets, their checks and the offline replay
-          suite are all still here, so restoring the old behaviour is starting one schedule and
-          stopping the other. It goes once the sweep has proven itself live.
+  `raw_price_bars`     DAILY partitions, DELETED 2026-10-04 after two weeks of clean sweeps. It
+          was kept as the rollback from the cutover; its offline replay tests now drive the
+          security lane, and its Parquet stays on disk as the backup.
 
 WHY THE DAY LANE WENT, in one measurement. `openbb_yfinance` calls `yf.download(...)` with
 `threads=False`, which loops per ticker and issues `/v8/finance/chart/<ticker>` for each — counted

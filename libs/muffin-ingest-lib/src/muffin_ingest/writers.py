@@ -45,9 +45,48 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Hashable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from types import TracebackType
+from typing import Any, Protocol
 
-from muffin_ingest.ledger import DbCursor
+
+# WHAT A WRITER ACTUALLY NEEDS FROM A DATABASE, as a protocol rather than a driver import.
+#
+# Two things follow that are worth more than the tidiness. A writer can be driven in a test with a
+# fake that records the SQL, so "which statement does an empty answer reach" is a unit test rather
+# than something reviewed by eye — and it is exactly the question that has cost this pipeline the
+# most. And nothing in `muffin_ingest` imports psycopg, so a driver change is one line in the
+# caller. (These lived in the ingest ledger until it was retired on 2026-10-04.)
+class DbCursor(Protocol):
+    def __enter__(self) -> DbCursor: ...
+
+    # THE STANDARD THREE-ARGUMENT FORM, not `*exc: object`. A protocol method declared with `*args`
+    # promises to accept ANY call, so a concrete `__exit__` taking exactly three positionals is
+    # NARROWER and does not satisfy it — psycopg's real cursor was rejected by the very protocol
+    # written to describe it, the first time one was passed in. The fakes in the tests use `*exc`
+    # and satisfy this form too, because an implementation may always be more permissive than the
+    # protocol it fulfils.
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+        /,
+    ) -> None: ...
+    # POSITIONAL-ONLY, AND RETURNING `object`. Both were written from imagination rather than
+    # from a driver, and neither survived the first real cursor: psycopg names the first parameter
+    # `query` (so a protocol naming it `sql` cannot be satisfied by keyword) and RETURNS the cursor
+    # (so a protocol demanding `-> None` cannot be satisfied at all). The fakes in the tests use
+    # ordinary named parameters and satisfy this form too, because an implementation may always be
+    # more permissive than the protocol it fulfils.
+    def execute(self, sql: str, params: Sequence[Any] = (), /) -> object: ...
+    def fetchone(self) -> tuple[Any, ...] | None: ...
+    def fetchall(self) -> list[tuple[Any, ...]]: ...
+
+
+class DbConn(Protocol):
+    def cursor(self) -> DbCursor: ...
+    def commit(self) -> None: ...
+
 
 #: Table and column names come from facet modules, never from provider data — but a typo that
 #: reaches string interpolation is worth failing loudly rather than sending to the server.

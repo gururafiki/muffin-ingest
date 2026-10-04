@@ -1,9 +1,9 @@
 """The one resource everything needs: a direct connection to Postgres.
 
-A pool rather than a connection per op, because a run is a subprocess and Dagster may execute
-several ops in it. `autocommit` is deliberately OFF — the ledger's whole value is that claiming,
-writing and completing happen in one transaction, so a facet that half-succeeds leaves the task
-claimable again rather than silently done.
+A fresh connection per `connect()`, committed when the block exits cleanly and rolled back when it
+raises. `autocommit` is deliberately OFF: a writer's statements land together or not at all — the
+symbology lane writes identifiers, symbols and probes in one transaction, so a run that dies
+half-way leaves the subject to be asked again rather than half-recorded.
 """
 
 from __future__ import annotations
