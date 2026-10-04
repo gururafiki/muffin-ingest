@@ -1,6 +1,6 @@
 """Stage 2 of the discovery family: raw parsed and normalised into core rows."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import dagster as dg
@@ -353,18 +353,28 @@ def venue_listing(
     `US.arca` both hold a line, both write the same composite FIGI with the same facts, so the
     upsert lands one row. `provider_symbol` joins the venue's suffix so the directory is
     price-addressable (US has no suffix → the bare ticker).
+
+    EACH LINE CARRIES THE FETCH TIME OF THE PAGE THAT RETURNED IT, as `last_seen_at`: the evidence
+    the absence mark judges (`venue_listing_absence`). The database keeps the newest sighting and
+    lets only a newer one clear a mark, so re-filing an older walk can neither move a sighting back
+    nor un-mark a line a newer walk did not return (muffin-deployment migration 20261004120000).
+
+    AND A LINE TWO PAGES RETURN KEEPS THE NEWER SIGHTING. `US.common` and `US.arca` both name a US
+    line, and a run filing both would otherwise hand the writer two rows for one FIGI, of which it
+    keeps the last — the OLDER sighting whenever the alias was walked first. The capped walk would
+    then appear not to have seen a line it returned, and the mark would mark it.
     """
     with postgres.connect() as conn:
         exchanges = _exchanges(conn)
         queries = directory_queries(conn)
     parts = partitioned.rows_per_partition(context, raw_exchange_sweep)
-    rows: list[dict[str, Any]] = []
-    by_type: dict[str, int] = {}
-    mapped = unplaced = 0
+    newest: dict[str, dict[str, Any]] = {}
+    mapped = unplaced = returned_twice = 0
     for key, doc_rows in parts.items():
         query = query_for(queries, key)
         suffix, _ = exchanges.get(query.files_under, ("", None))
         for r in doc_rows:
+            seen = datetime.fromisoformat(str(r["fetched_at"]))
             listings, _, _ = openfigi.parse_filter(bytes(r["body"]), exch_code=query.files_under)
             if query.maps_to_composite:
                 listings, lost = openfigi.as_composite(listings)
@@ -374,9 +384,18 @@ def venue_listing(
                 listing["provider_symbol"] = (
                     f"{listing['ticker']}{suffix}" if suffix else listing["ticker"]
                 )
-                kind = listing.get("security_type") or "unknown"
-                by_type[kind] = by_type.get(kind, 0) + 1
-                rows.append(listing)
+                listing["last_seen_at"] = seen
+                kept = newest.get(listing["figi"])
+                if kept is not None:
+                    returned_twice += 1
+                    if kept["last_seen_at"] > seen:
+                        continue
+                newest[listing["figi"]] = listing
+    rows = list(newest.values())
+    by_type: dict[str, int] = {}
+    for listing in rows:
+        kind = listing.get("security_type") or "unknown"
+        by_type[kind] = by_type.get(kind, 0) + 1
     context.add_output_metadata(
         {
             "queries": len(parts),
@@ -384,6 +403,8 @@ def venue_listing(
             "rows_by_type": ", ".join(f"{k} {v}" for k, v in sorted(by_type.items())) or "none",
             "mapped_to_composite": mapped,
             "unplaced_without_composite": unplaced,
+            # A US line both `US.common` and `US.arca` return is the expected case, not a defect.
+            "returned_by_two_pages": returned_twice,
         }
     )
     return rows

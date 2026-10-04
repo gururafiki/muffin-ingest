@@ -65,6 +65,16 @@ class FakeCursor:
     follows — the writes are how the placeholder-guard chain is asserted."""
 
     writes: ClassVar[list[tuple[str, tuple[Any, ...]]]] = []
+    #: What `market.mark_venue_absence` answers; the rules are tested against real Postgres in
+    #: muffin-deployment, so here only what the asset hands it and records matters.
+    absence_outcome: ClassVar[dict[str, Any]] = {
+        "windows_judged": 3,
+        "marked": 2,
+        "marked_by_window": {"GR.common": 2},
+        "unfinished": ["LN.common", "US.reit"],
+        "refused": [],
+        "absent": 7,
+    }
 
     def __init__(
         self,
@@ -106,6 +116,10 @@ class FakeCursor:
         if text.startswith("select market.set_debt_terms"):
             FakeCursor.writes.append((text, tuple(params)))
             self.rows = [(len(json.loads(params[0])),)]
+            return
+        if text.startswith("select market.mark_venue_absence"):
+            FakeCursor.writes.append((text, tuple(params)))
+            self.rows = [(dict(FakeCursor.absence_outcome),)]
             return
         # READ queries are answered by shape; anything else is a WRITE and is recorded for the
         # assertions on what reached the database. Guarded with `startswith("select")` because the
@@ -1648,3 +1662,387 @@ def test_debt_terms_for_bonds_already_held_reach_the_rpc(
     calls = [params for sql, params in FakeCursor.writes if "set_debt_terms" in sql]
     assert len(calls) == 1, calls
     assert {r["security_id"] for r in json.loads(calls[0][0])} == set(held.values())
+
+
+# --- absence: what the directory stopped returning ------------------------------------------------
+
+
+def _walk_at(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    key: str,
+    lines: Sequence[dict[str, Any]],
+    *,
+    at: datetime,
+    total: int | None = None,
+    unfinished: bool = False,
+    more: Sequence[tuple[Sequence[dict[str, Any]], datetime]] = (),
+) -> None:
+    """Walk one query: a page returning `lines` fetched at `at`, then each of `more` in turn.
+
+    `unfinished` hands back a cursor after the last page and then refuses it, the way a walk the
+    provider stopped part way is left: its pages filed, its cursor in the file.
+    """
+    from muffin_ingest.providers.openfigi import OpenFigiThrottled
+
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    pages = [(list(lines), at), *[(list(ls), when) for ls, when in more]]
+    held = sum(len(ls) for ls, _ in pages)
+
+    def sweeper(exch_code: str, *, cursor: str | None = None, **kw: Any) -> Document:
+        index = 0 if cursor is None else int(cursor[1:]) if cursor.startswith("p") else -1
+        if index < 0:
+            raise OpenFigiThrottled("429")
+        page_lines, when = pages[index]
+        last = index == len(pages) - 1
+        body = json.dumps(
+            {
+                "data": page_lines,
+                "next": ("more" if unfinished else None) if last else f"p{index + 1}",
+                "total": held if total is None else total,
+            }
+        ).encode()
+        return Document(
+            url="https://api.openfigi.com/v3/filter",
+            body=body,
+            content_type="application/json",
+            fetched_at=when,
+        )
+
+    saved, saved_pause = figi_provider.filter_exchange, _no_waiting(discovery_raw)
+    figi_provider.filter_exchange = sweeper
+    try:
+        result = dg.materialize(
+            [discovery_raw.raw_exchange_sweep],
+            partition_key=key,
+            instance=instance,
+            resources={
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "raw_store": RawStore(base_path=str(tmp_path)),
+                "postgres": FakePostgres(),
+            },
+        )
+    finally:
+        figi_provider.filter_exchange, discovery_raw._pause = saved, saved_pause
+    assert result.success
+
+
+def _file(
+    tmp_path: Path, instance: dg.DagsterInstance, first: str, last: str | None = None
+) -> dg.ExecuteInProcessResult:
+    """Run stage 2 over the walks already stored, `first` alone or the range `first`..`last`."""
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    result = dg.materialize(
+        [discovery_raw.raw_exchange_sweep, discovery_core.venue_listing],
+        selection=[discovery_core.venue_listing],
+        partition_key=None if last else first,
+        tags=(
+            {
+                "dagster/asset_partition_range_start": first,
+                "dagster/asset_partition_range_end": last,
+            }
+            if last
+            else None
+        ),
+        instance=instance,
+        resources={
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "raw_store": RawStore(base_path=str(tmp_path)),
+            "postgres": FakePostgres(),
+            "postgres_io": _Capture(),
+        },
+    )
+    assert result.success
+    return result
+
+
+def _line(figi: str, **extra: Any) -> dict[str, Any]:
+    return {"figi": figi, "ticker": figi[-4:], "securityType2": "Common Stock", **extra}
+
+
+EARLIER = datetime(2026, 10, 1, 4, 0, tzinfo=UTC)
+LATER = datetime(2026, 10, 1, 4, 30, tzinfo=UTC)
+
+
+def test_a_walk_is_read_as_finished_capped_unfinished_or_never_walked(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """The three readers — the finished check, the cap check and the mark — ask a walk the same
+    questions, so they are answered in one place. A capped walk's window is the largest FIGI it
+    holds, compared as Postgres' `collate "C"` compares it: by code point, so `BBG00Z` sorts after
+    `BBG00a` would not, and an uppercase-only fixture would not tell the two orders apart."""
+    from muffin_ingest_dagster.defs.discovery.walks import read_walk
+
+    keys = ["AU.common", "US.common", "LN.common", "US.reit"]
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, keys)
+    _walk_at(tmp_path, instance, "AU.common", [_line("BBG000AU0001")], at=EARLIER)
+    # TWO PAGES, FETCHED HALF AN HOUR APART: the walk began when its FIRST page was fetched, and a
+    # line on that page carries that time. Dating the walk by its last page would mark it.
+    _walk_at(
+        tmp_path,
+        instance,
+        "US.common",
+        [_line("BBG00a000001")],
+        at=EARLIER,
+        more=[([_line("BBG00Z000002")], LATER)],
+        total=20_096,
+    )
+    _walk_at(tmp_path, instance, "LN.common", [_line("BBG000LN0001")], at=EARLIER, unfinished=True)
+    store = RawStore(base_path=str(tmp_path))
+
+    finished = read_walk(store, "AU.common")
+    assert (finished.complete, finished.capped, finished.pages) == (True, False, 1)
+    assert finished.as_fact() == {
+        "complete": True,
+        "started_at": EARLIER.isoformat(),
+        "capped": False,
+        "window_end": None,
+    }
+
+    capped = read_walk(store, "US.common")
+    assert (capped.complete, capped.capped, capped.held, capped.total) == (True, True, 2, 20_096)
+    assert (capped.pages, capped.started_at) == (2, EARLIER)
+    # `a` (0x61) is above `Z` (0x5A): the code-point maximum, which a case-folding order would not
+    # pick.
+    assert capped.as_fact()["window_end"] == "BBG00a000001"
+
+    unfinished = read_walk(store, "LN.common")
+    assert (unfinished.complete, unfinished.pages) == (False, 1)
+
+    never = read_walk(store, "US.reit")
+    assert never.as_fact() == {
+        "complete": False,
+        "started_at": None,
+        "capped": False,
+        "window_end": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("arca_at", "common_at"), [(LATER, EARLIER), (EARLIER, LATER)], ids=["arca-newer", "us-newer"]
+)
+def test_each_line_carries_its_page_s_fetch_time_and_the_newer_sighting_wins(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    arca_at: datetime,
+    common_at: datetime,
+) -> None:
+    """`last_seen_at` is the evidence the mark judges. `US.common` and `US.arca` both name the US
+    line `BBG013QNJHP8`, and a run filing both hands the writer two rows for one FIGI, of which it
+    would keep the LAST. Run in both orders, one of the two puts the older sighting last, so a run
+    keeping the last row instead of the newer fails one case here — and in production would make
+    the capped walk look as if it had not returned a line it did."""
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["US.arca", "US.common"])
+    _walk_at(
+        tmp_path,
+        instance,
+        "US.arca",
+        [_line("BBG0154FBJJ5", compositeFIGI="BBG013QNJHP8", ticker="BRBR")],
+        at=arca_at,
+    )
+    _walk_at(tmp_path, instance, "US.common", [_line("BBG013QNJHP8", ticker="BRBR")], at=common_at)
+
+    result = _file(tmp_path, instance, "US.arca", "US.common")
+
+    assert [(r["figi"], r["last_seen_at"]) for r in _Capture.last] == [
+        ("BBG013QNJHP8", max(arca_at, common_at))
+    ]
+    meta = result.asset_materializations_for_node("venue_listing")[0].metadata
+    assert meta["returned_by_two_pages"].value == 1
+
+
+def test_the_mark_is_handed_every_walk_and_judges_only_what_stage_2_has_filed(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+) -> None:
+    """A finished walk whose stage 2 has not run has stamped none of its lines, so judging it would
+    mark every line it returned — and that is the ordinary state for the hour after a monthly
+    refresh. The fixture covers every state a query can be in on the morning of a mark:
+
+      AU.common  walked, filed, then walked AGAIN (the refresh): finished, not filed
+      GR.common  walked and filed
+      LN.common  refused part way and filed: unfinished, which the database already skips
+      US.common  capped and filed: the window goes with it
+      US.arca    walked and filed
+      US.reit    never walked
+    """
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import derived as discovery_derived
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    keys = ["AU.common", "GR.common", "LN.common", "US.arca", "US.common", "US.reit"]
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, keys)
+    _walk_at(tmp_path, instance, "AU.common", [_line("BBG000AU0001")], at=EARLIER)
+    _file(tmp_path, instance, "AU.common")
+    _walk_at(tmp_path, instance, "AU.common", [_line("BBG000AU0001")], at=LATER)
+    _walk_at(tmp_path, instance, "GR.common", [_line("BBG000GR0001")], at=EARLIER)
+    _walk_at(tmp_path, instance, "LN.common", [_line("BBG000LN0001")], at=EARLIER, unfinished=True)
+    _walk_at(
+        tmp_path,
+        instance,
+        "US.arca",
+        [_line("BBG0154FBJJ5", compositeFIGI="BBG013QNJHP8")],
+        at=EARLIER,
+    )
+    _walk_at(tmp_path, instance, "US.common", [_line("BBG000US0001")], at=LATER, total=20_096)
+    for key in ("GR.common", "LN.common", "US.arca", "US.common"):
+        _file(tmp_path, instance, key)
+
+    FakeCursor.writes.clear()
+    result = dg.materialize(
+        [
+            discovery_raw.raw_exchange_sweep,
+            discovery_core.venue_listing,
+            discovery_derived.venue_listing_absence,
+        ],
+        selection=[discovery_derived.venue_listing_absence],
+        instance=instance,
+        resources={
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "raw_store": RawStore(base_path=str(tmp_path)),
+            "postgres": FakePostgres(),
+            "postgres_io": _Capture(),
+        },
+    )
+    assert result.success
+
+    calls = [params for sql, params in FakeCursor.writes if "mark_venue_absence" in sql]
+    assert len(calls) == 1, "one call, with every query's walk"
+    facts = json.loads(calls[0][0])
+    assert sorted(facts) == keys, "every query the database lists, walked or not"
+    assert facts["AU.common"]["complete"] is False, "a refreshed walk not yet filed vouches nothing"
+    assert facts["GR.common"] == {
+        "complete": True,
+        "started_at": EARLIER.isoformat(),
+        "capped": False,
+        "window_end": None,
+    }
+    assert facts["LN.common"]["complete"] is False
+    assert facts["US.arca"]["complete"] is True
+    assert facts["US.common"] == {
+        "complete": True,
+        "started_at": LATER.isoformat(),
+        "capped": True,
+        "window_end": "BBG000US0001",
+    }
+    assert facts["US.reit"] == {
+        "complete": False,
+        "started_at": None,
+        "capped": False,
+        "window_end": None,
+    }
+
+    meta = {
+        k: v.value
+        for k, v in result.asset_materializations_for_node("venue_listing_absence")[
+            0
+        ].metadata.items()
+    }
+    # ONLY THE FINISHED-BUT-UNFILED WALK IS NAMED HERE: an unfinished one, or one never walked, is
+    # the database's `unfinished`, and listing it twice would hide which state each is in.
+    assert meta["not_yet_filed"] == "AU.common"
+    assert meta["capped"] == "US.common to BBG000US0001"
+    assert (meta["queries"], meta["marked"], meta["absent"]) == (6, 2, 7)
+    assert meta["unfinished"] == "LN.common; US.reit"
+
+    # AND ONCE STAGE 2 FILES THE REFRESH, THE SAME WALK IS JUDGED.
+    _file(tmp_path, instance, "AU.common")
+    FakeCursor.writes.clear()
+    dg.materialize(
+        [
+            discovery_raw.raw_exchange_sweep,
+            discovery_core.venue_listing,
+            discovery_derived.venue_listing_absence,
+        ],
+        selection=[discovery_derived.venue_listing_absence],
+        instance=instance,
+        resources={
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "raw_store": RawStore(base_path=str(tmp_path)),
+            "postgres": FakePostgres(),
+            "postgres_io": _Capture(),
+        },
+    )
+    calls = [params for sql, params in FakeCursor.writes if "mark_venue_absence" in sql]
+    assert json.loads(calls[0][0])["AU.common"] == {
+        "complete": True,
+        "started_at": LATER.isoformat(),
+        "capped": False,
+        "window_end": None,
+    }
+
+
+def test_the_mark_runs_daily_and_not_on_every_filing(tmp_path: Path) -> None:
+    """A monthly refresh files ~237 partitions one run at a time; marking after each would judge
+    most queries against a half-filed directory. Daily, once, and a filing does not trigger it."""
+    from muffin_ingest_dagster.defs.discovery import core as discovery_core
+    from muffin_ingest_dagster.defs.discovery import derived as discovery_derived
+    from muffin_ingest_dagster.defs.discovery import raw as discovery_raw
+
+    defs = dg.Definitions(
+        assets=[
+            discovery_raw.raw_exchange_sweep,
+            discovery_core.venue_listing,
+            discovery_derived.venue_listing_absence,
+        ],
+        resources={
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "raw_store": RawStore(base_path=str(tmp_path)),
+            "postgres": FakePostgres(),
+            "postgres_io": _Capture(),
+        },
+    )
+    only = dg.AssetSelection.assets("venue_listing_absence")
+    times = [
+        datetime(2026, 10, 5, 5, 0, tzinfo=UTC),
+        datetime(2026, 10, 5, 5, 30, tzinfo=UTC),
+        datetime(2026, 10, 5, 5, 42, tzinfo=UTC),
+        datetime(2026, 10, 5, 6, 0, tzinfo=UTC),
+    ]
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["AU.common"])
+        first = dg.evaluate_automation_conditions(
+            defs=defs, instance=instance, asset_selection=only, evaluation_time=times[0]
+        )
+        instance.report_runless_asset_event(
+            dg.AssetMaterialization("venue_listing", partition="AU.common")
+        )
+        filed = dg.evaluate_automation_conditions(
+            defs=defs,
+            instance=instance,
+            asset_selection=only,
+            cursor=first.cursor,
+            evaluation_time=times[1],
+        )
+        tick = dg.evaluate_automation_conditions(
+            defs=defs,
+            instance=instance,
+            asset_selection=only,
+            cursor=filed.cursor,
+            evaluation_time=times[2],
+        )
+        after = dg.evaluate_automation_conditions(
+            defs=defs,
+            instance=instance,
+            asset_selection=only,
+            cursor=tick.cursor,
+            evaluation_time=times[3],
+        )
+    assert (first.total_requested, filed.total_requested) == (0, 0), "not on a filing"
+    assert tick.total_requested == 1, "the daily tick marks"
+    assert after.total_requested == 0, "once"
+
+
+def test_the_listings_follow_the_mark() -> None:
+    """A line marked this morning must leave `security_listing` this morning, so the derivation
+    depends on the mark and fires after it."""
+    from muffin_ingest_dagster.defs.discovery import derived as discovery_derived
+
+    assert (
+        discovery_derived.venue_listing_absence.key
+        in discovery_derived.security_listing.dependency_keys
+    )

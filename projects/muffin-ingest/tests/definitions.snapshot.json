@@ -724,7 +724,8 @@
       "code_version": null,
       "deps": {
         "security_symbology": null,
-        "venue_listing": null
+        "venue_listing": null,
+        "venue_listing_absence": null
       },
       "execution_type": "MATERIALIZATION",
       "freshness_policy": {
@@ -875,6 +876,31 @@
         "kind": "dynamic",
         "name": "exchange_sweep"
       },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "venue_listing_absence": {
+      "automation_condition": "daily (400f37d985fc)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "venue_listing": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
       "pools": [
         "sql"
       ],
