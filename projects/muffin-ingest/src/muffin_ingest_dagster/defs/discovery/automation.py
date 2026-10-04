@@ -24,6 +24,7 @@ from muffin_ingest_dagster.defs.discovery.raw import (
 )
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
+from muffin_ingest_dagster.lib.runtime import SHORT_RUN
 
 # --- sensors ------------------------------------------------------------------------------------
 
@@ -232,4 +233,5 @@ fund_directory = dg.ScheduleDefinition(
     cron_schedule="0 5 * * *",
     execution_timezone="UTC",
     default_status=dg.DefaultScheduleStatus.RUNNING,
+    tags=SHORT_RUN,
 )

@@ -7,6 +7,7 @@ import dagster as dg
 from dagster import AssetExecutionContext
 
 from muffin_ingest_dagster.lib.resources import Postgres
+from muffin_ingest_dagster.lib.runtime import SHORT_RUN
 
 
 @dg.asset(
@@ -59,4 +60,5 @@ heartbeat_schedule = dg.ScheduleDefinition(
     cron_schedule="7 * * * *",
     execution_timezone="UTC",
     default_status=dg.DefaultScheduleStatus.RUNNING,
+    tags=SHORT_RUN,
 )
