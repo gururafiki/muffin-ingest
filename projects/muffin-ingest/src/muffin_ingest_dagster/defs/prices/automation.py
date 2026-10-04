@@ -21,6 +21,7 @@ from muffin_ingest_dagster.defs.prices.partitions import (
 )
 from muffin_ingest_dagster.defs.prices.raw import raw_price_history
 from muffin_ingest_dagster.lib.resources import Postgres
+from muffin_ingest_dagster.lib.runtime import PRICE_RUN
 
 
 #: RUNNING IN CODE, NOT ONLY IN THE DATABASE. Until 2026-09-24 this sensor ran because someone
@@ -81,6 +82,7 @@ nightly_prices_job = dg.define_asset_job(
     SWEEP_SCHEDULE,
     selection=dg.AssetSelection.assets(raw_price_history, price_bar_history),
     partitions_def=security_partitions,
+    run_tags=PRICE_RUN,
 )
 
 

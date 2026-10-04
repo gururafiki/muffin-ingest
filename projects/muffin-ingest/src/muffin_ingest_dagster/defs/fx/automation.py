@@ -8,6 +8,7 @@ from muffin_ingest_dagster.defs.fx.partitions import CURRENCY_PARTITION, currenc
 from muffin_ingest_dagster.defs.fx.raw import raw_fx_history, raw_fx_spot
 from muffin_ingest_dagster.lib.priority import SHORT_LANE
 from muffin_ingest_dagster.lib.resources import Postgres
+from muffin_ingest_dagster.lib.runtime import SHORT_RUN
 
 
 #: RUNNING IN CODE, NOT ONLY IN THE DATABASE. Until 2026-09-24 this sensor ran because someone
@@ -60,7 +61,7 @@ daily_fx = dg.build_schedule_from_partitioned_job(
         selection=dg.AssetSelection.assets(raw_fx_spot, fx_rate),
         # FIRST IN LINE FOR THE `sql` POOL. See `lib/priority.py`: without it this ~25 s lane
         # waited behind the whole price sweep on 2026-09-24 (6,069 s).
-        run_tags=SHORT_LANE,
+        run_tags={**SHORT_LANE, **SHORT_RUN},
     ),
     default_status=dg.DefaultScheduleStatus.RUNNING,
 )
