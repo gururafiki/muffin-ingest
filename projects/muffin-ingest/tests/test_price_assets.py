@@ -52,6 +52,10 @@ CURRENCIES = [
 #: in this codebase's history, and it is a unit test rather than a reading.
 PROBES: list[dict[str, Any]] = []
 
+#: Every retraction the history's clean stage sent, as its parameters: the securities, their raw
+#: ranges' first and last dates, and the (security, date) pairs the raw history holds.
+RETRACTIONS: list[tuple[Any, ...]] = []
+
 
 def _inserted(text: str, params: Sequence[Any]) -> list[dict[str, Any]]:
     """The rows of an `insert into t (a, b) values (...), (...)` the writer sent, as dicts."""
@@ -82,6 +86,12 @@ class FakeCursor:
         assert "ingest." not in text, f"the ledger is retired; nothing may reach it: {text[:80]}"
         if text.startswith("insert into market.identifier_probe"):
             PROBES.extend(_inserted(text, params))
+            return
+        if text.startswith("delete from market.price_bar"):
+            # ANSWERED WITH NO ROWS, NOT WITH THE UNIVERSE. The fall-through below would hand back
+            # the subjects, and a retraction counted from them reads as bars deleted.
+            RETRACTIONS.append(tuple(params))
+            self.rows = []
             return
         if "market.listing" in text:
             self.rows = [(sid, "USD") for sid, _, _ in self._subjects]

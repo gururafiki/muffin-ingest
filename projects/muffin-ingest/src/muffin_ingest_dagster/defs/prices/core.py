@@ -40,13 +40,24 @@ def price_bar_history(
     `price_bar` asset wrote the same table under the same key, which is what made a cutover with a
     rollback harmless; this is the only writer now.
 
-    NOT `replace_scope`. A security's history is APPENDED to by successive runs — a bounded page
-    that fetched 2010-2015 must not retract 2016 onwards written by the last one. Retraction is for
-    a source that restates a whole scope, which a paged history fetch does not.
+    NOT `replace_scope`. A security's history is APPENDED to by successive runs, and the nightly
+    cost of rewriting every bar is already an open decision
+    (umbrella docs/deferred/2026-10-04-the-price-history-lane-rewrites-every-bar-nightly.md), which
+    deleting and re-inserting each history would make permanent.
+
+    BUT WITHIN ITS OWN RANGE, A RAW HISTORY IS THE ANSWER, so a bar on a date it lacks is retracted
+    (`prices.retract_bars_absent_from_raw`). Without that, a history reloaded under a new symbol
+    leaves the old listing's bars on every day the new one did not trade: 5,097 of them across 95
+    securities on 2026-10-04, Hong Kong lines carrying their OTC line's dollar bars on HK holidays.
     """
     raw = _loaded_rows(raw_price_history)
     with postgres.connect() as conn:
         currencies = prices.currency_by_security(conn)
+        # BEFORE THE WRITE, IN ITS OWN TRANSACTION. It deletes only dates the raw history lacks,
+        # which the write below never produces, so neither order can undo the other.
+        with conn.cursor() as cur:
+            retracted = prices.retract_bars_absent_from_raw(cur, prices.dates_by_security(raw))
+        conn.commit()
 
     # UP TO BUT NOT INCLUDING TODAY. Somewhere a market is open and its bar for today is a session
     # in progress; raw keeps it because it is what the provider said, and this is where it is
@@ -63,6 +74,9 @@ def price_bar_history(
             "rows": len(rows),
             "dropped": len(raw) - len(rows),
             "without_a_currency": sum(1 for r in rows if not r["currency_code"]),
+            # Bars removed because their date sits inside the raw history's range and the raw
+            # history no longer has it: another listing's leftovers, almost always.
+            "retracted": retracted,
         }
     )
     return rows

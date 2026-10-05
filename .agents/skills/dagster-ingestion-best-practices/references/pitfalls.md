@@ -329,6 +329,26 @@ capped walk looks as if it had not returned a line it did. Keep the newer copy e
 returning, count the duplicates, and test both fetch orders: one of the two always puts the older
 copy last, so a single order can pass a rule that keeps the last row.
 
+## Do not extend a history from its newest date alone
+
+A watermark says how far one question got, and it means nothing for a different question.
+`raw_price_history` asks with `coalesce(provider symbol, ticker)`, so a security moves from its OTC
+ticker line to its home line when symbology adopts one. The extension read the newest stored date,
+asked the new symbol from there, and merged. On 2026-10-04, 69 partitions held years of `GELYF` in
+dollars followed by days of `0175.HK`, and every return across the switch was wrong. Store the
+question beside the answer (`asked_symbol` is a context column for exactly this). Give no watermark
+to a partition holding a row asked differently: that makes it a full load, which replaces the file.
+
+## Do not let an upsert-only stage 2 keep what a replaced raw file dropped
+
+Stage 1 replaced the file, but stage 2 only ever upserted. So the old listing's bars on days the new
+one did not trade survived in `price_bar`: 5,097 bars across 95 securities, Hong Kong lines carrying
+OTC dollar bars on HK holidays. Within the range a raw file covers, the table must mirror it:
+retract what raw lacks. Count every raw row, because a refused NaN close still says the day exists,
+and never retract for a subject with no raw rows. Outside the range raw says nothing. A provider that
+stopped returning old years (AREN's continue straight into its raw history) is no reason to delete
+them.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
@@ -340,8 +360,10 @@ copy last, so a single order can pass a rule that keeps the last row.
 ## Shipping
 
 - A roll restarts the code location and **kills in-flight runs**: `DefaultRunLauncher` starts each
-  run as a `multiprocessing` child of the code server (`dagster/_grpc/server.py`, `StartRun`), and
-  `run_monitoring` is off. Wait for long runs, and look for runs left `STARTED` afterwards.
+  run as a `multiprocessing` child of the code server (`dagster/_grpc/server.py`, `StartRun`).
+  `run_monitoring` (on since 2026-10-04) enforces `dagster/max_runtime` but cannot see a dead worker,
+  because this launcher has no health check; the roll fails what it killed (muffin-deployment#387).
+  Wait for long runs anyway: a killed run's work is lost.
 - **Verify the first scheduled night, not only the backfill.** The 09-16 recovery backfills ran at
   noon over settled sessions at ~14 calls/min, and all passed. The first night at 00:00 UTC succeeded
   on every run and published half a price day (throttled at ~42 calls/min), 1 of 61 index scopes

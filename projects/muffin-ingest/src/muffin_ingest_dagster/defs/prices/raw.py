@@ -342,11 +342,24 @@ def raw_price_history(
     # and a watermark that reads too OLD is merely a wider window, which the merge then dedupes,
     # while one that reads too NEW would leave a hole nothing reports.
     watermarks: dict[str, date] = {}
+    restarting: list[str] = []
     for subject in subjects:
-        stored = raw_store.stored_rows_for(context.asset_key, subject.security_id)
+        stored = raw_store.stored_rows_for(
+            context.asset_key, subject.security_id, columns=("date", "asked_symbol")
+        )
+        # A SYMBOL CHANGE RESTARTS THE HISTORY. A partition holding a row asked with another symbol
+        # is another listing's history, and extending it would append this listing to that one —
+        # 69 partitions did exactly that before 2026-10-05 (`prices.asked_with_another_symbol`).
+        # No watermark makes it a full load, and a full load with rows REPLACES the file. A refused
+        # one replaces nothing, so the old history stands until the provider answers.
+        if prices.asked_with_another_symbol(stored, subject.symbol):
+            restarting.append(subject.security_id)
+            continue
         dates = [d for d in (prices.row_date(row) for row in stored) if d is not None]
         if dates:
             watermarks[subject.security_id] = max(dates)
+    for sid in restarting[:20]:
+        context.log.info(f"{sid}: stored history was asked with another symbol; reloading it")
 
     loading = [s for s in subjects if s.security_id not in watermarks]
     extending = [s for s in subjects if s.security_id in watermarks]
@@ -395,6 +408,9 @@ def raw_price_history(
             "not_askable": len(wanted) - len(subjects),
             "rows": len(rows),
             "loading_full_history": len(loading),
+            # Of those, the ones whose stored history was another symbol's. Counted apart because a
+            # burst here means symbols changed under many securities at once, which is worth a look.
+            "restarting_history": len(restarting),
             "extending_from_watermark": len(extending),
             **stats,
         }
