@@ -8,7 +8,10 @@ stored whatever came back, including nothing", so:
   measured 2026-09-20 on 1.13.22, `on_missing()` requested 0 of 2 partitions that were already in
   the grid when the first tick ran, and 2 of 2 added between ticks. A rule that silently does
   nothing for everything already there is the wrong rule for a lane being switched on.
-* `ReAskAfter` — we asked, the provider had nothing, and that was long enough ago to ask again.
+* `ReAskAfter` — we asked, the provider had nothing, and that was long enough ago to ask again. OR
+  the symbol a security holds was rejected by the price lane after OpenFIGI last answered for it
+  (Stage 3b): the death is the evidence the held symbol is wrong, and the ladder is what can name
+  another. The class keeps its name for the reason below; only what it selects grew.
 
 `~in_progress()` stops a partition being requested twice while its run is live.
 
@@ -37,11 +40,15 @@ from muffin_ingest_dagster.lib.resources import Postgres
 
 
 class ReAskAfter(dg.AutomationCondition):  # type: ignore[type-arg]
-    """Request the subjects whose recorded answer was `miss` and is older than the window."""
+    """Request the subjects whose recorded answer was `miss` and is older than the window, and the
+    subjects holding a symbol the price lane has rejected since OpenFIGI last answered."""
 
     @property
     def description(self) -> str:
-        return f"a probe said miss more than {REASK_AFTER_DAYS} days ago"
+        return (
+            f"a probe said miss more than {REASK_AFTER_DAYS} days ago, "
+            "or the held symbol died since OpenFIGI last answered"
+        )
 
     def evaluate(self, context: Any) -> Any:
         candidates = context.candidate_subset
@@ -51,7 +58,7 @@ class ReAskAfter(dg.AutomationCondition):  # type: ignore[type-arg]
         if candidates.is_empty:
             return dg.AutomationResult(context, true_subset=context.get_empty_subset())
         with Postgres().connect() as conn:
-            due = sym.stale_misses(conn, older_than_days=REASK_AFTER_DAYS)
+            due = sym.stale_misses(conn, older_than_days=REASK_AFTER_DAYS) | sym.dead_unasked(conn)
         return dg.AutomationResult(
             context, true_subset=candidates.compute_intersection_with_partition_keys(due)
         )
@@ -67,4 +74,4 @@ SYMBOLOGY_AUTOMATION = (
     & ~dg.AutomationCondition.in_progress()
     # LABELLED SO THE DEFINITIONS SNAPSHOT READS AS SOMETHING. Without it three assets record
     # `unlabelled (<hash>)`, and a diff nobody can read is a diff nobody checks.
-).with_label("never asked, or a stale miss")
+).with_label("never asked, a stale miss, or a dead symbol")

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import pytest
 
@@ -162,6 +162,7 @@ def test_plan_symbols_records_a_hit_and_a_miss_as_observations() -> None:
         source="openfigi",
         asked_local=True,
         asked_yahoo=True,
+        dead_symbol=None,
     )
     assert identifiers == [
         {"kind_code": "ticker", "value": "AAPL", "security_id": sec, "source_code": "openfigi"}
@@ -184,6 +185,7 @@ def test_plan_symbols_records_a_hit_and_a_miss_as_observations() -> None:
         source="openfigi",
         asked_local=True,
         asked_yahoo=True,
+        dead_symbol=None,
     )
     assert identifiers == [] and symbols == []
     assert observed(probes) == [
@@ -226,6 +228,7 @@ def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
         source="openfigi",
         asked_local=False,
         asked_yahoo=False,
+        dead_symbol=None,
     )
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "hit")]
@@ -241,6 +244,7 @@ def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
         source="openfigi",
         asked_local=False,
         asked_yahoo=False,
+        dead_symbol=None,
     )
     assert identifiers == [] and symbols == []
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss")]
@@ -256,6 +260,7 @@ def test_a_scheme_nobody_asked_about_earns_no_observation_either_way() -> None:
         source="openfigi",
         asked_local=True,
         asked_yahoo=False,
+        dead_symbol=None,
     )
     assert [(p["scheme"], p["outcome"]) for p in probes] == [("ticker", "miss"), ("symbol", "miss")]
 
@@ -279,6 +284,7 @@ def test_the_ticker_rung_carries_its_own_question_and_needs_no_flag() -> None:
         source="openfigi",
         asked_local=True,
         asked_yahoo=True,
+        dead_symbol=None,
     )
     assert observed(probes) == [("symbol", "openfigi", "miss"), ("symbol", "yahoo", "hit")]
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
@@ -305,6 +311,7 @@ def test_each_symbol_rung_is_observed_under_its_own_provider() -> None:
         source="openfigi",
         asked_local=True,
         asked_yahoo=True,
+        dead_symbol=None,
     )
     assert [(p["scheme"], p["provider"], p["outcome"], p["value"]) for p in probes] == [
         ("ticker", "openfigi", "miss", None),
@@ -333,6 +340,7 @@ def test_when_both_rungs_name_a_line_openfigis_local_line_is_adopted() -> None:
         source="openfigi",
         asked_local=True,
         asked_yahoo=True,
+        dead_symbol=None,
     )
     assert symbols == [{"security_id": sec, "provider_code": "yfinance", "symbol": "AAPL"}]
     assert [(p["provider"], p["value"]) for p in probes if p["scheme"] == "symbol"] == [
@@ -355,6 +363,7 @@ def test_yahoo_hits_for_a_subject_yahoo_was_not_asked_about_are_refused() -> Non
             source="openfigi",
             asked_local=True,
             asked_yahoo=False,
+            dead_symbol=None,
         )
 
 
@@ -384,6 +393,7 @@ def test_a_local_line_named_by_the_unfiltered_rung_is_a_hit_not_a_miss() -> None
         source="openfigi",
         asked_local=True,
         asked_yahoo=False,
+        dead_symbol=None,
         # The local rung names AAPL on the US board — the captured answer.
         local_hits=entries[0].hits,
     )
@@ -740,22 +750,174 @@ def test_the_class_holders_are_asked_about_exactly_the_classes_in_the_batch() ->
     assert len(Conn.calls) == 1, "no rows must not reach the database"
 
 
-def test_a_symbol_already_held_is_never_replaced_by_a_pick() -> None:
-    """ADOPTION FILLS A GAP; IT DOES NOT OVERRULE. The held symbol may have been verified against
-    the provider (`BRK-B`), and the ladder's pick is OpenFIGI's spelling plus a suffix (`BRK/B`) —
-    the shape the edge's repair existed to undo. Once the local rung also asks for classes it
-    answers for securities that hold a symbol, so the upsert would overwrite them routinely.
+def test_a_live_symbol_is_never_replaced_and_a_dead_one_may_be() -> None:
+    """ADOPTION FILLS A GAP; IT DOES NOT OVERRULE A SYMBOL THAT WORKS. The held symbol may have been
+    verified against the provider (`BRK-B`), and the ladder's pick is OpenFIGI's spelling plus a
+    suffix (`BRK/B`) — the shape the edge's repair existed to undo. A DEAD held symbol is the one
+    exception: the price lane rejected it alone, with a healthy control, so replacing it breaks
+    nothing that works (Stage 3b).
 
-    Three cases, each a different rule's failure: a gap is filled, a restatement is kept (a rule
-    refusing every held security would drop it), and a disagreement is refused with both names.
+    FIVE CASES, EACH A DIFFERENT RULE'S FAILURE: a gap is filled; a restatement is kept (a rule
+    refusing every held security would drop it); a dead held symbol is repaired; a live one is
+    refused with both names; and a death recorded against an OLDER spelling says nothing about
+    the held one, so that pick is refused too — a rule asking only "is this security dead?" would
+    replace a symbol nobody has rejected.
     """
 
     def row(sid: str, symbol: str) -> dict[str, str]:
         return {"security_id": sid, "provider_code": "yfinance", "symbol": symbol}
 
-    kept, refused = symbology.unreplaced_symbols(
-        [row("gap", "UMSH.SI"), row("same", "BRK-B"), row("differs", "BRK/B")],
-        {"same": "BRK-B", "differs": "BRK-B"},
+    split = symbology.repairable_symbols(
+        [
+            row("gap", "UMSH.SI"),
+            row("same", "BRK-B"),
+            row("dead", "0006.HK"),
+            row("live", "BRK/B"),
+            row("old-death", "6.HK"),
+        ],
+        {"same": "BRK-B", "dead": "6.HK", "live": "BRK-B", "old-death": "0006.HK"},
+        {"dead": "6.HK", "old-death": "0006.HK.OLD"},
     )
-    assert [r["security_id"] for r in kept] == ["gap", "same"]
-    assert refused == [("differs", "BRK-B", "BRK/B")]
+    assert [r["security_id"] for r in split.kept] == ["gap", "same"]
+    assert [(r["security_id"], r["symbol"]) for r in split.repairs] == [("dead", "0006.HK")]
+    assert split.refused == [
+        ("live", "BRK-B", "BRK/B"),
+        ("old-death", "0006.HK", "6.HK"),
+    ]
+
+
+#: Hong Kong's real repair, recorded 2026-08-12: `6.HK` returns nothing because Yahoo pads Hong Kong
+#: tickers to four digits, and `0006.HK` returns the series. OpenFIGI names `6` on `HKS`, so its
+#: pick is the unpadded spelling for ever; only Yahoo's answer can repair it.
+HK_LOCAL = [{"ticker": "6", "exch_code": "HKS", "composite_figi": "BBG000BBXRX1"}]
+HK_YAHOO = [
+    {"symbol": "0006.HK", "exchange": "HKG", "quote_type": "EQUITY", "name": "Power Assets"}
+]
+
+
+def _hk(
+    *, dead: str | None, yahoo: bool = True
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    _, symbols, probes = symbology.plan_symbols(
+        "hk",
+        isin="HK0006000050",
+        country_iso2="HK",
+        mapping_entry=None,
+        yahoo_hits=HK_YAHOO if yahoo else [],
+        venues=VENUES,
+        source="openfigi",
+        asked_local=True,
+        asked_yahoo=yahoo,
+        dead_symbol=dead,
+        local_hits=HK_LOCAL,
+    )
+    return symbols, probes
+
+
+def test_a_symbol_the_provider_rejected_is_never_proposed_again() -> None:
+    """OpenFIGI's pick comes first, so re-proposing a dead symbol is not merely useless: it also
+    stops Yahoo's answer from ever being adopted. The control makes the two rules disagree — with
+    nothing known dead, the local line wins as it always has."""
+    symbols, _ = _hk(dead=None)
+    assert [s["symbol"] for s in symbols] == ["6.HK"], "the control: the local line comes first"
+
+    symbols, probes = _hk(dead="6.HK")
+    assert [s["symbol"] for s in symbols] == ["0006.HK"]
+    # THE OBSERVATIONS ARE UNTOUCHED: OpenFIGI did name `6.HK`, and that stays recorded.
+    assert [(p["provider"], p["outcome"], p["value"]) for p in probes] == [
+        ("openfigi", "hit", "6.HK"),
+        ("yahoo", "hit", "0006.HK"),
+    ]
+
+    # The same spelling in another case is the same symbol.
+    symbols, _ = _hk(dead="6.hk")
+    assert [s["symbol"] for s in symbols] == ["0006.HK"]
+
+    # No other candidate: nothing is proposed, and the dead symbol is not re-adopted.
+    symbols, _ = _hk(dead="6.HK", yahoo=False)
+    assert symbols == []
+
+
+class _Recording:
+    """A cursor that records what it was asked and answers with `rows`."""
+
+    def __init__(self, rows: list[tuple[str, ...]] | None = None) -> None:
+        self.rows = rows or []
+        self.calls: list[tuple[str, tuple[object, ...]]] = []
+
+    def cursor(self) -> _Recording:
+        return self
+
+    def __enter__(self) -> _Recording:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...]) -> None:
+        self.calls.append((" ".join(sql.split()), params))
+
+    def fetchall(self) -> list[tuple[str, ...]]:
+        return self.rows
+
+
+def test_the_repair_checks_the_death_in_its_own_statement() -> None:
+    """THE GUARD IS THE STATEMENT'S, NOT THE CALLER'S: a symbol that answered between the read and
+    the write must not be replaced, and only SQL evaluated against the row being updated can know.
+    The behaviour, and the mutations that break it, are proven against Postgres; this pins the
+    clauses so a tidy-up cannot drop one silently."""
+    flat = " ".join(symbology.REPAIR_DEAD_SYMBOLS.split())
+    for clause in (
+        "p.security_id = r.security_id",
+        "p.provider_code = %s",
+        "d.security_id = p.security_id",
+        "d.provider = p.provider_code",
+        "d.outcome = 'miss'",
+        "d.asked_with = p.symbol",
+        "returning p.security_id::text",
+    ):
+        assert clause in flat, clause
+
+    assert symbology.repair_dead_symbols(_Recording(), []) == []
+    cur = _Recording([("dead",)])
+    repaired = symbology.repair_dead_symbols(
+        cur,
+        [
+            {"security_id": "dead", "provider_code": "yfinance", "symbol": "0006.HK"},
+            {"security_id": "alive-again", "provider_code": "yfinance", "symbol": "X.HK"},
+        ],
+    )
+    # WHAT THE STATEMENT RETURNED, NOT WHAT WAS OFFERED: the second answered in between.
+    assert repaired == ["dead"]
+    assert cur.calls[0][1] == (["dead", "alive-again"], ["0006.HK", "X.HK"], "yfinance")
+
+
+def test_a_dead_held_symbol_needs_a_symbol_and_is_re_asked_once_per_death() -> None:
+    """The population gains the dead held symbol, tied to the security under test and to the
+    spelling it holds; the re-ask takes it only until OpenFIGI answers after the death, or a symbol
+    OpenFIGI names again would be re-asked every day for ever."""
+    flat = " ".join(symbology.SUBJECTS_NEEDING_SYMBOL.split())
+    assert "d.asked_with = p.symbol" in flat and "p.security_id = s.security_id" in flat, flat
+    cur = _Recording()
+    symbology.subjects_needing(cur, symbology.NEEDS_SYMBOL)
+    assert cur.calls[0][1] == (symbology.SYMBOL_PROVIDER, symbology.SYMBOL_PROVIDER)
+
+    flat = " ".join(symbology.DEAD_UNASKED.split())
+    for clause in (
+        "d.asked_with = p.symbol",
+        "d.outcome = 'miss'",
+        "q.observed_at > d.observed_at",
+        "s.security_type_code = 'equity'",
+        "i.kind_code = 'isin'",
+    ):
+        assert clause in flat, clause
+    cur = _Recording([("a",), ("b",)])
+    assert symbology.dead_unasked(cur) == {"a", "b"}
+    assert cur.calls[0][1] == (symbology.SYMBOL_PROVIDER, "openfigi")
+
+
+def test_dead_symbols_asks_only_about_the_securities_named() -> None:
+    assert symbology.dead_symbols(_Recording(), []) == {}
+    cur = _Recording([("b", "6.HK")])
+    assert symbology.dead_symbols(cur, ["b", "a", "b"]) == {"b": "6.HK"}
+    assert cur.calls[0][1] == (symbology.SYMBOL_PROVIDER, ["a", "b"])

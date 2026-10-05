@@ -72,6 +72,15 @@ class FakeCursor:
         if not text.startswith("select"):
             FakeCursor.writes.append((text, tuple(params)))
             self.rows = []
+            if text.startswith("update market.security_provider_symbol"):
+                # THE GUARD, AS POSTGRES WOULD APPLY IT: only a security whose held symbol is still
+                # the dead one is replaced, and only those ids come back.
+                self.rows = [
+                    (sid,)
+                    for sid in params[0]
+                    if sid in self._state.dead_symbols
+                    and self._state.dead_symbols[sid] == self._state.held_symbols.get(sid)
+                ]
             return
         if "from market.exchange" in text:
             self.rows = [("US", "US", "")]
@@ -94,6 +103,13 @@ class FakeCursor:
                 ("yfinance", symbol, holder)
                 for symbol, holder in self._state.symbol_holders.items()
                 if symbol in asked
+            ]
+        elif "q.observed_at > d.observed_at" in text:  # dead_unasked, before the generic probe
+            self.rows = [(sid,) for sid in self._state.dead_unasked]
+        elif "outcome = 'miss' and security_id::text = any(%s)" in text:  # dead_symbols
+            asked = set(params[1]) if params else set()
+            self.rows = [
+                (sid, sym) for sid, sym in self._state.dead_symbols.items() if sid in asked
             ]
         elif "from market.identifier_probe" in text:
             self.rows = [(sid,) for sid in self._state.stale_misses]
@@ -134,6 +150,10 @@ class _State:
     symbol_holders: dict[str, str] = field(default_factory=dict)
     #: security → the yfinance symbol it holds now (`current_symbols`).
     held_symbols: dict[str, str] = field(default_factory=dict)
+    #: security → the symbol the price lane last rejected alone (`dead_symbols`).
+    dead_symbols: dict[str, str] = field(default_factory=dict)
+    #: securities whose held symbol died after OpenFIGI last answered (`dead_unasked`).
+    dead_unasked: set[str] = field(default_factory=set)
     #: share class → the security already holding it in `security_identifier`.
     class_holders: dict[str, str] = field(default_factory=dict)
     #: (security, share class, holder) rows `one_security_per_share_class` reads.
@@ -564,6 +584,93 @@ def test_a_listing_held_by_another_security_is_withheld_and_counted_not_crashed_
     assert meta["symbols_ambiguous"].value == 0, meta
 
 
+def _ladder_over_both(tmp_path: Path) -> dg.ExecuteInProcessResult:
+    """The four symbology assets over SID..OTHER_SID: OpenFIGI names AAPL for SID and ACN for
+    OTHER_SID (the captured body's positions 0 and 1), and Yahoo has nothing for either."""
+    STATE.needing_ticker = {SID, OTHER_SID}
+    STATE.needing_symbol = {SID, OTHER_SID}
+    FakeCursor.writes.clear()
+    saved_map, saved_search = openfigi.mapping, yahoo_search.search
+    openfigi.mapping = lambda jobs, **kw: _doc(MAPPING_BODY)
+    yahoo_search.search = lambda isin, **kw: _doc(NOTHING_SEARCH)
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID, OTHER_SID])
+            return dg.materialize(
+                [
+                    symbology_raw.raw_figi_ticker,
+                    symbology_raw.raw_figi_local_symbol,
+                    symbology_raw.raw_yahoo_symbol,
+                    symbology_core.security_symbology,
+                ],
+                instance=instance,
+                resources={
+                    "postgres": FakePostgres(),
+                    "parquet_io": ParquetIOManager(str(tmp_path)),
+                },
+                tags={
+                    "dagster/asset_partition_range_start": SID,
+                    "dagster/asset_partition_range_end": OTHER_SID,
+                },
+            )
+    finally:
+        openfigi.mapping = saved_map
+        yahoo_search.search = saved_search
+        STATE.needing_ticker = {SID}
+        STATE.needing_symbol = {SID}
+        STATE.held_symbols = {}
+        STATE.dead_symbols = {}
+
+
+def _symbol_writes() -> tuple[list[Any], list[tuple[Any, ...]]]:
+    """The values inserted into `security_provider_symbol`, and the params of every repair."""
+    inserted = _written(FakeCursor.writes, "market.security_provider_symbol")
+    repairs = [
+        params
+        for w, params in FakeCursor.writes
+        if w.startswith("update market.security_provider_symbol")
+    ]
+    return inserted, repairs
+
+
+def test_a_dead_held_symbol_is_repaired_and_a_live_one_beside_it_is_not(tmp_path: Path) -> None:
+    """STAGE 3b'S WHOLE RULE, ON TWO SUBJECTS SO THE TWO HALVES DISAGREE. SID holds a symbol the
+    price lane rejected alone, so OpenFIGI's pick replaces it, through the guarded UPDATE and never
+    the DO NOTHING insert. OTHER_SID holds a LIVE symbol, so the pick is refused and counted — one
+    subject could not tell "repair the dead one" from "replace whatever is held"."""
+    STATE.held_symbols = {SID: "AAPL.OLD", OTHER_SID: "ACN.LIVE"}
+    STATE.dead_symbols = {SID: "AAPL.OLD"}
+    result = _ladder_over_both(tmp_path)
+
+    assert result.success
+    inserted, repairs = _symbol_writes()
+    assert repairs == [([SID], ["AAPL"], "yfinance")], repairs
+    assert "AAPL" not in inserted and "ACN" not in inserted, inserted
+    meta = result.asset_materializations_for_node("security_symbology")[0].metadata
+    assert meta["symbols_repairable"].value == 1, meta
+    assert meta["symbols_repaired"].value == 1, meta
+    assert meta["symbols_already_held"].value == 1, meta
+
+
+def test_the_ladder_never_proposes_the_symbol_the_provider_rejected(tmp_path: Path) -> None:
+    """THE PICK IS NAMED AGAIN AND NOT TAKEN. SID holds AAPL and the price lane rejected AAPL, so
+    OpenFIGI's pick is the dead symbol itself: nothing is inserted, nothing repaired, and OpenFIGI's
+    answer is still observed — it did say AAPL. Without the dead symbol reaching `plan_symbols`,
+    AAPL is proposed again and restated as if it worked."""
+    STATE.held_symbols = {SID: "AAPL"}
+    STATE.dead_symbols = {SID: "AAPL"}
+    result = _ladder_over_both(tmp_path)
+
+    assert result.success
+    inserted, repairs = _symbol_writes()
+    assert "AAPL" not in inserted, f"re-proposed the dead symbol: {inserted}"
+    assert "ACN" in inserted, f"the control subject was not adopted: {inserted}"
+    assert repairs == [], repairs
+    assert ("symbol", "openfigi", "hit") in _probes(FakeCursor.writes), _probes(FakeCursor.writes)
+    meta = result.asset_materializations_for_node("security_symbology")[0].metadata
+    assert meta["symbols_repaired"].value == 0, meta
+
+
 def test_the_yahoo_rung_deliberately_carries_no_automation_condition() -> None:
     """ITS ABSENCE IS A DECISION, AND AN ABSENCE CANNOT BE READ FROM THE CODE AS ONE — adding the
     condition back is a one-line change that would look like completing an oversight.
@@ -772,6 +879,42 @@ def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
 
     assert again.total_requested == 1, (
         f"expected only the stale miss to be re-asked, got {again.total_requested}"
+    )
+
+
+def test_the_re_ask_takes_a_symbol_that_died_since_openfigi_answered(tmp_path: Path) -> None:
+    """A DEAD HELD SYMBOL IS RE-ASKED ONCE PER DEATH, at the same daily tick as a stale miss — and
+    nothing else is. The population behind it is `dead_unasked`; this is the wiring."""
+    STATE.dead_unasked = {OTHER_SID}
+    saved_connect = Postgres.connect
+    Postgres.connect = FakePostgres.connect  # type: ignore[method-assign,assignment]
+    defs = dg.Definitions(
+        assets=[symbology_raw.raw_figi_ticker],
+        resources={
+            "postgres": FakePostgres(),
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+        },
+    )
+    before = datetime(2026, 9, 20, 2, 0, tzinfo=UTC)
+    after = datetime(2026, 9, 21, 4, 0, tzinfo=UTC)
+    try:
+        with dg.instance_for_test() as instance:
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID, OTHER_SID])
+            cold = dg.evaluate_automation_conditions(
+                defs=defs, instance=instance, evaluation_time=before
+            )
+            _materialise_range(
+                tmp_path, instance, [SID, OTHER_SID], asset=symbology_raw.raw_figi_ticker
+            )
+            again = dg.evaluate_automation_conditions(
+                defs=defs, instance=instance, cursor=cold.cursor, evaluation_time=after
+            )
+    finally:
+        Postgres.connect = saved_connect  # type: ignore[method-assign]
+        STATE.dead_unasked = set()
+
+    assert again.total_requested == 1, (
+        f"expected only the dead symbol to be re-asked, got {again.total_requested}"
     )
 
 

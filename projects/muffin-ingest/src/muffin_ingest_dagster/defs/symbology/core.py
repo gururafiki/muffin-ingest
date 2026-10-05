@@ -107,6 +107,9 @@ def security_symbology(
         # one whose local symbol is being adopted now.
         attributes = sym.attributes_for(conn, list(context.partition_keys))
         venues = _venues(conn)
+        # THE SYMBOL THE PRICE LANE LAST REJECTED ALONE, per subject: never re-proposed, and the
+        # only held symbol a pick may replace (Stage 3b).
+        dead = sym.dead_symbols(conn, list(context.partition_keys))
 
     for sid in context.partition_keys:
         attr = attributes.get(sid)
@@ -147,6 +150,7 @@ def security_symbology(
             source="openfigi",
             asked_local=sym.NEEDS_SYMBOL in local_asked,
             asked_yahoo=bool(yahoo.get(sid)),
+            dead_symbol=dead.get(sid),
             # THE UNFILTERED RUNG IS ON THE LADDER, not merged in beside it. Its pick used to be
             # appended here with its own `hit` probe, and `plan_symbols` — which could not see it —
             # appended a `miss` under the same key after it; the writer keeps the last row per key,
@@ -209,17 +213,23 @@ def security_symbology(
                     update=None,
                 )
                 written["identifiers"], collapsed = result.written, collapsed + result.collapsed
-            # A SYMBOL ALREADY HELD IS NEVER REPLACED HERE — see `unreplaced_symbols`. Filtered
-            # first, so a refused pick cannot also be counted as a listing held elsewhere.
-            symbol_rows, replacing = sym.unreplaced_symbols(
+            # A LIVE SYMBOL IS NEVER REPLACED; A DEAD ONE MAY BE — see `repairable_symbols`.
+            # Split first, so a refused pick cannot also be counted as a listing held elsewhere.
+            split = sym.repairable_symbols(
                 symbol_rows,
                 sym.current_symbols(conn, [str(r["security_id"]) for r in symbol_rows]),
+                dead,
             )
-            for sid, held, proposed in replacing[:20]:
+            for sid, held, proposed in split.refused[:20]:
                 context.log.info(f"{sid} holds {held}; kept it over the pick {proposed}")
-            # ONE LISTING, ONE SECURITY — the second unique key this upsert does not name. Decided
-            # before the write, because a violation fails the whole batch (see `adoptable_symbols`).
-            adoption = sym.adoptable_symbols(symbol_rows, sym.symbol_holders(conn, symbol_rows))
+            # ONE LISTING, ONE SECURITY — the second unique key neither write names. Decided before
+            # the write, because a violation fails the whole batch (see `adoptable_symbols`). A
+            # repair goes through it too: replacing a dead symbol with another security's listing
+            # is the same duplicate.
+            adoption = sym.adoptable_symbols(
+                [*split.kept, *split.repairs],
+                sym.symbol_holders(conn, [*split.kept, *split.repairs]),
+            )
             for sid, symbol, holder in adoption.held_elsewhere[:20]:
                 context.log.warning(
                     f"symbol {symbol} resolved for {sid} is already held by {holder}; "
@@ -227,14 +237,25 @@ def security_symbology(
                 )
             for symbol, sids in list(adoption.ambiguous.items())[:20]:
                 context.log.warning(f"symbol {symbol} claimed by {len(sids)} securities: {sids}")
-            if adoption.kept:
+            repairing = {str(r["security_id"]) for r in split.repairs}
+            inserts = [r for r in adoption.kept if str(r["security_id"]) not in repairing]
+            repairs = [r for r in adoption.kept if str(r["security_id"]) in repairing]
+            if inserts:
                 result = upsert(
                     cur,
                     "market.security_provider_symbol",
-                    adoption.kept,
+                    inserts,
                     conflict=["security_id", "provider_code"],
                 )
                 written["symbols"], collapsed = result.written, collapsed + result.collapsed
+            # THE REPAIR, GUARDED IN ITS OWN STATEMENT: it replaces only a symbol that is still the
+            # one the price lane rejected, and the trigger on it clears the symbol-keyed caches.
+            repaired = sym.repair_dead_symbols(cur, repairs)
+            held_by = {str(r["security_id"]): str(r["symbol"]) for r in repairs}
+            for sid in repaired[:20]:
+                context.log.info(
+                    f"{sid}: replaced its dead symbol {dead.get(sid)} with {held_by[sid]}"
+                )
             if probe_rows:
                 result = upsert(
                     cur,
@@ -270,10 +291,15 @@ def security_symbology(
             # securities resolving to one listing is a duplicate for identity consolidation to find.
             "symbols_held_elsewhere": len(adoption.held_elsewhere),
             "symbols_ambiguous": len(adoption.ambiguous),
-            # A pick that disagreed with a symbol the security already holds. Not a defect: the
-            # held one may have been verified against the provider, and replacing it is Stage 3's
-            # rule with its own evidence. A large number says the pick is often worse.
-            "symbols_already_held": len(replacing),
+            # A pick that disagreed with a LIVE symbol the security already holds. Not a defect: the
+            # held one may have been verified against the provider. A large number says the pick
+            # is often worse.
+            "symbols_already_held": len(split.refused),
+            # Dead symbols replaced, counted from what the guarded UPDATE returned, so a symbol that
+            # answered between the read and the write is not counted. `symbols_repairable` is what
+            # was offered; the difference is a death the write no longer found.
+            "symbols_repairable": len(repairs),
+            "symbols_repaired": len(repaired),
             "share_classes_offered": len(share_rows),
             "share_classes_held_elsewhere": len(share_adoption.held_elsewhere),
             "share_classes_ambiguous": len(share_adoption.ambiguous),
