@@ -226,3 +226,79 @@ def test_chunking_does_not_move_the_dedupe_and_a_repeated_key_is_still_collapsed
         f"{sent} rows sent for {result.written} written — a key deduped per chunk rather than "
         f"across the whole set is sent once per chunk it appears in"
     )
+
+
+class CountingCursor(FakeCursor):
+    """A cursor that reports a rowcount per statement, as psycopg does."""
+
+    def __init__(self, counts: list[int]) -> None:
+        super().__init__()
+        self._counts = list(counts)
+        self.rowcount = -1
+
+    def execute(self, sql: str, params: Any = ()) -> None:
+        super().execute(sql, params)
+        self.rowcount = self._counts.pop(0)
+
+
+def test_an_update_skips_a_row_whose_values_did_not_change() -> None:
+    """`do update set c = excluded.c` writes a new row version even when nothing changed.
+
+    The 2026-10-06 night upserted 11.6 M price bars for ~170 k changes, and `price_bar` had taken
+    202.6 M updates against 59.5 M inserts in 26 days. The guard compares the SETTERS only (the
+    conflict key is equal by construction), and with `is distinct from`, because `<>` against a
+    NULL is NULL, so a value that became null or stopped being null would never be written.
+    """
+    cur = FakeCursor()
+    rows = [{"security_id": "s1", "trade_date": "2026-10-05", "close": 1, "currency_code": None}]
+    upsert(
+        cur,
+        "market.price_bar",
+        rows,
+        conflict=["security_id", "trade_date"],
+        update=["close", "currency_code"],
+    )
+    sql = cur.calls[0][0]
+    assert sql.startswith("insert into market.price_bar as stored_row ("), sql
+    assert sql.endswith(
+        "do update set close = excluded.close, currency_code = excluded.currency_code "
+        "where (stored_row.close, stored_row.currency_code) is distinct from "
+        "(excluded.close, excluded.currency_code)"
+    ), sql
+    assert "stored_row.security_id" not in sql, "the conflict key is equal by construction"
+
+
+def test_do_nothing_carries_no_guard() -> None:
+    """DO NOTHING has no update to guard; a `where` there is a syntax error."""
+    cur = FakeCursor()
+    upsert(cur, "market.thing", [{"k": 1, "v": "a"}], conflict=["k"])
+    assert cur.calls[0][0].endswith("on conflict (k) do nothing")
+
+
+def test_changed_is_what_the_driver_says_was_inserted_or_updated() -> None:
+    """`written` counts rows SENT; `changed` counts rows the database wrote, summed per chunk.
+
+    The gap between the two is the no-op work the guard saves, and on a night that re-publishes
+    whole files it is most of the rows.
+    """
+    rows = [{"security_id": f"s{i}", "trade_date": "2026-10-05", "close": i} for i in range(25_000)]
+    cur = CountingCursor([7, 3])
+    result = upsert(
+        cur, "market.price_bar", rows, conflict=["security_id", "trade_date"], update=["close"]
+    )
+    assert len(cur.calls) == 2, "25,000 rows of 3 columns is two statements"
+    assert (result.written, result.changed) == (25_000, 10)
+
+
+def test_a_cursor_that_cannot_count_leaves_changed_unknown() -> None:
+    """A partial sum would read as a real one, so one unknown chunk makes the count unknown."""
+    rows = [{"security_id": f"s{i}", "trade_date": "2026-10-05", "close": i} for i in range(25_000)]
+    result = upsert(
+        CountingCursor([7, -1]),
+        "market.price_bar",
+        rows,
+        conflict=["security_id", "trade_date"],
+        update=["close"],
+    )
+    assert result.changed is None
+    assert upsert(FakeCursor(), "market.thing", [{"k": 1}], conflict=["k"]).changed is None
