@@ -12,17 +12,21 @@ import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
 
 import dagster as dg
+from muffin_ingest.facets import symbology as sym
 from muffin_ingest.providers import openfigi, yahoo_search
 from muffin_ingest.providers.documents import Document
 
 from muffin_ingest_dagster.defs.symbology import core as symbology_core
 from muffin_ingest_dagster.defs.symbology import raw as symbology_raw
-from muffin_ingest_dagster.defs.symbology.partitions import SYMBOLOGY_PARTITIONS
+from muffin_ingest_dagster.defs.symbology.partitions import (
+    REASK_SPREAD_DAYS,
+    SYMBOLOGY_PARTITIONS,
+)
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import FIXTURES
@@ -829,13 +833,37 @@ def test_the_sensor_only_adds_and_never_touches_the_price_grid() -> None:
     )
 
 
-def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
+def _own_day(subject: str, on_or_after: date) -> date:
+    """The first date from `on_or_after` that is `subject`'s day of the re-ask cycle."""
+    for offset in range(REASK_SPREAD_DAYS):
+        day = on_or_after + timedelta(days=offset)
+        if sym.due_on([subject], day, cycle_days=REASK_SPREAD_DAYS):
+            return day
+    raise AssertionError(f"{subject} has no day in a {REASK_SPREAD_DAYS}-day cycle")
+
+
+def _morning(day: date) -> datetime:
+    """An hour after the re-ask's 03:00 UTC cron tick, so the tick has passed."""
+    return datetime.combine(day, time(4), UTC)
+
+
+def test_the_re_ask_requests_a_stale_miss_on_its_own_day_and_nothing_else(
     tmp_path: Path,
 ) -> None:
-    """A MISS IS AN ANSWER WITH A SHELF LIFE. `missing()` covers a subject never asked; this covers
-    one asked 31 days ago that the provider had nothing for — and must cover NOTHING else, or a
-    rate-limited provider is re-asked about answers already written down."""
-    STATE.stale_misses = {OTHER_SID}
+    """A MISS IS AN ANSWER WITH A SHELF LIFE, AND IT IS RE-ASKED ON ITS OWN DAY. `missing()` covers
+    a subject never asked; this covers one asked 31 days ago that the provider had nothing for. It
+    must cover nothing else, or a rate-limited provider is re-asked about answers already written
+    down. Since 2026-10-06 it also re-asks each subject only on its own day of the cycle, because
+    misses recorded together turn stale together and scattered subjects are one run each.
+
+    TWO STALE SUBJECTS ON DIFFERENT DAYS, so the spread has something to split: each morning must
+    request exactly its own subject. Unspread, both are requested on the first morning."""
+    STATE.stale_misses = {OTHER_SID, THIRD_SID}
+    first = _own_day(OTHER_SID, date(2026, 9, 21))
+    second = _own_day(THIRD_SID, first + timedelta(days=1))
+    assert first != second
+    assert not sym.due_on([THIRD_SID], first, cycle_days=REASK_SPREAD_DAYS)
+    assert not sym.due_on([OTHER_SID], second, cycle_days=REASK_SPREAD_DAYS)
     # AN AUTOMATION CONDITION GETS NO RESOURCES, so it opens its own connection through the same
     # `Postgres` class every asset uses — which is what makes it patchable here without reaching
     # into the conditions module's re-exported name (mypy refuses that, and rightly: a re-exported
@@ -846,8 +874,9 @@ def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
     # `raw_yahoo_symbol` deliberately carries no condition — it spends the budget the nightly price
     # sweep lives on, so it stays an operator's backfill. Pointed at the Yahoo rung this asserts
     # zero for a reason unrelated to the rule.
+    rung = symbology_raw.raw_figi_ticker
     defs = dg.Definitions(
-        assets=[symbology_raw.raw_figi_ticker],
+        assets=[rung],
         resources={
             "postgres": FakePostgres(),
             "parquet_io": ParquetIOManager(str(tmp_path)),
@@ -855,36 +884,47 @@ def test_the_re_ask_requests_a_stale_miss_and_leaves_everything_else_alone(
     )
     # THE CLOCK IS PART OF THE FIXTURE. The re-ask sits behind a daily cron gate, so two
     # evaluations microseconds apart would both find no tick has passed and the test would assert
-    # zero re-asks for a reason unrelated to the rule. The second reading is the next morning.
+    # zero re-asks for a reason unrelated to the rule. Each later reading is a later morning.
     before = datetime(2026, 9, 20, 2, 0, tzinfo=UTC)
-    after = datetime(2026, 9, 21, 4, 0, tzinfo=UTC)
+    keys = [SID, OTHER_SID, THIRD_SID]
     try:
         with dg.instance_for_test() as instance:
-            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID, OTHER_SID])
+            instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, keys)
             cold = dg.evaluate_automation_conditions(
                 defs=defs, instance=instance, evaluation_time=before
             )
-            # `missing()` covers both on a cold grid. Correct, and not what this tests.
-            assert cold.total_requested == 2, cold.total_requested
+            # `missing()` covers all three on a cold grid. Correct, and not what this tests.
+            assert cold.total_requested == 3, cold.total_requested
 
-            _materialise_range(
-                tmp_path, instance, [SID, OTHER_SID], asset=symbology_raw.raw_figi_ticker
+            _materialise_range(tmp_path, instance, keys, asset=rung)
+            on_first = dg.evaluate_automation_conditions(
+                defs=defs, instance=instance, cursor=cold.cursor, evaluation_time=_morning(first)
             )
-            again = dg.evaluate_automation_conditions(
-                defs=defs, instance=instance, cursor=cold.cursor, evaluation_time=after
+            on_second = dg.evaluate_automation_conditions(
+                defs=defs,
+                instance=instance,
+                cursor=on_first.cursor,
+                evaluation_time=_morning(second),
             )
     finally:
         Postgres.connect = saved_connect  # type: ignore[method-assign]
         STATE.stale_misses = set()
 
-    assert again.total_requested == 1, (
-        f"expected only the stale miss to be re-asked, got {again.total_requested}"
+    assert on_first.get_requested_partitions(rung.key) == {OTHER_SID}, (
+        f"{first}: {on_first.get_requested_partitions(rung.key)}"
+    )
+    assert on_second.get_requested_partitions(rung.key) == {THIRD_SID}, (
+        f"{second}: {on_second.get_requested_partitions(rung.key)}"
     )
 
 
 def test_the_re_ask_takes_a_symbol_that_died_since_openfigi_answered(tmp_path: Path) -> None:
     """A DEAD HELD SYMBOL IS RE-ASKED ONCE PER DEATH, at the same daily tick as a stale miss — and
-    nothing else is. The population behind it is `dead_unasked`; this is the wiring."""
+    nothing else is. The population behind it is `dead_unasked`; this is the wiring.
+
+    AND IT IS NOT SPREAD: the morning below is deliberately NOT the subject's day of the re-ask
+    cycle, so a condition that spread the dead arm as well would request nothing here. A dead
+    symbol costs a price bar every day its repair waits."""
     STATE.dead_unasked = {OTHER_SID}
     saved_connect = Postgres.connect
     Postgres.connect = FakePostgres.connect  # type: ignore[method-assign,assignment]
@@ -897,6 +937,7 @@ def test_the_re_ask_takes_a_symbol_that_died_since_openfigi_answered(tmp_path: P
     )
     before = datetime(2026, 9, 20, 2, 0, tzinfo=UTC)
     after = datetime(2026, 9, 21, 4, 0, tzinfo=UTC)
+    assert not sym.due_on([OTHER_SID], after.date(), cycle_days=REASK_SPREAD_DAYS)
     try:
         with dg.instance_for_test() as instance:
             instance.add_dynamic_partitions(SYMBOLOGY_PARTITIONS, [SID, OTHER_SID])
