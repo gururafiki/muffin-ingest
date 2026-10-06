@@ -10,6 +10,11 @@ ONLY (`4GNB.F`), which is why `pick_home_listing` refuses to take the first hit.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import uuid
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -463,6 +468,62 @@ def test_a_stale_miss_is_re_asked_only_while_its_evidence_is_still_missing() -> 
             symbology.SHARE_CLASS_KIND,
         )
     ]
+
+
+#: A WAVE THE SIZE OF THE ONE DUE ON 2026-10-26, named by uuid5 so it is the same set on every
+#: machine. The spread's whole claim is about how such a set falls across days.
+WAVE = [str(uuid.uuid5(uuid.NAMESPACE_URL, f"muffin/{i}")) for i in range(5320)]
+
+
+def test_a_wave_of_misses_is_spread_across_the_cycle() -> None:
+    """THE WAVE THIS EXISTS FOR. The 5,320 misses one drain recorded all turn stale on 2026-10-26,
+    and scattered subjects are one run each, so unspread that morning is ~46 hours of runs on the
+    `sql` pool. Spread, every subject still falls on some day and no day carries much more than
+    its thirtieth (145 to 199 on this fixture, against a mean of 177)."""
+    per_day = [
+        len(symbology.due_on(WAVE, date(2026, 10, 26) + timedelta(days=d), cycle_days=30))
+        for d in range(30)
+    ]
+    assert sum(per_day) == len(WAVE), per_day
+    assert max(per_day) < 1.25 * len(WAVE) / 30, per_day
+
+
+def test_a_subject_is_due_once_a_cycle_even_across_a_month_end() -> None:
+    """ONCE PER CYCLE, NEVER TWICE AND NEVER SKIPPED. The window crosses 31 October: a rule keyed
+    on the day of the month gives the 31st and the 1st the same position and no day the 14th's, so
+    some subjects would be asked twice and some never."""
+    start = date(2026, 10, 15)
+    seen: dict[str, int] = {}
+    for offset in range(30):
+        for subject in symbology.due_on(WAVE, start + timedelta(days=offset), cycle_days=30):
+            seen[subject] = seen.get(subject, 0) + 1
+    assert len(seen) == len(WAVE), f"{len(WAVE) - len(seen)} subjects were never due"
+    assert set(seen.values()) == {1}, "a subject was due more than once in one cycle"
+
+
+def test_a_subject_s_day_is_the_same_in_every_process() -> None:
+    """NOT PYTHON'S `hash()`, WHICH IS SALTED PER PROCESS. The condition runs in the code-location
+    server, which every roll replaces, so a salted day would move every subject after each roll —
+    and one whose day kept moving ahead of the calendar would wait indefinitely. Two interpreters
+    with different hash seeds must put each subject on the day this one does."""
+    sample = WAVE[:50]
+    here = [symbology.reask_day(s, cycle_days=30) for s in sample]
+    code = (
+        "import json, sys\n"
+        "from muffin_ingest.facets import symbology\n"
+        "ids = json.loads(sys.stdin.read())\n"
+        "print(json.dumps([symbology.reask_day(s, cycle_days=30) for s in ids]))\n"
+    )
+    for seed in ("1", "2"):
+        done = subprocess.run(
+            [sys.executable, "-c", code],
+            input=json.dumps(sample),
+            capture_output=True,
+            text=True,
+            check=True,
+            env={**os.environ, "PYTHONHASHSEED": seed},
+        )
+        assert json.loads(done.stdout) == here, f"PYTHONHASHSEED={seed} moved subjects"
 
 
 def test_one_listing_is_never_given_to_two_securities() -> None:

@@ -42,6 +42,13 @@ SYMBOLOGY_PER_RUN = 200
 REASK_AFTER_DAYS = 30
 
 
+#: Over how many days a stale miss is spread: each subject is re-asked on its own day of this
+#: cycle (`facets.symbology.due_on`), so misses recorded together are not re-asked together.
+#: Independent of `REASK_AFTER_DAYS` on purpose — that says how old an answer may get, this says
+#: how thinly a wave is spread — and set equal to it, so a subject waits at most 59 days.
+REASK_SPREAD_DAYS = 30
+
+
 #: When the re-ask is even CONSIDERED. The automation daemon ticks every 30 seconds; without this
 #: the condition would query `identifier_probe` ~2,880 times a day per rung to answer a question
 #: whose input moves once a day. Gating on a cron tick means the condition is handed an empty

@@ -264,7 +264,7 @@
       "tags": {}
     },
     "raw_figi_local_symbol": {
-      "automation_condition": "never asked, a stale miss, or a dead symbol (aef8a31c86e7)",
+      "automation_condition": "never asked, a stale miss, or a dead symbol (842008275634)",
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"
@@ -290,7 +290,7 @@
       "tags": {}
     },
     "raw_figi_ticker": {
-      "automation_condition": "never asked, a stale miss, or a dead symbol (aef8a31c86e7)",
+      "automation_condition": "never asked, a stale miss, or a dead symbol (842008275634)",
       "backfill_policy": {
         "max_partitions_per_run": 200,
         "type": "MULTI_RUN"

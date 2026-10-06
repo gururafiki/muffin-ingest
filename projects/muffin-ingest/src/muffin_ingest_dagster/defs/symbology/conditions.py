@@ -8,19 +8,30 @@ stored whatever came back, including nothing", so:
   measured 2026-09-20 on 1.13.22, `on_missing()` requested 0 of 2 partitions that were already in
   the grid when the first tick ran, and 2 of 2 added between ticks. A rule that silently does
   nothing for everything already there is the wrong rule for a lane being switched on.
-* `ReAskAfter` — we asked, the provider had nothing, and that was long enough ago to ask again. OR
-  the symbol a security holds was rejected by the price lane after OpenFIGI last answered for it
-  (Stage 3b): the death is the evidence the held symbol is wrong, and the ladder is what can name
-  another. The class keeps its name for the reason below; only what it selects grew.
+* `ReAskAfter` — we asked, the provider had nothing, that was long enough ago to ask again, and
+  today is this subject's own day of the re-ask cycle. OR the symbol a security holds was rejected
+  by the price lane after OpenFIGI last answered for it (Stage 3b): the death is the evidence the
+  held symbol is wrong, and the ladder is what can name another. The class keeps its name for the
+  reason below; only what it selects changed.
+
+THE STALE ARM IS SPREAD AND THE DEAD ARM IS NOT. A stale miss is spread over `REASK_SPREAD_DAYS`
+because misses recorded by one drain all turn stale on the same morning, and scattered subjects are
+one run each (`facets.symbology.due_on` has the measurement). A dead symbol is not spread: deaths
+already arrive at the price sweep's pace (each security is priced about once in five nights), and a
+dead symbol costs a price bar every day its repair waits, which a slot up to 29 days away would
+multiply for nothing.
 
 `~in_progress()` stops a partition being requested twice while its run is live.
 
-WHY A CUSTOM CONDITION RATHER THAN A SENSOR EMITTING RUN REQUESTS. A sensor has resources and this
-does not, which would have made it the tidier place — but a sensor can only request a partition or
-a contiguous RANGE of them, and a stale-miss set is scattered through a sorted key list, so it
-becomes one run per subject. That turns OpenFIGI's ten-jobs-per-request batching into one job per
-request: a tenfold increase in provider spend to schedule the same work. The condition hands the
-daemon a subset instead, and `BackfillPolicy.multi_run(SYMBOLOGY_PER_RUN)` re-batches it.
+WHY A CUSTOM CONDITION RATHER THAN A SENSOR EMITTING RUN REQUESTS. A sensor can request only a
+partition or a contiguous RANGE of them, and a stale-miss set is scattered through the grid, so it
+would be one run per subject. This paragraph used to say the condition avoids that because
+`BackfillPolicy.multi_run(SYMBOLOGY_PER_RUN)` re-batches the subset it hands the daemon. IT DOES
+NOT, measured 2026-10-06: the daemon splits a requested subset into contiguous key ranges
+(`_build_run_requests_with_backfill_policy` calls `get_partition_key_ranges`), so the first
+re-ask's 255 scattered subjects became 254 runs either way. What bounds that cost is the spread
+above. The condition stays because a sensor would be no better, and it shares the rungs'
+`missing()` and `in_progress()` gates.
 
 DRIVEN BEFORE IT WAS WRITTEN, because subclassing this API is not documented as supported: a
 custom `AutomationCondition` was built against 1.13.22, attached to a dynamically-partitioned
@@ -30,23 +41,30 @@ condition's identity is its CLASS NAME (`get_node_unique_id` hashes `self.name`)
 class is a state change like any other rename.
 """
 
+from datetime import UTC
 from typing import Any
 
 import dagster as dg
 from muffin_ingest.facets import symbology as sym
 
-from muffin_ingest_dagster.defs.symbology.partitions import REASK_AFTER_DAYS, REASK_CRON
+from muffin_ingest_dagster.defs.symbology.partitions import (
+    REASK_AFTER_DAYS,
+    REASK_CRON,
+    REASK_SPREAD_DAYS,
+)
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
 class ReAskAfter(dg.AutomationCondition):  # type: ignore[type-arg]
-    """Request the subjects whose recorded answer was `miss` and is older than the window, and the
-    subjects holding a symbol the price lane has rejected since OpenFIGI last answered."""
+    """Request the subjects whose recorded answer was `miss`, is older than the window and is due
+    today, and the subjects holding a symbol the price lane has rejected since OpenFIGI last
+    answered."""
 
     @property
     def description(self) -> str:
         return (
-            f"a probe said miss more than {REASK_AFTER_DAYS} days ago, "
+            f"a probe said miss more than {REASK_AFTER_DAYS} days ago and today is the subject's "
+            f"day of a {REASK_SPREAD_DAYS}-day cycle, "
             "or the held symbol died since OpenFIGI last answered"
         )
 
@@ -57,8 +75,13 @@ class ReAskAfter(dg.AutomationCondition):  # type: ignore[type-arg]
         # only over what the earlier ones left true — so this branch is the common one.
         if candidates.is_empty:
             return dg.AutomationResult(context, true_subset=context.get_empty_subset())
+        # THE TICK'S DATE, NOT THE MACHINE'S. Every evaluation on one tick shares this instant, and
+        # a test can set it; `date.today()` would be the container's local date and untestable.
+        at = context.evaluation_time
+        today = (at.replace(tzinfo=UTC) if at.tzinfo is None else at.astimezone(UTC)).date()
         with Postgres().connect() as conn:
-            due = sym.stale_misses(conn, older_than_days=REASK_AFTER_DAYS) | sym.dead_unasked(conn)
+            stale = sym.stale_misses(conn, older_than_days=REASK_AFTER_DAYS)
+            due = sym.due_on(stale, today, cycle_days=REASK_SPREAD_DAYS) | sym.dead_unasked(conn)
         return dg.AutomationResult(
             context, true_subset=candidates.compute_intersection_with_partition_keys(due)
         )

@@ -18,7 +18,8 @@ provider say about MY isin" per partition.
 repeated for the same reason: a hit and a miss are the same run's observations and must land
 together, and neither is a permission boundary.
 
-RE-ASK IS THE SENSOR'S JOB: a materialised MISS partition is deleted once its probe is
-`REASK_AFTER` days, so the next sensor tick re-seeds it. This is the grid-is-the-queue behaviour
-proven the design way — day 31 comes back — without a custom `AutomationCondition`.
+RE-ASK IS AN AUTOMATION CONDITION, `ReAskAfter` in `conditions.py`: a materialised partition is
+requested again once its miss is `REASK_AFTER_DAYS` old and the day is the subject's own day of a
+`REASK_SPREAD_DAYS` cycle, or once its held symbol dies. It used to DELETE the partition so the
+sensor re-seeded it, and that deleted from the price lane's grid as well (2026-09-20).
 """

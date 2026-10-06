@@ -21,9 +21,11 @@ materialising the partition, never as a miss.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from muffin_ingest.facets.openfigi import OpenFigiUnreadable
@@ -849,6 +851,37 @@ def stale_misses(conn: Any, *, older_than_days: int) -> set[str]:
             ),
         )
         return {row[0] for row in cur.fetchall()}
+
+
+def reask_day(security_id: str, *, cycle_days: int) -> int:
+    """The day of a `cycle_days`-day cycle on which this subject may be re-asked.
+
+    A HASH OF THE ID, NEVER PYTHON'S `hash()`. `hash()` of a string is salted per process
+    (PYTHONHASHSEED), and this runs in the code-location server, which every roll replaces — so a
+    subject would land on a different day after each roll, and one whose days kept moving ahead of
+    the calendar could wait far longer than a cycle. SHA-256 gives the same day in every process,
+    on every machine and in every Python version, which is what lets a test say which day it is.
+    """
+    digest = hashlib.sha256(security_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big") % cycle_days
+
+
+def due_on(subjects: Iterable[str], day: date, *, cycle_days: int) -> set[str]:
+    """The subjects whose re-ask day is `day`: each on one day of every `cycle_days`.
+
+    A BULK EVENT MAKES A WAVE 30 DAYS LATER, AND A WAVE IS ONE RUN PER SUBJECT. Every miss recorded
+    by one drain turns stale on the same morning — measured 2026-10-06, 5,320 of them on
+    2026-10-26 — and Dagster puts only CONTIGUOUS partition keys in one run, while a stale set is
+    scattered through the grid: the 255 subjects of the first re-ask became 254 runs and held the
+    `sql` pool for 2h13m. Spread by subject, a wave of 5,320 is ~177 a day and the next bulk event
+    makes none. Each subject is still re-asked within `older_than_days + cycle_days - 1` days of
+    its miss.
+
+    The day is the calendar date's ordinal, never the day of the month: a 31-day month would give
+    two days the same position and skip another.
+    """
+    today = day.toordinal() % cycle_days
+    return {s for s in subjects if reask_day(s, cycle_days=cycle_days) == today}
 
 
 #: THE RUNG THAT IS RE-ASKED ABOUT A DEAD SYMBOL, recorded under this provider by `plan_symbols`.
