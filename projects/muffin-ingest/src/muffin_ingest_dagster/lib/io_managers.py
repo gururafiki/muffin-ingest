@@ -452,6 +452,10 @@ class PostgresIOManager(dg.ConfigurableIOManager):
                 # security is how this was first noticed.
                 "collapsed": result.collapsed,
                 "scopes_retracted": result.retracted,
+                # ROWS THE DATABASE ACTUALLY CHANGED, beside `rows` SENT. An identical row is
+                # skipped, so a night that re-publishes whole files reads as a small `changed`
+                # against a large `rows`, which is the point. -1 when the driver could not say.
+                "changed": -1 if result.changed is None else result.changed,
                 "table": str(table),
             }
         )
@@ -474,6 +478,7 @@ def _replace_scopes(
     nothing is not the same as saying "no periods".
     """
     written = collapsed = retracted = 0
+    changed: int | None = 0
     by_scope: dict[tuple[Any, ...], list[Mapping[str, Any]]] = {}
     for row in rows:
         by_scope.setdefault(tuple(row.get(c) for c in scope_columns), []).append(row)
@@ -489,7 +494,8 @@ def _replace_scopes(
         written += result.written
         collapsed += result.collapsed
         retracted += result.retracted
-    return WriteResult(written=written, collapsed=collapsed, retracted=retracted)
+        changed = None if changed is None or result.changed is None else changed + result.changed
+    return WriteResult(written=written, collapsed=collapsed, retracted=retracted, changed=changed)
 
 
 def _updatable(rows: Rows, conflict: Sequence[str]) -> list[str]:

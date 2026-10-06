@@ -38,6 +38,13 @@ handler while three other handlers negative-cached thousands of securities witho
      `not null` on the column is the enforcement that cannot be forgotten and cannot be wrong about
      which tables mean it. The serving layer withholds a label it cannot justify; that is where the
      Alibaba fix actually lives.
+
+  5. AN UPDATE THAT CHANGES NOTHING STILL WRITES. `do update set c = excluded.c` writes a new row
+     version, its index entries and the WAL for both, even when every value is identical. Stage 2
+     of the price lane publishes each partition from its whole raw file, so the 2026-10-06 night
+     upserted 11.6 M bars for ~170 k changes, and `price_bar` had taken 202.6 M updates (8.0 M of
+     them HOT) against 59.5 M inserts in 26 days. So `upsert` updates only a row whose values
+     differ, and reports `changed` beside `written`, because `written` counts rows SENT.
 """
 
 from __future__ import annotations
@@ -92,6 +99,10 @@ class DbConn(Protocol):
 #: reaches string interpolation is worth failing loudly rather than sending to the server.
 _IDENT = re.compile(r"^[a-z_][a-z0-9_]*$")
 
+#: The alias an upsert gives its target, so the update can compare the STORED row with the one
+#: offered (`excluded`). Not a column name anywhere in `market` or `ingest`, and not a keyword.
+_STORED = "stored_row"
+
 
 class WriterError(Exception):
     """A row or a target this writer refuses to send to the database."""
@@ -120,6 +131,11 @@ class WriteResult:
     #: (security, sector) rather than per security, say — not a repair to be pleased about.
     collapsed: int = 0
     retracted: int = 0
+    #: Rows the statements actually inserted or updated, from the driver's rowcount. `written`
+    #: counts rows SENT, and a row that arrives identical to the stored one is skipped, so the gap
+    #: between the two is the no-op work this writer no longer does. None when the cursor cannot
+    #: say, as a test's fake cannot.
+    changed: int | None = None
 
 
 def dedupe_by(
@@ -226,7 +242,13 @@ def upsert(
                 "every updatable column is part of the conflict key, so this can only DO NOTHING"
             )
         assignments = ", ".join(f"{_ident(c)} = excluded.{_ident(c)}" for c in setters)
-        action = f"do update set {assignments}"
+        # ONLY A ROW WHOSE VALUES DIFFER IS UPDATED (rule 5). `is distinct from` rather than `<>`,
+        # because a NULL on either side makes `<>` NULL, and NULL is not true: a value that became
+        # null, or stopped being null, would never be written. The conflict key is left out; it
+        # is equal by construction.
+        stored = ", ".join(f"{_STORED}.{_ident(c)}" for c in setters)
+        offered = ", ".join(f"excluded.{_ident(c)}" for c in setters)
+        action = f"do update set {assignments} where ({stored}) is distinct from ({offered})"
 
     # CHUNKED, AND THE DEDUPE STAYS WHOLE-SET. Splitting first and deduping per chunk would let one
     # conflict key survive in two chunks — the second statement would then silently overwrite the
@@ -234,15 +256,24 @@ def upsert(
     # `dedupe_by` gives (last wins, once, and it is COUNTED). Deduping first also means the chunks
     # hold distinct keys, so they cannot collide with each other.
     per_chunk = max(1, MAX_BIND_PARAMS // max(1, len(columns)))
+    changed: int | None = 0
     for start in range(0, len(deduped), per_chunk):
         chunk = deduped[start : start + per_chunk]
         sql = (
-            f"insert into {target} ({', '.join(columns)}) "
+            f"insert into {target} as {_STORED} ({', '.join(columns)}) "
             f"values {_values_sql(columns, len(chunk))} "
             f"on conflict ({', '.join(keys)}) {action}"
         )
         cur.execute(sql, _flatten(chunk, columns))
-    return WriteResult(written=len(deduped), collapsed=collapsed)
+        # INSERTED PLUS UPDATED, which is what psycopg reports for `insert … on conflict`. A
+        # cursor that cannot say (-1, or no attribute at all) makes the whole count unknown rather
+        # than a partial sum that would read as a real one.
+        count = getattr(cur, "rowcount", None)
+        if changed is not None and isinstance(count, int) and count >= 0:
+            changed += count
+        else:
+            changed = None
+    return WriteResult(written=len(deduped), collapsed=collapsed, changed=changed)
 
 
 def replace_scope(
@@ -274,4 +305,6 @@ def replace_scope(
 
     every_column = sorted({c for r in rows for c in r})
     result = upsert(cur, table, rows, conflict=conflict, update=every_column)
-    return WriteResult(written=result.written, collapsed=result.collapsed, retracted=1)
+    return WriteResult(
+        written=result.written, collapsed=result.collapsed, retracted=1, changed=result.changed
+    )
