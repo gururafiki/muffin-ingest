@@ -383,6 +383,34 @@ sent) could not show it. `writers.upsert` now adds `where (stored_row.…) is di
 - Prove it with an identical second write that changes 0 row versions, and a mutation that drops the
   `where`.
 
+## Do not ask a provider's preset range for a whole history
+
+Yahoo's chart answers `range=max&interval=1d` at a coarser granularity than it was asked for, and
+says so only in `meta.dataGranularity`. Measured from the node on 2026-10-10: AAPL `3mo` (169 points
+since 1984), VOD.L `3mo`, NPN.JO `1mo`, AMRM.TA `1wk`. `period1=0` returned AAPL's 11,549 daily bars.
+A quarterly close stored as a daily bar is wrong on every day but one, and it looks like a sparse
+history. Ask a history by dates. Make stage 2 refuse a body whose stated granularity is not the one
+asked for, and pin it with a captured `range=max` body (`yahoo_chart_aapl_max.body`).
+
+## Do not replace a mechanism before asking what else it was doing
+
+The openbb price lane's stored histories were split-adjusted, although an extension re-reads only a
+week and Yahoo restates every earlier close after a split. Nothing did it on purpose. Each batch
+shared one window, and one security with an old watermark dragged the whole batch's re-read back
+months. The chart lane asks per security, which ended the accident, so the rule had to be written
+down: a split dated on or after the stored full load reloads the history in the same run, and a
+load 90 days old reloads at the next visit. Check the old behaviour against the provider on the
+cases that exercise it, here five 2026 splits, before deciding a rule is unnecessary.
+
+## Do not judge a change of unit by one step
+
+A series quoted in a subunit can change unit for good (Tel Aviv from shekels to agorot on
+2026-05-18, a 96.6x step) or for one session (six Johannesburg lines quoted in rand on 2025-01-10,
+undone the next day). For one bar the two are identical. Over two years of `price_bar`, 35 of 96
+steps above 5x were subunit-sized, and most were bounces. Look for the opposite step within a
+horizon (`BOUNCE_HORIZON`, 10 bars): a bounce's bars are the odd ones out, and a change makes
+everything before it the odd one out. Capture one of each as a fixture, so the two rules disagree.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
