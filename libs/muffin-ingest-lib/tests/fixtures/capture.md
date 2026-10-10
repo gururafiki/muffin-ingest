@@ -108,3 +108,42 @@ r = pq.read_table("/var/lib/muffin-ingest/raw/raw_figi_local_symbol/<security_id
 print(json.dumps([json.loads(bytes(r["body"]))[int(r["position"])]]))
 PY
 ```
+
+## `yahoo_chart_*.body` for the price lane — Yahoo's chart, captured 2026-10-10
+
+Response bodies, byte for byte, fetched from the node through http-cache with the price lane's own
+parameters (`interval=1d&includeAdjustedClose=true&events=div,split`, a `period1`/`period2` window).
+Each pins a shape `facets.price_chart` has a rule for:
+
+| file | window | what it pins |
+|---|---|---|
+| `amrm_ta_break` | 2026-04-20..06-20 | Tel Aviv's change from shekels to agorot on 2026-05-18, a **96.6x** step, every bar labelled `ILA` |
+| `vod_jo_bounce` | 2024-12-20..2025-02-01 | 2025-01-10 quoted in rand among cents (**0.01x** then **98.9x**) — a bounce, not a change |
+| `vod_l_ext` | 2026-09-26..10-10 | `GBp`, pence: `.upper()` turns it into pounds |
+| `npn_jo_ext` | same | `ZAc`, cents |
+| `alg_kw_week` | 2026-09-20..10-10 | `KWF`, fils (a thousandth of a dinar), and Kuwait's Sunday sessions |
+| `7203_t_ext` | 2026-09-26..10-10 | Tokyo, stamped at 00:00 UTC, with a **dividend** event (not a split) in the window |
+| `bhp_ax_ext` | same | on a Saturday, a **live point dated Friday beside Friday's completed bar** |
+| `aapl_ext` | same | an ordinary US body |
+| `aapl_max` | `range=max` | **`dataGranularity: 3mo`**, 169 points since 1984, although `interval=1d` was asked |
+| `bdms_f_bk_404` | `range=max` | HTTP 404, `"No data found, symbol may be delisted"` — a named absence |
+
+`aapl_max` is why the lane never asks `range=max`: Yahoo downsamples a long `max` silently (AAPL
+`3mo`, VOD.L `3mo`, NPN.JO `1mo`, AMRM.TA `1wk`), while `period1=0` returned AAPL's 11,549 daily
+bars, every one on a date the stored openbb history also holds, closes within 5e-15.
+
+Re-capture from the node, through the cache, with the lane's parameters:
+
+```bash
+ssh muffin 'docker exec -i $(docker ps -qf name=muffin_muffin-ingest) python -' <<'PY'
+import datetime as dt, httpx, pathlib
+from muffin_ingest import settings
+base = settings.provider_base("yahoo", "https://query2.finance.yahoo.com")
+def ep(d): return str(int(dt.datetime(d.year, d.month, d.day, tzinfo=dt.UTC).timestamp()))
+params = {"period1": ep(dt.date(2026, 4, 20)), "period2": ep(dt.date(2026, 6, 20)),
+          "interval": "1d", "includeAdjustedClose": "true", "events": "div,split"}
+r = httpx.get(f"{base}/v8/finance/chart/AMRM.TA", params=params,
+              headers={"User-Agent": "Mozilla/5.0 (compatible; muffin-market-data)"}, timeout=30)
+pathlib.Path("/tmp/amrm.body").write_bytes(r.content)
+PY
+```

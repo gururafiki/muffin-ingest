@@ -1,5 +1,9 @@
 {
   "asset_checks": {
+    "price_bar_history:a_bar_s_label_is_its_listing_s": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "price_bar_history:no_security_is_far_behind_the_sweep": {
       "additional_deps": [],
       "blocking": false
@@ -214,7 +218,7 @@
       },
       "code_version": null,
       "deps": {
-        "raw_price_history": "IdentityPartitionMapping"
+        "raw_price_chart": "IdentityPartitionMapping"
       },
       "execution_type": "MATERIALIZATION",
       "freshness_policy": null,
@@ -486,6 +490,32 @@
       "partitions": null,
       "pools": [
         "nse"
+      ],
+      "tags": {}
+    },
+    "raw_price_chart": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 25,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": null,
+      "group_name": "prices",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "yfinance"
       ],
       "tags": {}
     },
@@ -901,7 +931,7 @@
     },
     "__anonymous_asset_job_new_securities_need_history": {
       "assets": [
-        "raw_price_history"
+        "raw_price_chart"
       ],
       "ops": [],
       "partitions": {
@@ -975,7 +1005,7 @@
     "nightly_prices": {
       "assets": [
         "price_bar_history",
-        "raw_price_history"
+        "raw_price_chart"
       ],
       "ops": [],
       "partitions": {

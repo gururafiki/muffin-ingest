@@ -27,7 +27,6 @@ import duckdb
 from muffin_ingest.providers import openbb
 from muffin_ingest.providers.openbb import Answer
 
-from muffin_ingest_dagster.defs.prices import core as prices_core
 from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
 from muffin_ingest_dagster.defs.prices import raw as prices_raw
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
@@ -116,26 +115,6 @@ def columns_of(parquet: Path) -> list[str]:
     )
 
 
-def materialise_both(
-    tmp_path: Path, group: str, subjects: list[tuple[str, str, float]]
-) -> tuple[Path, list[dict[str, Any]]]:
-    """Stage 1 AND stage 2 over the capture: the raw files, and what the clean stage published.
-
-    BOTH, BECAUSE THE WINDOW MOVED. Raw keeps every bar the provider sent, out-of-window ones
-    included, and the refusal happens in stage 2. A test that inspects only one side cannot tell
-    "the rule moved" from "the rule vanished".
-    """
-    CAPTURED_WRITES.clear()
-    _history(
-        tmp_path,
-        replaying(group),
-        subjects,
-        [prices_raw.raw_price_history, prices_core.price_bar_history],
-    )
-    published = [row for batch in CAPTURED_WRITES for row in batch]
-    return raw_files(tmp_path), published
-
-
 def chart_body(points: Sequence[tuple[date, float]]) -> bytes:
     """A Yahoo chart body in the provider's real shape — nested parallel arrays under
     `chart.result[0]`, each bar stamped at the London session open with `gmtoffset` saying so, and
@@ -184,24 +163,6 @@ BATCH_SUBJECTS = [
     ("33333333-3333-3333-3333-333333333333", "QIBK.QA", 3.0),
     ("44444444-4444-4444-4444-444444444444", "SQM-B.SN", 2.0),
 ]
-
-
-def test_a_captured_batch_lands_every_bar_for_every_security(tmp_path: Path) -> None:
-    parquet, published = materialise_both(tmp_path, "batch_mixed_venues", BATCH_SUBJECTS)
-
-    # RAW IS THE WHOLE ANSWER — every captured row, both days, each filed under its security.
-    sent = len(CAPTURED["batch_mixed_venues"]["rows"])
-    rows = sql(
-        parquet, "select count(*), count(distinct security_id), count(distinct date) from {f}"
-    )
-    assert rows == [(sent, 4, 2)], f"raw holds {rows}; the provider sent {sent} rows over two days"
-
-    # AND THE CORE TABLE HOLDS BOTH DAYS: a security's window runs to today, so a captured day is
-    # inside it — four securities, one bar each per day.
-    assert sorted(r["security_id"] for r in published) == sorted(
-        s for s, _, _ in BATCH_SUBJECTS for _day in range(2)
-    )
-    assert {r["trade_date"] for r in published} == {PARTITION, "2026-09-09"}
 
 
 def test_every_captured_bar_is_attributed_to_the_right_security(tmp_path: Path) -> None:
@@ -348,44 +309,6 @@ def test_the_same_symbol_extends_from_its_watermark(tmp_path: Path) -> None:
     assert meta["extending_from_watermark"].value == 1
 
 
-def test_the_clean_stage_retracts_within_each_raw_range_and_only_where_raw_has_rows(
-    tmp_path: Path,
-) -> None:
-    """THE OTHER HALF OF A RESTART. Stage 2 only upserts, so a reloaded history left the old
-    listing's bars on every day the new one did not trade: 5,097 bars across 95 securities on
-    2026-10-04, Hong Kong lines holding their OTC line's dollar bars on HK holidays.
-
-    The statement's own bounds were proved against a real Postgres, with mutations, before this
-    shipped; it cannot be reached here. This pins what stage 2 hands it: every security with raw
-    rows, its first and last raw date, and every date its raw holds.
-    """
-    fakes.RETRACTIONS.clear()
-    _, published = materialise_both(tmp_path, "batch_mixed_venues", BATCH_SUBJECTS)
-    assert published, "the batch publishes bars"
-
-    assert len(fakes.RETRACTIONS) == 1, "one retraction for the run"
-    ids, firsts, lasts, pair_ids, pair_dates = fakes.RETRACTIONS[0]
-    assert ids == sorted(sid for sid, _, _ in BATCH_SUBJECTS)
-    days = [date(2026, 9, 8), date(2026, 9, 9)]
-    assert firsts == [days[0]] * 4 and lasts == [days[1]] * 4
-    assert sorted(zip(pair_ids, pair_dates, strict=True)) == sorted(
-        (sid, day) for sid in ids for day in days
-    )
-
-
-def test_a_security_with_no_raw_rows_is_never_retracted(tmp_path: Path) -> None:
-    """AN EMPTY HISTORY IS A REFUSAL OR A DEAD SYMBOL, NOT A STATEMENT THAT NO BAR EXISTS.
-    Retracting on it would delete a whole history to record a quiet night."""
-    fakes.RETRACTIONS.clear()
-    _history(
-        tmp_path,
-        replaying("provider_has_nothing"),
-        [("66666666-6666-6666-6666-666666666666", "ZZZZ.NOPE", 0.1)],
-        [prices_raw.raw_price_history, prices_core.price_bar_history],
-    )
-    assert fakes.RETRACTIONS == [], "no raw rows, no retraction"
-
-
 def test_a_single_run_covering_several_partitions_writes_one_file_each(tmp_path: Path) -> None:
     """A MULTI-PARTITION RUN MUST FILE EACH ROW UNDER ITS OWN PARTITION. `UPathIOManager` refuses a
     multi-partition output outright —
@@ -430,38 +353,6 @@ class CapturingPostgresIO(dg.ConfigurableIOManager):
 
 
 CAPTURED_WRITES: list[Any] = []
-
-
-def test_a_single_run_covering_several_partitions_normalises_all_of_them(tmp_path: Path) -> None:
-    """THE MIRROR OF THE TEST ABOVE, AND ITS ABSENCE COST A SECOND FAILED BACKFILL.
-
-    Fixing the multi-partition WRITE made the next run get one stage further and die on the LOAD:
-
-        Type check failed for step input "raw_price_history" - expected type "[Dict[String,Any]]"
-
-    `UPathIOManager.load_input` hands a downstream step covering several partitions a
-    `{partition_key: obj}` MAPPING, not the obj — so a range changes the shape at every seam in the
-    lane, and the first fix only looked at the seam that had failed. Both times the provider had
-    already been paid: the raw files were on disk, 96 of them, 12 MB.
-
-    So this drives BOTH stages over a range and asserts the clean stage saw every partition's rows.
-    """
-    CAPTURED_WRITES.clear()
-    result = _history(
-        tmp_path,
-        replaying("batch_mixed_venues"),
-        BATCH_SUBJECTS,
-        [prices_raw.raw_price_history, prices_core.price_bar_history],
-    )
-
-    assert result.success, "the clean stage must survive a multi-partition load"
-    assert len(CAPTURED_WRITES) == 1, "one write for the whole range"
-    written = CAPTURED_WRITES[0]
-    assert {r["security_id"] for r in written} == {sid for sid, _, _ in BATCH_SUBJECTS}, (
-        "every partition's rows must reach the clean stage — a load that returns only one "
-        "partition's rows, or the mapping itself, fails here"
-    )
-    assert len(written) == len(BATCH_SUBJECTS) * 2, "four securities on each of two days"
 
 
 def test_the_fx_spot_lane_keeps_only_its_own_partition_s_day(tmp_path: Path) -> None:

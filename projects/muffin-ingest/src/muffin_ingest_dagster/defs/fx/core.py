@@ -22,6 +22,15 @@ from muffin_ingest_dagster.lib.resources import Postgres
 _loaded_rows = partitioned.loaded_rows
 
 
+def _not_seeded(known: frozenset[str]) -> str:
+    """Subunits the code knows and `market.currency` does not, so none of their rates was derived.
+
+    Non-empty only between rolling code that knows a subunit and deploying the migration that seeds
+    it. Named rather than counted, so the run says which code is waiting and on what.
+    """
+    return ", ".join(sorted(set(fx.SUBUNITS) - known)) or "none"
+
+
 @dg.asset(
     partitions_def=fx_day,
     backfill_policy=dg.BackfillPolicy.single_run(),
@@ -75,7 +84,9 @@ def fx_rate(
             ),
             metadata={"stale_partitions": ", ".join(stale), **stats},
         )
-    with_subunits = fx.with_subunits(rates)
+    with postgres.connect() as conn:
+        known = fx.known_currencies(conn)
+    with_subunits = fx.with_subunits(rates, known=known)
 
     context.add_output_metadata(
         {
@@ -83,6 +94,7 @@ def fx_rate(
             "rows": len(with_subunits),
             "observed": len(rates),
             "derived": len(with_subunits) - len(rates),
+            "subunits_not_seeded": _not_seeded(known),
         }
     )
     if stats.get("unreadable"):
@@ -133,7 +145,9 @@ def fx_rate_history(
     # NO WINDOW. This lane's partition is the currency, so every point in the body belongs to it —
     # the ten-year range is the subject's whole history rather than a slice of a calendar.
     parsed = fx.normalise(raw)
-    with_subunits = fx.with_subunits(parsed.rates)
+    with postgres.connect() as conn:
+        known = fx.known_currencies(conn)
+    with_subunits = fx.with_subunits(parsed.rates, known=known)
 
     context.add_output_metadata(
         {
@@ -141,6 +155,7 @@ def fx_rate_history(
             "rows": len(with_subunits),
             "observed": len(parsed.rates),
             "derived": len(with_subunits) - len(parsed.rates),
+            "subunits_not_seeded": _not_seeded(known),
         }
     )
     if parsed.stats["unreadable"]:

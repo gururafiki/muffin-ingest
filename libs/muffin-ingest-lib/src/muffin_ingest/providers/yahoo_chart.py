@@ -41,6 +41,7 @@ the body; every rule below runs against a file.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
@@ -104,8 +105,47 @@ class Series:
     timezone_name: str | None = None
     #: The whole `meta` block. 29 keys on the EURUSD=X body captured 2026-09-12 — a count that is
     #: not stable across symbols or days, which is the case for storing the body rather than a
-    #: list of the keys we knew about. This module interprets three of them.
+    #: list of the keys we knew about. This module interprets five of them.
     meta: dict[str, Any] = field(default_factory=dict)
+    #: YAHOO'S OWN STATEMENT THAT IT DOES NOT CARRY THE SYMBOL, when it made one — the `chart.error`
+    #: object, e.g. `{"code": "Not Found", "description": "No data found, symbol may be delisted"}`
+    #: for `BDMS-F.BK` and `ICT.PS` (measured 2026-10-10). Kept apart from an empty series, which is
+    #: a symbol Yahoo knows with nothing in the window asked: only the first is evidence of absence.
+    error: dict[str, Any] | None = None
+    #: The `events` block whole — dividends and splits when `events=div,split` was asked — keyed by
+    #: Yahoo's own epoch strings. Read by the price lane only to notice a split.
+    events: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def granularity(self) -> str | None:
+        """The bar size Yahoo actually served, NOT always the one asked for — see `fetch`."""
+        value = self.meta.get("dataGranularity")
+        return value if isinstance(value, str) else None
+
+    @property
+    def currency(self) -> str | None:
+        """The quote currency AS YAHOO SPELLS IT: `GBp` is pence and `ZAc` cents, so the case is
+        part of the value. Mapping it to a code of ours is stage 2's (`facets.price_chart`)."""
+        value = self.meta.get("currency")
+        return value if isinstance(value, str) and value else None
+
+
+def split_days(series: Series) -> list[date]:
+    """The days of the splits the body names, in the exchange's own calendar (`gmtoffset`).
+
+    A SPLIT RESTATES EVERY EARLIER CLOSE: Yahoo's `close` is split-adjusted, so after a 2-for-1 the
+    whole stored history is twice the price Yahoo now gives for the same days. The price lane reads
+    this to know when its stored history has gone stale.
+    """
+    offset = series.meta.get("gmtoffset")
+    tz = timezone(timedelta(seconds=int(offset))) if isinstance(offset, int | float) else UTC
+    splits = series.events.get("splits")
+    out: list[date] = []
+    for item in splits.values() if isinstance(splits, dict) else ():
+        stamp = item.get("date") if isinstance(item, dict) else None
+        if isinstance(stamp, int | float) and not isinstance(stamp, bool):
+            out.append(datetime.fromtimestamp(float(stamp), tz=tz).date())
+    return sorted(out)
 
 
 def pair(currency: str) -> str:
@@ -144,7 +184,26 @@ def _names_an_absence(body: bytes) -> bool:
     return bool(isinstance(parsed, dict) and (parsed.get("chart") or {}).get("error"))
 
 
-def fetch(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -> Document:
+def day_start(day: date) -> int:
+    """Midnight UTC of `day` as epoch seconds — the one way a date becomes `period1`/`period2`.
+
+    A FIXED POINT IN THE DAY, so two requests for the same window on the same day are the same URL
+    and the cache can answer the second; a `now()` would mint a new key per call.
+    """
+    return int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp())
+
+
+def fetch(
+    symbol: str,
+    *,
+    interval: str,
+    range_: str | None = None,
+    period1: int | None = None,
+    period2: int | None = None,
+    events: str | None = None,
+    adjusted: bool = False,
+    timeout_s: float = 20.0,
+) -> Document:
     """The response body, EXACTLY as Yahoo sent it. No parse, no reshape, no interpretation.
 
     A NON-2xx AND AN EMPTY SERIES ARE DIFFERENT FACTS and this keeps them so: a refusal raises, an
@@ -153,12 +212,39 @@ def fetch(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -
     empty 204, and that confusion once recorded ~8,300 securities as permanently unanswerable in
     an afternoon.
 
+    THE WINDOW IS EITHER A RANGE PRESET OR TWO EPOCHS, never both. The FX lane names a preset
+    (`5d`, `10y`); the price lane names dates, because an extension's start is a stored watermark
+    rather than one of Yahoo's presets.
+
+    `range=max` IS NOT DAILY, WHATEVER `interval` SAYS. Measured 2026-10-10 from the node: with
+    `interval=1d`, AAPL came back at `dataGranularity: 3mo` (169 points since 1984), VOD.L at `3mo`,
+    NPN.JO at `1mo` and AMRM.TA at `1wk`, while `period1=0` returned AAPL's 11,549 daily bars, every
+    one of them on a date the stored history also holds. Yahoo downsamples a long `max` silently,
+    and a quarterly close stored as a daily bar is wrong on every day but one. A full history is
+    therefore `period1=0`, and stage 2 refuses any body whose granularity is not the one asked for.
+
+    `events` and `adjusted` ride on the same request: `events=div,split` adds the dividends and
+    splits, `includeAdjustedClose` the adjusted close. They cost no extra call, and stage 1 keeps
+    them whole for whoever reads them later.
+
     `fetched_at` IS RECORDED HERE because the date travels with the data: a chart body carries
     epoch stamps for its points and nothing at all about when it was served.
     """
+    if (range_ is None) == (period1 is None or period2 is None):
+        raise ValueError("ask for a range preset or for period1 and period2, not both or neither")
     base = settings.provider_base("yahoo", REAL_ORIGIN)
     url = f"{base}/v8/finance/chart/{symbol}"
-    params = {"range": range_, "interval": interval}
+    # THE ORDER OF THESE IS THE CACHE KEY, so the FX lane's two parameters keep the order they
+    # have always had: a reordered URL is a new entry in http-cache, not a hit.
+    params: dict[str, str] = (
+        {"range": range_, "interval": interval}
+        if range_ is not None
+        else {"period1": str(period1), "period2": str(period2), "interval": interval}
+    )
+    if adjusted:
+        params["includeAdjustedClose"] = "true"
+    if events:
+        params["events"] = events
     with metrics.request("yahoo") as outcome:
         try:
             response = httpx.get(
@@ -173,9 +259,9 @@ def fetch(symbol: str, *, range_: str, interval: str, timeout_s: float = 20.0) -
             outcome["outcome"] = "refused"
             raise YahooRefused(f"HTTP {response.status_code} for {symbol}")
     return Document(
-        # THE REQUEST, NOT JUST THE ENDPOINT. `range` and `interval` decide what a chart body even
-        # contains, so they are provenance — built from what we sent rather than read back off the
-        # response, which carries a URL only when a request object is attached to it.
+        # THE REQUEST, NOT JUST THE ENDPOINT. The window and the interval decide what a chart body
+        # even contains, so they are provenance — built from what we sent rather than read back off
+        # the response, which carries a URL only when a request object is attached to it.
         url=str(httpx.URL(url, params=params)),
         body=response.content,
         content_type=response.headers.get("content-type", "application/json"),
@@ -195,9 +281,11 @@ def parse(body: bytes) -> Series:
         raise YahooRefused(f"unparseable chart body: {exc}") from exc
 
     chart_body = ((parsed or {}).get("chart") or {}) if isinstance(parsed, dict) else {}
-    # Yahoo states an unknown symbol both as a 404 and INSIDE a 200. Same fact, same treatment.
-    if chart_body.get("error"):
-        return Series()
+    # Yahoo states an unknown symbol both as a 404 and INSIDE a 200. Same fact, same treatment —
+    # and the statement itself is kept, because it is what tells an absence from an empty window.
+    error = chart_body.get("error")
+    if error:
+        return Series(error=error if isinstance(error, dict) else {"description": str(error)})
 
     results = chart_body.get("result") or []
     if not results:
@@ -250,7 +338,12 @@ def parse(body: bytes) -> Series:
     # statement than "it returned one row".
     live_at = meta.get("regularMarketTime")
 
-    out = Series(timezone_name=meta.get("exchangeTimezoneName"), meta=dict(meta))
+    events = first.get("events")
+    out = Series(
+        timezone_name=meta.get("exchangeTimezoneName"),
+        meta=dict(meta),
+        events=dict(events) if isinstance(events, dict) else {},
+    )
     for index, (stamp, close) in enumerate(zip(stamps, closes, strict=False)):
         if not isinstance(stamp, int | float):
             # There is no date to file this under, so no `Point` can be built for it. Counted
@@ -259,7 +352,14 @@ def parse(body: bytes) -> Series:
             out.undatable += 1
             continue
         is_live = live_at is not None and stamp == live_at
-        usable = isinstance(close, int | float) and not isinstance(close, bool) and close > 0
+        # FINITE AS WELL AS POSITIVE: `inf > 0` holds, and `NaN` is a float that Postgres would
+        # sort above every number (`facets.prices.close_of` records why that mattered).
+        usable = (
+            isinstance(close, int | float)
+            and not isinstance(close, bool)
+            and math.isfinite(close)
+            and close > 0
+        )
         out.live_points += int(is_live)
         out.null_closes += int(not usable)
         out.points.append(

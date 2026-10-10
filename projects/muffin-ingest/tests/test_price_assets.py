@@ -56,6 +56,12 @@ PROBES: list[dict[str, Any]] = []
 #: ranges' first and last dates, and the (security, date) pairs the raw history holds.
 RETRACTIONS: list[tuple[Any, ...]] = []
 
+#: What `market.currency` holds for a fake run. Module-level for the same reason `UNIVERSE` is.
+CURRENCY_CODES: list[str] = ["USD", "GBP", "GBX", "JPY", "KWD", "KWF", "ZAR", "ZAC", "ILS", "ILA"]
+
+#: The label each security's newest stored bar carries before a fake run writes.
+STORED_LABELS: dict[str, str | None] = {}
+
 
 def _inserted(text: str, params: Sequence[Any]) -> list[dict[str, Any]]:
     """The rows of an `insert into t (a, b) values (...), (...)` the writer sent, as dicts."""
@@ -93,7 +99,12 @@ class FakeCursor:
             RETRACTIONS.append(tuple(params))
             self.rows = []
             return
-        if "market.listing" in text:
+        if text.startswith("select code from market.currency"):
+            self.rows = [(code,) for code in CURRENCY_CODES]
+        elif text.startswith("select distinct on (security_id) security_id::text, currency_code"):
+            asked = set(params[0]) if params else set()
+            self.rows = [(sid, label) for sid, label in STORED_LABELS.items() if sid in asked]
+        elif "market.listing" in text:
             self.rows = [(sid, "USD") for sid, _, _ in self._subjects]
         else:
             self.rows = list(self._subjects)
@@ -129,9 +140,7 @@ class FakePostgres(Postgres):
         yield FakeConn(UNIVERSE)
 
 
-def materialise(
-    tmp_path: Path, fetch: Any, *, with_core: bool = False
-) -> dg.ExecuteInProcessResult:
+def materialise(tmp_path: Path, fetch: Any) -> dg.ExecuteInProcessResult:
     """The security lane over every security in `UNIVERSE`, as one range run — a night's shape.
 
     WAS THE DAY LANE until 2026-10-04. The rules these tests hold (attribution, empty versus dead,
@@ -150,9 +159,6 @@ def materialise(
         "parquet_io": ParquetIOManager(str(tmp_path)),
         "raw_store": RawStore(base_path=str(tmp_path)),
     }
-    if with_core:
-        assets.append(prices_core.price_bar_history)
-        resources["postgres_io"] = _Capture()
     saved = openbb.price_history
     openbb.price_history = fetch
     try:
@@ -263,42 +269,6 @@ def test_an_answer_with_no_bars_still_materialises(tmp_path: Path) -> None:
     assert meta(result, prices_raw.raw_price_history)["rows"] == 0
 
 
-def test_normalisation_carries_the_currency_it_has_and_withholds_the_one_it_does_not(
-    tmp_path: Path,
-) -> None:
-    """Nullable by measurement: 425 of 10,894 askable equities have no currency from either source,
-    and refusing them a bar would be worse than the unlabelled number the app renders correctly."""
-    from muffin_ingest.facets import prices
-
-    raw = [
-        {"security_id": SUBJECTS[0][0], "date": KEY, "close": 100.0, "volume": 1},
-        {"security_id": SUBJECTS[1][0], "date": KEY, "close": 200.0, "volume": 2},
-    ]
-    rows = prices.normalise(raw, {SUBJECTS[0][0]: "USD"}, source_code="yfinance")
-    assert [r["currency_code"] for r in rows] == ["USD", None]
-    assert all(r["source_code"] == "yfinance" for r in rows)
-
-
-@pytest.mark.parametrize(
-    "close", [0, -1, None, "100.0", True, float("nan"), float("inf"), float("-inf")]
-)
-def test_normalisation_refuses_a_close_that_is_not_a_positive_number(close: object) -> None:
-    """NaN IS THE ONE THAT MATTERED, AND IT PASSED: `close <= 0` is false for NaN, and
-    `price_bar_close_positive` cannot stop it either, because Postgres sorts `'NaN'::numeric` above
-    every number — so a session yfinance has not closed yet would be stored as a bar."""
-    from muffin_ingest.facets import prices
-
-    # A CONTROL ROW BESIDE THE BAD ONE, and the first version had none. Its raw row carried no
-    # provider `date`, so once the date moved to stage 2 `normalise` refused it for THAT reason and
-    # this test went on passing without ever reaching the close rule it is named for.
-    raw = [
-        {"security_id": SUBJECTS[0][0], "date": KEY, "close": close},
-        {"security_id": SUBJECTS[1][0], "date": KEY, "close": 100.0},
-    ]
-    out = prices.normalise(raw, {}, source_code="yfinance")
-    assert [r["security_id"] for r in out] == [SUBJECTS[1][0]]
-
-
 def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_path: Path) -> None:
     """Lane B's partition IS the subject, so a run must not quietly widen to the whole universe."""
     asked: list[str] = []
@@ -371,14 +341,13 @@ def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything
     assert len(calls) > 0
 
 
-def test_a_bar_outside_the_window_is_kept_in_raw_and_refused_in_core(tmp_path: Path) -> None:
+def test_a_bar_outside_the_window_is_kept_in_raw(tmp_path: Path) -> None:
     """MEASURED AGAINST THE REAL HUB, NOT IMAGINED. The provider widens a degenerate range rather
     than refusing it, and a run made while Tokyo was trading brought back a bar for a session still
     in progress — whose "close" is not a close, and looks exactly like a real one.
 
-    The security lane asks for `[watermark, today)`, so a bar dated today or later is outside its
-    window. Raw keeps it, because it is what the provider said; stage 2 refuses it, so a rule change
-    costs a re-parse rather than a re-fetch.
+    Raw keeps it, because it is what the provider said. Refusing it is stage 2's, which since
+    2026-10-10 reads the chart lane (`facets.price_chart`, `test_the_window_refuses_today`).
     """
 
     def spilling(symbols: Sequence[str], **kw: Any) -> Answer:
@@ -388,17 +357,12 @@ def test_a_bar_outside_the_window_is_kept_in_raw_and_refused_in_core(tmp_path: P
                 rows.append({"symbol": s, "date": d, "close": 100.0})
         return Answer(rows=rows)
 
-    result = materialise(tmp_path, spilling, with_core=True)
+    result = materialise(tmp_path, spilling)
 
     assert result.success
     m = meta(result, prices_raw.raw_price_history)
     assert m["outside_window"] == m["answered"], "the spillover is counted, not dropped in silence"
-    # RAW KEEPS IT. The spilled bar is what the provider said; deleting it at fetch is what made
-    # stage 1 the judge of a window, so that a rule change there cost a re-fetch.
-    assert m["rows"] == 2 * m["answered"]
-    # AND THE CORE TABLE DOES NOT: exactly one bar per answering security, on the real day.
-    assert {r["trade_date"] for r in _Capture.last} == {KEY}
-    assert len(_Capture.last) == m["answered"]
+    assert m["rows"] == 2 * m["answered"], "and kept"
 
 
 # --- returns ------------------------------------------------------------------------------------
@@ -842,6 +806,7 @@ def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does(
 
     #: Idles at zero by design: the load is one backfill, then nothing until a new subject appears.
     backfill_only = {
+        "raw_price_chart",
         "raw_price_history",
         "price_bar_history",
         "raw_fx_history",
