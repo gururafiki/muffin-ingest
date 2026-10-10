@@ -270,29 +270,6 @@ def _answered_symbols(by_symbol: Mapping[str, Subject], verdict: BatchVerdict) -
     return answered
 
 
-def currency_by_security(conn: Any) -> dict[str, str]:
-    """What each security's prices are denominated in, from its listing or its own column.
-
-    Measured 2026-09-10: 10,469 of 10,894 askable equities have one and 425 have neither, which is
-    why `market.price_bar.currency_code` is nullable — refusing those securities a bar would be
-    worse than the unlabelled number the app already renders correctly.
-    """
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            select s.security_id::text,
-                   coalesce(
-                     (select l.currency_code from market.listing l
-                       where l.security_id = s.security_id and l.currency_code is not null
-                       order by l.is_primary desc limit 1),
-                     s.currency_code)
-              from market.security s
-             where s.security_type_code = 'equity'
-            """
-        )
-        return {row[0]: row[1] for row in cur.fetchall() if row[1]}
-
-
 def row_date(row: Mapping[str, Any]) -> date | None:
     """The provider row's own trade date, parsed. Shared so the window filter and the raw writer
     cannot disagree about which partition a row belongs to."""
@@ -394,7 +371,7 @@ def provider_rows_by_symbol(
     for row in rows:
         # A ROW WHOSE DATE WILL NOT PARSE IS STILL WHAT THE PROVIDER SENT. It used to be dropped
         # here, which made stage 1 the judge of whether a row is usable — and a row deleted at
-        # fetch is one no re-parse can recover. `normalise` refuses it instead.
+        # fetch is one no re-parse can recover. Stage 2 refuses it instead.
         symbol = str(row.get("symbol") or sole_symbol).upper()
         out.setdefault(symbol, []).append(row)
     return out
@@ -457,48 +434,6 @@ def raw_rows(
             }
         )
         out.append(enriched)
-    return out
-
-
-def normalise(
-    rows: Sequence[Mapping[str, Any]],
-    currencies: Mapping[str, str],
-    *,
-    source_code: str,
-    window: tuple[date, date] | None = None,
-) -> list[dict[str, Any]]:
-    """Raw rows to `market.price_bar` rows. No provider call, so a fix here is free to re-run.
-
-    DEDUPED ON THE CONFLICT KEY BY THE WRITER, not here — but a security appearing twice in one
-    partition (asked under two symbols after a repair) would otherwise fail the whole statement with
-    SQLSTATE 21000, which has happened four times in this pipeline and reads as a size problem.
-    """
-    out: list[dict[str, Any]] = []
-    for row in rows:
-        # `close <= 0` USED TO BE THE CHECK HERE, and it is false for NaN — see `close_of`.
-        close = close_of(row)
-        security_id = row.get("security_id")
-        # THE DATE IS PARSED HERE, FROM THE PROVIDER'S OWN FIELD. Raw carries the vendor's `date`
-        # untouched; turning it into a `trade_date` is an interpretation and belongs downstream.
-        parsed = row_date(row)
-        if security_id is None or parsed is None or close is None:
-            continue
-        # AND THE WINDOW IS APPLIED HERE TOO. The provider widens a degenerate range and can
-        # return a session still in progress; both used to be filtered at fetch, which threw the
-        # rows away. They are stored and refused here, so the rule can change for free.
-        if window is not None and not (window[0] <= parsed < window[1]):
-            continue
-        trade_date = parsed.isoformat()
-        out.append(
-            {
-                "security_id": security_id,
-                "trade_date": trade_date,
-                "close": close,
-                "volume": row.get("volume"),
-                "currency_code": currencies.get(str(security_id)),
-                "source_code": source_code,
-            }
-        )
     return out
 
 

@@ -1,9 +1,21 @@
 """Asset checks of the prices family."""
 
+from collections.abc import Sequence
+
 import dagster as dg
+from dagster._core.storage.tags import (
+    ASSET_PARTITION_RANGE_END_TAG,
+    ASSET_PARTITION_RANGE_START_TAG,
+    PARTITION_NAME_TAG,
+)
+from muffin_ingest.facets import fx, price_chart
+from muffin_ingest.providers import yahoo_chart
 
 from muffin_ingest_dagster.defs.prices.automation import SWEEP_SLICE
 from muffin_ingest_dagster.defs.prices.core import price_bar_history
+from muffin_ingest_dagster.defs.prices.partitions import SECURITY_PARTITION
+from muffin_ingest_dagster.defs.prices.raw import raw_price_chart
+from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
 #: How stale a security's newest bar may be before the sweep is judged to be falling behind.
@@ -75,5 +87,83 @@ def no_security_is_far_behind_the_sweep(postgres: Postgres) -> dg.AssetCheckResu
             "sweep_slice": SWEEP_SLICE,
             "note": "a round-robin leaves a day legitimately partial; staleness per security is "
             "the claim that still means something",
+        },
+    )
+
+
+def _run_partition_keys(context: dg.AssetCheckExecutionContext) -> list[str]:
+    """The security partitions the run being checked wrote.
+
+    A CHECK ON A PARTITIONED ASSET IS ONE RESULT PER RUN (Dagster 1.13), with no partition key of
+    its own, so the run's tags are where its partitions are named: one key, or a range resolved
+    against the grid. A range is contiguous in the grid's insertion order, which never moves a key.
+    """
+    tags = context.run.tags
+    single = tags.get(PARTITION_NAME_TAG)
+    if single:
+        return [single]
+    start = tags.get(ASSET_PARTITION_RANGE_START_TAG)
+    end = tags.get(ASSET_PARTITION_RANGE_END_TAG)
+    if not start or not end:
+        return []
+    keys: Sequence[str] = context.instance.get_dynamic_partitions(SECURITY_PARTITION)
+    try:
+        return list(keys[keys.index(start) : keys.index(end) + 1])
+    except ValueError:
+        return []
+
+
+@dg.asset_check(asset=price_bar_history, blocking=False)
+def a_bar_s_label_is_its_listing_s(
+    context: dg.AssetCheckExecutionContext, postgres: Postgres, raw_store: RawStore
+) -> dg.AssetCheckResult:
+    """Each security's newest bar carries the currency its newest document states.
+
+    Over the securities this run wrote, so a night checks every security it touched and nothing it
+    did not. Stage 2 derives the label from the same documents, so a disagreement means another
+    writer or a failed write — or a code we have no row for, which leaves the bar unlabelled and is
+    named here so it can be seeded. Spec §8: umbrella
+    docs/specs/2026-10-06-the-price-lane-reads-the-quote-currency.md.
+    """
+    keys = _run_partition_keys(context)
+    with postgres.connect() as conn:
+        known = fx.known_currencies(conn)
+        stored = price_chart.newest_labels(conn, keys)
+    disagree: list[str] = []
+    unknown: list[str] = []
+    checked = 0
+    for key in keys:
+        if key not in stored:
+            continue
+        documents = raw_store.stored_rows_for(
+            raw_price_chart.key, key, columns=("fetched_at", "url", "body")
+        )
+        newest = None
+        for row in sorted(documents, key=price_chart.fetch_order, reverse=True):
+            try:
+                series = yahoo_chart.parse(bytes(row.get("body") or b""))
+            except yahoo_chart.YahooRefused:
+                continue
+            if series.currency and series.granularity in (None, price_chart.INTERVAL):
+                newest = series.currency
+                break
+        if newest is None:
+            continue
+        checked += 1
+        expected = price_chart.quote_currency(newest, known)
+        if expected is None:
+            unknown.append(f"{key} ({newest})")
+        if stored[key] != expected:
+            disagree.append(f"{key}: bar {stored[key]}, provider {newest}")
+    return dg.AssetCheckResult(
+        passed=not disagree,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "securities_checked": checked,
+            "disagree": len(disagree),
+            "disagreeing": "; ".join(disagree[:20]) or "none",
+            # A CODE NOBODY SEEDED. The bars stay unlabelled, which agrees with the rule; this
+            # names them so the code can be added to `market.currency` deliberately.
+            "unknown_codes": "; ".join(unknown[:20]) or "none",
         },
     )

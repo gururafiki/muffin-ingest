@@ -13,7 +13,7 @@ rates uses the most recent one rather than interpolating — A RATE WE DID NOT O
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -22,13 +22,19 @@ from muffin_ingest.providers import yahoo_chart
 from muffin_ingest.providers.documents import Document
 
 #: Subunits are NOT currencies, and pretending otherwise is what made Tel Aviv look like a 100x
-#: crash. Yahoo has no pair for agorot, cents or fils; each is a fixed fraction of its parent.
-#: Data rather than a branch at the call site, so nothing converting a figure has to know which of
-#: the 43 codes are subunits.
+#: crash. Yahoo has no pair for agorot, cents, fils or pence; each is a fixed fraction of its
+#: parent. Data rather than a branch at the call site, so nothing converting a figure has to know
+#: which of the codes are subunits.
+#:
+#: PENCE JOINED ON 2026-10-10, because London quotes in them. Yahoo labels VOD.L and SHEL.L
+#: `GBp`, and until the price lane read that label the bars said `GBP` (or `EUR`), so every London
+#: ratio was 100 times out. `GBX` is the code the market uses for pence; muffin-deployment seeds
+#: the row.
 SUBUNITS: dict[str, tuple[str, float]] = {
     "ILA": ("ILS", 100.0),
     "ZAC": ("ZAR", 100.0),
     "KWF": ("KWD", 1000.0),
+    "GBX": ("GBP", 100.0),
 }
 
 #: How long a currency the provider has nothing for stays unasked. THIRTY DAYS, NOT NEVER — a pair
@@ -86,6 +92,14 @@ select c.code
    and (c.history_missing_at is null or c.history_missing_at < current_date - %s)
  order by c.code
 """
+
+
+def known_currencies(conn: Any) -> frozenset[str]:
+    """The codes `market.currency` holds. Every currency column references it, so a row naming any
+    other code fails its whole write on the foreign key."""
+    with conn.cursor() as cur:
+        cur.execute("select code from market.currency")
+        return frozenset(str(row[0]) for row in cur.fetchall())
 
 
 def askable_currencies(conn: Any, *, include_absent: bool = False) -> list[str]:
@@ -253,8 +267,14 @@ def normalise(
     return Normalised(rates=out, stats=stats)
 
 
-def with_subunits(rates: Sequence[Rate]) -> list[Rate]:
+def with_subunits(rates: Sequence[Rate], *, known: Collection[str] | None = None) -> list[Rate]:
     """Every parent rate, plus the subunit rates that follow from it BY ARITHMETIC.
+
+    `known` LIMITS THE DERIVATION TO CODES THE CURRENCY TABLE HOLDS, and the stage-2 assets always
+    pass it. `fx_rate.currency_code` is a foreign key, so one derived row for a code the table lacks
+    fails the WHOLE write, every currency with it. That is the state between rolling code that knows
+    a new subunit and deploying the migration that seeds it: without this, `GBX` arriving in
+    `SUBUNITS` a deploy early would have blanked every rate for as long as the deploy waited.
 
     IN THE SAME PASS AS THE PARENT, which is the whole point. A subunit derived separately — or
     later, or only for spot — leaves ILA with three days of history against ILS's ten years, and any
@@ -271,6 +291,8 @@ def with_subunits(rates: Sequence[Rate]) -> list[Rate]:
         by_parent.setdefault(rate.currency_code, []).append(rate)
 
     for code, (parent, per) in SUBUNITS.items():
+        if known is not None and code not in known:
+            continue
         for rate in by_parent.get(parent, ()):
             out.append(
                 Rate(

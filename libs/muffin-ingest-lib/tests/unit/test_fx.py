@@ -379,10 +379,15 @@ def test_a_subunit_whose_parent_is_absent_produces_nothing_rather_than_a_guess()
 
 
 def test_the_divisors_are_the_real_ones() -> None:
-    """100 agorot to the shekel, 100 cents to the rand, and **1000** fils to the dinar — the odd one
-    out, and getting it wrong is a factor-of-ten error in a currency that is already the highest
-    valued on earth."""
-    assert fx.SUBUNITS == {"ILA": ("ILS", 100.0), "ZAC": ("ZAR", 100.0), "KWF": ("KWD", 1000.0)}
+    """100 agorot to the shekel, 100 cents to the rand, 100 pence to the pound, and **1000** fils to
+    the dinar — the odd one out, and getting it wrong is a factor-of-ten error in a currency that is
+    already the highest valued on earth."""
+    assert fx.SUBUNITS == {
+        "ILA": ("ILS", 100.0),
+        "ZAC": ("ZAR", 100.0),
+        "KWF": ("KWD", 1000.0),
+        "GBX": ("GBP", 100.0),
+    }
 
 
 def test_the_source_code_is_one_a_migration_has_actually_seeded() -> None:

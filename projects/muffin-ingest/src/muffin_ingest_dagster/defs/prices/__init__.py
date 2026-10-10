@@ -1,10 +1,15 @@
 """Daily bars, collected PER SECURITY — and since 2026-09-19 that is the only lane that runs.
 
-  `raw_price_history`  one partition PER SECURITY, swept nightly by `nightly_prices`.
-          The subject IS the slice, so Dagster's grid answers "which securities are current?"
-          natively, and a night the provider refuses simply leaves partitions unmaterialised for
-          the next run to collect. Each run extends a security from its own newest stored bar —
-          see `merge_on` on the asset — so a partition accumulates rather than being replaced.
+  `raw_price_chart`    one partition PER SECURITY, swept nightly by `nightly_prices` since
+          2026-10-10: Yahoo's chart response for the security, stored whole, so each bar is
+          labelled with the quote currency the provider states (`facets.price_chart`). The subject
+          IS the slice, so Dagster's grid answers "which securities are current?" natively, and a
+          night the provider refuses simply leaves partitions unmaterialised for the next run to
+          collect. A first visit loads the whole history; later ones extend it by a week.
+
+  `raw_price_history`  the same grid through openbb, the lane until 2026-10-10. Defined and
+          unscheduled as the rollback; its files stay on disk until the drop date in umbrella
+          docs/deferred/2026-10-10-the-openbb-price-raw-is-the-rollback.md.
 
   `raw_price_bars`     DAILY partitions, DELETED 2026-10-04 after two weeks of clean sweeps. It
           was kept as the rollback from the cutover; its offline replay tests now drive the

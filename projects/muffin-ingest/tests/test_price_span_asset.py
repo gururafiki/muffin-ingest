@@ -162,7 +162,7 @@ def _requested_before_and_after(span: dg.AssetsDefinition) -> tuple[bool, bool]:
 
     # Resources only so the definitions validate; nothing is executed.
     defs = dg.Definitions(
-        assets=[prices_raw.raw_price_history, prices_core.price_bar_history, span],
+        assets=[prices_raw.raw_price_chart, prices_core.price_bar_history, span],
         resources={
             "postgres": Postgres(),
             "parquet_io": ParquetIOManager("/nonexistent"),

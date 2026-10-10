@@ -19,7 +19,7 @@ from muffin_ingest_dagster.defs.prices.partitions import (
     SECURITY_PARTITION,
     security_partitions,
 )
-from muffin_ingest_dagster.defs.prices.raw import raw_price_history
+from muffin_ingest_dagster.defs.prices.raw import raw_price_chart
 from muffin_ingest_dagster.lib.resources import Postgres
 from muffin_ingest_dagster.lib.runtime import PRICE_RUN
 
@@ -30,7 +30,7 @@ from muffin_ingest_dagster.lib.runtime import PRICE_RUN
 #: silently — the way every sensor in the location once shipped stopped and the lanes behind them
 #: sat idle. Declaring it here changes nothing today and makes the intent survive the database.
 @dg.sensor(
-    target=raw_price_history,
+    target=raw_price_chart,
     minimum_interval_seconds=3600,
     default_status=dg.DefaultSensorStatus.RUNNING,
     description="A security with no history partition yet becomes one to fill.",
@@ -78,9 +78,13 @@ SWEEP_SCHEDULE = "nightly_prices"
 SWEEP_NIGHT_TAG = "muffin/sweep_night"
 SWEEP_LAST_TAG = "muffin/sweep_last"
 
+#: SINCE 2026-10-10 THE NIGHT ASKS YAHOO'S CHART DIRECTLY (`raw_price_chart`), so each bar is
+#: labelled with the currency the provider states. `raw_price_history`, the openbb lane, is left
+#: defined and unscheduled as the rollback until its files are dropped (umbrella
+#: docs/deferred/2026-10-10-the-openbb-price-raw-is-the-rollback.md).
 nightly_prices_job = dg.define_asset_job(
     SWEEP_SCHEDULE,
-    selection=dg.AssetSelection.assets(raw_price_history, price_bar_history),
+    selection=dg.AssetSelection.assets(raw_price_chart, price_bar_history),
     partitions_def=security_partitions,
     run_tags=PRICE_RUN,
 )
