@@ -81,6 +81,19 @@ class YahooRefused(Exception):
     """The request did not produce an answer — a transport fault, never an absence."""
 
 
+def refusal(status: int, endpoint: str) -> YahooRefused:
+    """A non-answer, named by its STATUS and never by the symbol asked about.
+
+    THE TEXT IS CLASSIFIED. Callers pass it to `vocab.throttled`, which matches `429` anywhere in a
+    message, so `HTTP 404 for 4290.T` read as a throttle and would stop a whole night's run on one
+    Japanese symbol. The status is the only evidence of a throttle; the symbol belongs in the
+    caller's log line, beside the message rather than inside it.
+    """
+    if status == 429:
+        return YahooRefused("HTTP 429 Too Many Requests")
+    return YahooRefused(f"HTTP {status} from {endpoint}")
+
+
 @dataclass(frozen=True)
 class Point:
     """One aligned row of Yahoo's parallel arrays: the date, the close, and EVERYTHING ELSE.
@@ -264,6 +277,7 @@ def fetch(
         params["includeAdjustedClose"] = "true"
     if events:
         params["events"] = events
+    refused: YahooRefused | None = None
     with metrics.request("yahoo") as outcome:
         try:
             response = httpx.get(
@@ -276,7 +290,11 @@ def fetch(
             raise YahooRefused(f"{type(exc).__name__}: {exc}") from exc
         if response.status_code != 200 and not _names_an_absence(response.content):
             outcome["outcome"] = "refused"
-            raise YahooRefused(f"HTTP {response.status_code} for {symbol}")
+            refused = refusal(response.status_code, "chart")
+    # RAISED OUTSIDE THE METRICS BLOCK: an exception escaping it is recorded as `transport`, so
+    # every refusal this endpoint ever met was counted as a request that never answered.
+    if refused is not None:
+        raise refused
     return Document(
         # THE REQUEST, NOT JUST THE ENDPOINT. The window and the interval decide what a chart body
         # even contains, so they are provenance — built from what we sent rather than read back off

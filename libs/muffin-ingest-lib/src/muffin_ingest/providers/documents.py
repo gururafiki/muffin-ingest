@@ -80,6 +80,7 @@ def _get(url: str, *, provider: str, headers: dict[str, str], timeout_s: float) 
     # `provider="http-cache:8080"` — and NSE would have joined it, one series for every document
     # provider. It is the nginx lesson reproduced one layer up: `$provider` is an explicit variable
     # per location, never `$proxy_host`. `yahoo_chart` and the openbb routes already named theirs.
+    refused: DocumentRefused | None = None
     with metrics.request(provider) as outcome:
         try:
             response = httpx.get(url, headers=headers, timeout=timeout_s, follow_redirects=True)
@@ -90,7 +91,11 @@ def _get(url: str, *, provider: str, headers: dict[str, str], timeout_s: float) 
             # body explains nothing; recording that as `empty` would make a config error look
             # like a provider that has stopped publishing.
             outcome["outcome"] = "refused"
-            raise DocumentRefused(f"{url}: HTTP {response.status_code}")
+            refused = DocumentRefused(f"{url}: HTTP {response.status_code}")
+    # RAISED OUTSIDE THE METRICS BLOCK, which records any exception escaping it as `transport`:
+    # raised inside, every refusal was counted as a request that never answered.
+    if refused is not None:
+        raise refused
     return Document(
         url=url,
         body=response.content,

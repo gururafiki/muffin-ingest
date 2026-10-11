@@ -206,6 +206,8 @@ def upsert(
     *,
     conflict: Sequence[str],
     update: Sequence[str] | None = None,
+    only_replacing: Mapping[str, Any] | None = None,
+    merge_json: Sequence[str] = (),
 ) -> WriteResult:
     """Insert many rows, updating on conflict — and dedupe on the conflict key first, always.
 
@@ -216,11 +218,27 @@ def upsert(
     THE CONFLICT TARGET MUST BE THE REAL KEY. A partial unique index is NOT covered by
     `on conflict (a, b)`: `unique … where is_primary` still throws and fails the whole statement,
     which is why moving such a flag takes two statements rather than an upsert.
+
+    `only_replacing` LIMITS WHICH STORED ROWS AN UPDATE MAY TOUCH, for a table two writers share a
+    key in. `{"source_code": "yfinance"}` updates a conflicting row only if it was Yahoo's: a
+    period SEC holds keeps SEC's row, and the offered row is simply not written. The key leaves
+    the source out on purpose (one row per period, whoever stated it), so the guard has to live in
+    the update rather than in the key. A row it declines is in `written` and not in `changed`.
+
+    `merge_json` NAMES jsonb COLUMNS AN UPDATE MERGES INTO RATHER THAN REPLACES: the stored object,
+    with the offered one's NON-NULL values laid over it. For a provider whose window rolls per
+    field, where a later answer covering the same row with fewer fields is narrower rather than a
+    correction (Yahoo's statement lines, measured 2026-10-11: Samsung's 2025-03-31 quarter keeps
+    ten of the ~180 lines the edge stored in August). A value the provider restates still wins.
     """
     if not rows:
         return WriteResult(written=0)
     if not conflict:
         raise WriterError("an upsert needs a conflict target; without one this is a plain insert")
+    if only_replacing is not None and (update is None or not only_replacing):
+        raise WriterError("only_replacing guards an update; it needs `update` and a column")
+    if merge_json and update is None:
+        raise WriterError("merge_json merges on update; with DO NOTHING there is nothing to merge")
 
     target = _qualified(table)
     keys = [_ident(c) for c in conflict]
@@ -241,21 +259,36 @@ def upsert(
             raise WriterError(
                 "every updatable column is part of the conflict key, so this can only DO NOTHING"
             )
-        assignments = ", ".join(f"{_ident(c)} = excluded.{_ident(c)}" for c in setters)
+        merged = {_ident(c) for c in merge_json}
+        unknown = merged - set(setters)
+        if unknown:
+            raise WriterError(f"merge_json column(s) {sorted(unknown)} are not being updated")
+
+        def offered_value(c: str) -> str:
+            if c in merged:
+                return f"coalesce({_STORED}.{c}, '{{}}'::jsonb) || jsonb_strip_nulls(excluded.{c})"
+            return f"excluded.{c}"
+
+        assignments = ", ".join(f"{_ident(c)} = {offered_value(c)}" for c in setters)
         # ONLY A ROW WHOSE VALUES DIFFER IS UPDATED (rule 5). `is distinct from` rather than `<>`,
         # because a NULL on either side makes `<>` NULL, and NULL is not true: a value that became
         # null, or stopped being null, would never be written. The conflict key is left out; it
         # is equal by construction.
         stored = ", ".join(f"{_STORED}.{_ident(c)}" for c in setters)
-        offered = ", ".join(f"excluded.{_ident(c)}" for c in setters)
+        offered = ", ".join(offered_value(c) for c in setters)
         action = f"do update set {assignments} where ({stored}) is distinct from ({offered})"
+        # The guard's VALUES are parameters like any other, appended after the rows' own: a
+        # source code is data, never SQL text.
+        for column in only_replacing or {}:
+            action += f" and {_STORED}.{_ident(column)} = %s"
+    guard_params = list((only_replacing or {}).values())
 
     # CHUNKED, AND THE DEDUPE STAYS WHOLE-SET. Splitting first and deduping per chunk would let one
     # conflict key survive in two chunks — the second statement would then silently overwrite the
     # first with whichever copy happened to land last, which is a different answer from the one
     # `dedupe_by` gives (last wins, once, and it is COUNTED). Deduping first also means the chunks
     # hold distinct keys, so they cannot collide with each other.
-    per_chunk = max(1, MAX_BIND_PARAMS // max(1, len(columns)))
+    per_chunk = max(1, (MAX_BIND_PARAMS - len(guard_params)) // max(1, len(columns)))
     changed: int | None = 0
     for start in range(0, len(deduped), per_chunk):
         chunk = deduped[start : start + per_chunk]
@@ -264,7 +297,7 @@ def upsert(
             f"values {_values_sql(columns, len(chunk))} "
             f"on conflict ({', '.join(keys)}) {action}"
         )
-        cur.execute(sql, _flatten(chunk, columns))
+        cur.execute(sql, _flatten(chunk, columns) + guard_params)
         # INSERTED PLUS UPDATED, which is what psycopg reports for `insert … on conflict`. A
         # cursor that cannot say (-1, or no attribute at all) makes the whole count unknown rather
         # than a partial sum that would read as a real one.
@@ -308,3 +341,75 @@ def replace_scope(
     return WriteResult(
         written=result.written, collapsed=result.collapsed, retracted=1, changed=result.changed
     )
+
+
+#: A SQL type named in a cast. Plain names only (`uuid`, `text`, `numeric`, `date`): this is
+#: interpolated, so it is held to the same rule as an identifier.
+_TYPE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def update_existing(
+    cur: DbCursor,
+    table: str,
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    key: str,
+    types: Mapping[str, str],
+) -> WriteResult:
+    """Set columns on rows that already exist. Never inserts, and never erases.
+
+    For facts one lane observes about an entity another lane creates: a company's reporting
+    currency and operating country belong on `market.security`, which discovery owns. An upsert
+    would mint a security from a partial row; this touches only rows that are there.
+
+    NONE MEANS "NOT STATED", NEVER "ERASE". Each column is set to `coalesce(offered, stored)`, so a
+    document that omits a company's country leaves the country the company already has. A lane that
+    must retract a value says so with a different tool (`replace_scope`), not with a null here.
+
+    ONLY A ROW WHOSE VALUES DIFFER IS WRITTEN (rule 5), so `changed` counts real changes.
+
+    EVERY VALUE IS CAST, to `types[column]`. A VALUES list in a FROM clause types an untyped
+    parameter as `text`, and `uuid = text` has no operator: without the casts the statement fails
+    on the key comparison before it reaches a row.
+    """
+    if not rows:
+        return WriteResult(written=0)
+    target = _qualified(table)
+    _ident(key)
+    columns = sorted({c for row in rows for c in row} - {key})
+    if not columns:
+        raise WriterError("an update needs at least one column besides the key")
+    for c in [key, *columns]:
+        _ident(c)
+        if c not in types or not _TYPE.match(types[c]):
+            raise WriterError(f"column {c!r} needs a plain SQL type in `types`")
+    # A row stating nothing would be a no-op on the server; it is dropped here so `written` counts
+    # rows that carried a fact.
+    stating = [
+        r for r in rows if r.get(key) is not None and any(r.get(c) is not None for c in columns)
+    ]
+    deduped, collapsed = dedupe_by(stating, lambda r: r.get(key))
+    if not deduped:
+        return WriteResult(written=0, collapsed=collapsed)
+
+    ordered = [key, *columns]
+    one = "(" + ", ".join(f"%s::{types[c]}" for c in ordered) + ")"
+    assignments = ", ".join(f"{c} = coalesce(v.{c}, {_STORED}.{c})" for c in columns)
+    stored = ", ".join(f"{_STORED}.{c}" for c in columns)
+    offered = ", ".join(f"coalesce(v.{c}, {_STORED}.{c})" for c in columns)
+    per_chunk = max(1, MAX_BIND_PARAMS // len(ordered))
+    changed: int | None = 0
+    for start in range(0, len(deduped), per_chunk):
+        chunk = deduped[start : start + per_chunk]
+        sql = (
+            f"update {target} as {_STORED} set {assignments} "
+            f"from (values {', '.join([one] * len(chunk))}) as v ({', '.join(ordered)}) "
+            f"where {_STORED}.{key} = v.{key} and ({stored}) is distinct from ({offered})"
+        )
+        cur.execute(sql, _flatten(chunk, ordered))
+        count = getattr(cur, "rowcount", None)
+        if changed is not None and isinstance(count, int) and count >= 0:
+            changed += count
+        else:
+            changed = None
+    return WriteResult(written=len(deduped), collapsed=collapsed, changed=changed)
