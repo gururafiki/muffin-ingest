@@ -34,10 +34,15 @@ HISTORY_START = date(1970, 1, 1)
 
 
 #: SECONDS BETWEEN THE STARTS OF TWO CHART REQUESTS — the price lane's pace since it called Yahoo
-#: directly (2026-10-10). Not faster than the openbb lane it replaced, which is the decision taken
-#: (spec decision 5): the 2026-10-06 night spent ~3,500 s on 2,500 securities, ~1.4 s each, and
-#: openbb asked Yahoo at least once per security, so one request per 1.4 s is that rate or slower.
-#: Going faster is how this provider's allowance was lost on 2026-09-19.
+#: directly (2026-10-10), kept by Phase 4 decision 17 (2026-10-11).
+#:
+#: IT IS NOT THE OLD LANE'S RATE, AND THIS COMMENT ONCE SAID IT WAS. 1.4 s divided the 2026-10-06
+#: night's time less stage 2, which includes ~15 s of start-up in each of 100 runs. The openbb
+#: stage-1 step itself took 1,578 s for ~2,450 securities, ~0.64 s each, measured from its
+#: `STEP_SUCCESS.duration_ms`. So the lane asks Yahoo at ~45% of the old rate, and its first night
+#: took 134 minutes against 96. It was kept: the cost is time only, nothing else is scheduled before
+#: 03:00, and the Phase 4 company lane adds ~2,400 Yahoo requests a day at the same pace. Going
+#: faster is how this provider's allowance was lost on 2026-09-19.
 #:
 #: IF THE `yfinance` POOL IS EVER WIDENED PAST 1, THIS SILENTLY BECOMES N TIMES LOOSER.
 CHART_SECONDS_BETWEEN_REQUESTS = 1.4

@@ -381,6 +381,22 @@ def test_the_fx_request_is_the_url_it_has_always_been(sent: list[httpx.URL]) -> 
     assert str(sent[0]).endswith("/v8/finance/chart/EURUSD=X?range=5d&interval=1d")
 
 
+def test_a_slash_in_a_symbol_stays_inside_one_path_segment(sent: list[httpx.URL]) -> None:
+    """Asked raw, `3BBIF/F.BK` is two path segments, and Yahoo's answer to that is an HTML 404 that
+    names nothing, so the lane cannot record the absence. Encoded, it is one symbol."""
+    doc = yahoo_chart.fetch("3BBIF/F.BK", range_="5d", interval="1d")
+    assert sent[0].raw_path == b"/v8/finance/chart/3BBIF%2FF.BK?range=5d&interval=1d"
+    assert doc.url == str(sent[0])
+
+
+def test_only_a_slash_is_encoded() -> None:
+    """`=` and `^` reach Yahoo as they always have, so no stored http-cache key moves."""
+    assert yahoo_chart.path_segment("EURUSD=X") == "EURUSD=X"
+    assert yahoo_chart.path_segment("^GSPC") == "^GSPC"
+    assert yahoo_chart.path_segment("PE&OLES*.MX") == "PE&OLES*.MX"
+    assert yahoo_chart.path_segment("BRK/B") == "BRK%2FB"
+
+
 @pytest.mark.parametrize(
     "window", [{}, {"range_": "5d", "period1": 0, "period2": 1}, {"period1": 0}]
 )
