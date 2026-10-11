@@ -58,6 +58,25 @@ REAL_ORIGIN = "https://query2.finance.yahoo.com"
 BROWSER_UA = "Mozilla/5.0 (compatible; muffin-market-data)"
 
 
+def path_segment(symbol: str) -> str:
+    """A symbol as ONE path segment of a Yahoo URL: `/` is sent as `%2F`, and nothing else changes.
+
+    OpenFIGI's Bloomberg spelling of some share classes carries a slash (`3BBIF/F.BK`, a Thai
+    foreign-board line). Interpolated raw it becomes a second path segment, and Yahoo answers an
+    HTML 404 that names nothing, so the price lane counted a transport failure and asked again on
+    every rotation: 18 symbols on 2026-10-11 (Phase 4 decision 18). Encoded, Yahoo states the
+    absence (`No data found, symbol may be delisted`) and the lane records it like any other.
+
+    ONLY `/`. `=` and `^` stay as they are, because the FX lane's chart URLs are http-cache keys and
+    must not move. http-cache forwards the path as it receives it (muffin-deployment#430); before
+    that it decoded `%2F` back into a slash, so both halves are needed.
+
+    Every Yahoo request whose path ends in a symbol goes through this: the chart here, and the
+    company lane's quoteSummary and fundamentals-timeseries.
+    """
+    return symbol.replace("/", "%2F")
+
+
 class YahooRefused(Exception):
     """The request did not produce an answer — a transport fault, never an absence."""
 
@@ -233,7 +252,7 @@ def fetch(
     if (range_ is None) == (period1 is None or period2 is None):
         raise ValueError("ask for a range preset or for period1 and period2, not both or neither")
     base = settings.provider_base("yahoo", REAL_ORIGIN)
-    url = f"{base}/v8/finance/chart/{symbol}"
+    url = f"{base}/v8/finance/chart/{path_segment(symbol)}"
     # THE ORDER OF THESE IS THE CACHE KEY, so the FX lane's two parameters keep the order they
     # have always had: a reordered URL is a new entry in http-cache, not a hit.
     params: dict[str, str] = (
