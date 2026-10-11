@@ -228,3 +228,39 @@ jobs:
               print(f"::error::{m}")
           print(f"{len(NAMESPACES) - len(missing)}/{len(NAMESPACES)} namespaces resolve")
           sys.exit(1 if missing else 0)'
+
+      - name: The Yahoo statement vocabulary we copied is the one the image carries
+        # TWO TABLES ARE COPIED RATHER THAN IMPORTED, and a copy drifts silently. `STATEMENT_KEYS`
+        # is yfinance's `fundamentals_keys` (the types the company lane asks Yahoo for) and
+        # `OPENBB_FIELD` is openbb-yfinance's per-statement `__alias_dict__`, inverted: the spelling
+        # every stored statement row uses, and `metric_source_field` maps metrics to. They are copied
+        # because the library carries no hub and an upgrade must not change what is asked or how it
+        # is spelled without a PR saying so. This makes that PR fail instead: after a yfinance or
+        # openbb bump, re-copy the table and re-check the spelling parity test.
+        run: |
+          docker run --rm $IMAGE python -c '
+          import sys
+          from yfinance.const import fundamentals_keys
+          from openbb_yfinance.models.balance_sheet import YFinanceBalanceSheetData
+          from openbb_yfinance.models.cash_flow import YFinanceCashFlowStatementData
+          from openbb_yfinance.models.income_statement import YFinanceIncomeStatementData
+          from muffin_ingest.facets import statements
+          from muffin_ingest.providers import yahoo_timeseries
+
+          errors = []
+          yahoo = {"income": "financials", "balance": "balance-sheet", "cash": "cash-flow"}
+          for ours, theirs in yahoo.items():
+              if tuple(fundamentals_keys[theirs]) != yahoo_timeseries.STATEMENT_KEYS[ours]:
+                  errors.append(f"STATEMENT_KEYS[{ours!r}] differs from yfinance fundamentals_keys[{theirs!r}]")
+          models = {
+              "income": YFinanceIncomeStatementData,
+              "balance": YFinanceBalanceSheetData,
+              "cash": YFinanceCashFlowStatementData,
+          }
+          for statement, model in models.items():
+              if {v: k for k, v in model.__alias_dict__.items()} != statements.OPENBB_FIELD[statement]:
+                  errors.append(f"OPENBB_FIELD[{statement!r}] differs from {model.__name__}.__alias_dict__")
+          for e in errors:
+              print(f"::error::{e}")
+          print(f"{6 - len(errors)}/6 tables match")
+          sys.exit(1 if errors else 0)'

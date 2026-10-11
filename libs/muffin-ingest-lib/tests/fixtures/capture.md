@@ -147,3 +147,54 @@ r = httpx.get(f"{base}/v8/finance/chart/AMRM.TA", params=params,
 pathlib.Path("/tmp/amrm.body").write_bytes(r.content)
 PY
 ```
+
+## `yahoo_summary_*.json.gz` and `yahoo_timeseries_*.json.gz` — the company lane, 2026-10-10/11
+
+Response bodies, **gzipped only for size**: `gzip.decompress` gives the bytes Yahoo sent. Thirteen
+summaries and sixteen statement bodies were captured from the node on 2026-10-10, with
+`formatted=false` (numbers bare, as the lane asks); five summaries and twelve statement bodies were
+captured on 2026-10-11 from a workstation, through the library's own `yahoo_session`,
+`yahoo_summary` and `yahoo_timeseries`, WITHOUT `formatted=false`, so their numbers arrive wrapped
+as `{"raw": …, "fmt": …}` and the rules are held to read both shapes.
+
+The listings are chosen so the plausible wrong rules disagree with the right ones:
+
+| listing | quote / reports | what it pins |
+|---|---|---|
+| `BHP.AX`, `0992.HK`, `CSU.TO` | AUD / USD, HKD / USD, CAD / USD | Yahoo's P/B is **right**: `bookValue` is converted to the quote currency |
+| `VOD.L`, `SHEL.L` | GBp / EUR, GBp / USD | P/B out by 100; `defaultKeyStatistics.forwardPE` 1,001 and 682 |
+| `BARC.L` | GBp / GBP | the same major unit spelled differently, so the forward P/E fallback stays shut |
+| `NPN.JO`, `SBK.JO` | ZAc / USD, ZAc / ZAR | cents: cap in rand, P/B out by 100 |
+| `AZRG.TA`, `NBK.KW` | ILA / ILS, KWF / KWD | agorot (100) and fils (**1,000**) |
+| `005930.KS` | KRW / KRW | no `summaryDetail.forwardPE`; its annual income body reproduces the edge's stored row exactly |
+| `AAPL` | USD / USD | 294 KB, every module; a 52-week quarter end (06-27) that the timeseries files under 06-30 |
+| `VOD.L`, `NESN.SW`, `BHP.AX`, `NPN.JO` (timeseries) | — | half-year reporters, labelled `3M` by Yahoo |
+| `0992.HK` (timeseries) | — | a quarterly reporter whose fiscal Q4 is missing: one 182-day gap among 92-day ones |
+| `ASMLF`, `SPY` | USD / EUR, an ETF | an OTC foreign-ordinary line; an ETF's three modules |
+| `BDMS-F.BK` | — | HTTP 404 `Quote not found for symbol` — a named absence |
+
+`yahoo_statement_stored_005930.KS_income_annual.json` is the row the edge wrote for Samsung's 2025
+annual income statement (through openbb), read from production on 2026-10-10: the spelling contract.
+
+Re-capture with the library itself, so the request is the lane's. **Never print the crumb or the
+cookie**: `Session` keeps both out of `repr`, and `yahoo_summary.fetch` stores the URL with the crumb
+redacted.
+
+```python
+import time
+from datetime import date
+from pathlib import Path
+from muffin_ingest.providers import yahoo_session, yahoo_summary, yahoo_timeseries
+
+session = yahoo_session.open_session()
+for symbol in ["NPN.JO", "BARC.L"]:
+    Path(f"summary_{symbol}.json").write_bytes(yahoo_summary.fetch(symbol, session).body)
+    time.sleep(1.5)
+    for frequency in yahoo_timeseries.FREQUENCIES:
+        body = yahoo_timeseries.fetch(symbol, frequency, today=date.today()).body
+        Path(f"timeseries_{symbol}_{frequency}.json").write_bytes(body)
+        time.sleep(1.5)
+```
+
+then `gzip -9 -n -c <file> > yahoo_summary_<symbol>.json.gz` (`-n`, so the archive carries no name
+or timestamp and a re-capture of the same bytes is the same file).

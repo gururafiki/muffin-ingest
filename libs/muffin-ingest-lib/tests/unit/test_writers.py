@@ -302,3 +302,107 @@ def test_a_cursor_that_cannot_count_leaves_changed_unknown() -> None:
     )
     assert result.changed is None
     assert upsert(FakeCursor(), "market.thing", [{"k": 1}], conflict=["k"]).changed is None
+
+
+# --- options for a table two writers share -------------------------------------------------------
+
+STATEMENT = {
+    "security_id": "s",
+    "statement": "income",
+    "period_ending": "2025-12-31",
+    "period_type": "annual",
+    "data": '{"ebit": 1}',
+    "source_code": "yfinance",
+}
+STATEMENT_KEY = ["security_id", "statement", "period_ending", "period_type"]
+
+
+def test_only_replacing_updates_a_conflicting_row_only_if_it_is_the_writer_s_own() -> None:
+    """A period SEC holds keeps SEC's row: the key leaves the source out on purpose, so the guard
+    lives in the update, and its value is a parameter rather than SQL text."""
+    cur = FakeCursor()
+    writers.upsert(
+        cur,
+        "market.security_statement",
+        [STATEMENT],
+        conflict=STATEMENT_KEY,
+        update=["data", "source_code"],
+        only_replacing={"source_code": "yfinance"},
+    )
+    sql, params = cur.calls[0]
+    assert sql.endswith(
+        "is distinct from (excluded.data, excluded.source_code) and stored_row.source_code = %s"
+    )
+    assert params[-1] == "yfinance" and "yfinance" not in sql
+    with pytest.raises(writers.WriterError):
+        writers.upsert(
+            cur, "market.x", [STATEMENT], conflict=STATEMENT_KEY, only_replacing={"a": 1}
+        )
+
+
+def test_merge_json_lays_the_offered_values_over_the_stored_object() -> None:
+    """Yahoo's statement lines roll per line: a narrower answer must not erase a stored figure."""
+    cur = FakeCursor()
+    writers.upsert(
+        cur,
+        "market.security_statement",
+        [STATEMENT],
+        conflict=STATEMENT_KEY,
+        update=["data", "source_code"],
+        merge_json=["data"],
+    )
+    sql, _ = cur.calls[0]
+    merged = "coalesce(stored_row.data, '{}'::jsonb) || jsonb_strip_nulls(excluded.data)"
+    assert f"set data = {merged}" in sql
+    assert f"is distinct from ({merged}, excluded.source_code)" in sql, "compared as written"
+    with pytest.raises(writers.WriterError):
+        writers.upsert(cur, "market.x", [STATEMENT], conflict=STATEMENT_KEY, merge_json=["data"])
+    with pytest.raises(writers.WriterError):
+        writers.upsert(
+            cur,
+            "market.x",
+            [STATEMENT],
+            conflict=STATEMENT_KEY,
+            update=["source_code"],
+            merge_json=["data"],
+        )
+
+
+def test_update_existing_never_inserts_never_erases_and_casts_every_value() -> None:
+    cur = FakeCursor()
+    result = writers.update_existing(
+        cur,
+        "market.security",
+        [
+            {"security_id": "a", "reporting_currency": "EUR", "provider_country_iso2": None},
+            {"security_id": "b", "reporting_currency": None, "provider_country_iso2": None},
+            {"security_id": "a", "reporting_currency": "USD", "provider_country_iso2": "GB"},
+        ],
+        key="security_id",
+        types={
+            "security_id": "uuid",
+            "reporting_currency": "text",
+            "provider_country_iso2": "text",
+        },
+    )
+    assert (result.written, result.collapsed) == (1, 1), "b states nothing; a's later row wins"
+    sql, params = cur.calls[0]
+    assert sql.startswith(
+        "update market.security as stored_row set provider_country_iso2 = coalesce("
+    )
+    assert "(values (%s::uuid, %s::text, %s::text)) as v" in sql
+    assert "as v (security_id, provider_country_iso2, reporting_currency)" in sql
+    assert "insert" not in sql
+    assert params == ["a", "GB", "USD"]
+    with pytest.raises(writers.WriterError):
+        writers.update_existing(
+            cur, "market.security", [{"security_id": "a", "x": 1}], key="security_id", types={}
+        )
+    with pytest.raises(writers.WriterError):
+        writers.update_existing(
+            cur,
+            "market.security",
+            [{"security_id": "a", "x": 1}],
+            key="security_id",
+            types={"security_id": "uuid", "x": "text; drop table market.security"},
+        )
