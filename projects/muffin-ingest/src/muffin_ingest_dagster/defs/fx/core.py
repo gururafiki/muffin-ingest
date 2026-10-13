@@ -6,6 +6,7 @@ from typing import Any
 import dagster as dg
 from dagster import AssetExecutionContext
 from muffin_ingest.facets import fx
+from muffin_ingest.writers import upsert
 
 from muffin_ingest_dagster.defs.fx.partitions import (
     HISTORY_PARTITIONS_PER_RUN,
@@ -20,6 +21,13 @@ from muffin_ingest_dagster.lib.resources import Postgres
 # wrong for the DATE-partitioned spot one; passing the key per call site is what makes that
 # impossible to get wrong silently.
 _loaded_rows = partitioned.loaded_rows
+
+
+#: HOW FAR BACK A NIGHT'S BODY IS READ FOR A DAY STORED WITHOUT A RATE. The spot request is five
+#: trading days, so a week of calendar days covers whatever it carries. A day Yahoo fills after its
+#: own partition ran is then published by a later night, as the price lane re-reads its last week.
+#: Yahoo left Monday 2026-10-12 out of every pair's daily series, and 19 hours later still had not.
+REREAD = timedelta(days=7)
 
 
 def _not_seeded(known: frozenset[str]) -> str:
@@ -60,32 +68,66 @@ def fx_rate(
     # per copy; windowing each file to its own day publishes each day exactly once, from the
     # partition that claims it.
     rates: list[fx.Rate] = []
+    earlier: list[fx.Rate] = []
     stats: dict[str, int] = {}
     stale: list[str] = []
+    skipped: list[str] = []
     for key, part in partitioned.rows_per_partition(context, raw_fx_spot).items():
         day = fx_day.time_window_for_partition_key(key)
-        parsed = fx.normalise(part, window=(day.start.date(), day.end.date()))
-        # A WEEKDAY WITH NO RATE INSIDE ITS WINDOW, FROM BODIES THAT DO CARRY RATES, IS A STALE
-        # ANSWER, not a day without FX. http-cache served the 2026-09-17 00:00 run a body cached a
-        # day earlier: `rows=0, outside_window=152`, and the partition materialised as a day with
-        # no rates. FX trades every weekday; a weekend has no session, so there the same shape is
-        # the truth. Accepted edge: 25 Dec and 1 Jan have no session and will fail, loudly.
-        if not parsed.rates and parsed.stats.get("outside_window", 0) and day.start.weekday() < 5:
-            stale.append(key)
-        rates += parsed.rates
+        own_day = day.start.date()
+        parsed = fx.normalise(part, window=(own_day - REREAD, day.end.date()))
+        own = [r for r in parsed.rates if r.as_of >= own_day]
+        # A WEEKDAY WITH NO RATE OF ITS OWN IS ONE OF TWO THINGS, and the body's age says which.
+        #
+        # A STALE ANSWER: http-cache served the 2026-09-17 00:00 run a body cached a day earlier,
+        # so every point predated the 09-16 window (`rows=0, outside_window=152`) and the partition
+        # materialised as a day with no rates. Such a body was produced before the day ended. It
+        # fails, naming the partition, so a retry is visible and nothing claims the day.
+        #
+        # A DAY THE PROVIDER LEFT OUT: Yahoo has no bar for Monday 2026-10-12 in any pair's daily
+        # series, in a body stamped 2026-10-13 00:00:27 and again at 19:07. A body produced after
+        # the day ended is the provider's answer for it, so the partition materialises empty and
+        # names the day. Failing it, as this did until 2026-10-13, made a re-run pointless and the
+        # failure permanent. The 09-17 decision was this rule; the broader one was a deviation.
+        #
+        # A weekend has no session, so there an empty day is simply the truth.
+        if not own and parsed.stats.get("points", 0) and day.start.weekday() < 5:
+            fresh = parsed.newest_stamp is not None and parsed.newest_stamp >= day.end.timestamp()
+            (skipped if fresh else stale).append(key)
+        rates += own
+        # EARLIER DAYS ARE OFFERED, NEVER IMPOSED. A night's body also carries the days before its
+        # own, so a day Yahoo filled late is written here, but only where no rate is stored: each
+        # day is stated by its own partition's body, and an old body re-run in a backfill must not
+        # overwrite what a newer one said.
+        earlier += [r for r in parsed.rates if r.as_of < own_day]
         for name, count in parsed.stats.items():
             stats[name] = stats.get(name, 0) + count
     if stale:
         raise dg.Failure(
             description=(
-                f"no rate inside the window of weekday partition(s) {', '.join(stale)} while the "
-                f"stored bodies carry rates for other days: a stale or cached answer. "
+                f"no rate inside the window of weekday partition(s) {', '.join(stale)}, from "
+                f"bodies all produced before the day ended: a stale or cached answer. "
                 f"Re-materialise raw_fx_spot and fx_rate for them."
             ),
             metadata={"stale_partitions": ", ".join(stale), **stats},
         )
+    if skipped:
+        context.log.warning(
+            "Yahoo has no bar for weekday partition(s) %s in bodies produced after the day ended; "
+            "they materialise empty, and a later night fills them if Yahoo does",
+            ", ".join(skipped),
+        )
     with postgres.connect() as conn:
         known = fx.known_currencies(conn)
+        with conn.cursor() as cur:
+            refill = upsert(
+                cur,
+                "market.fx_rate",
+                fx.core_rows(fx.with_subunits(earlier, known=known)),
+                conflict=["currency_code", "as_of"],
+                update=None,
+            )
+        conn.commit()
     with_subunits = fx.with_subunits(rates, known=known)
 
     context.add_output_metadata(
@@ -95,6 +137,10 @@ def fx_rate(
             "observed": len(rates),
             "derived": len(with_subunits) - len(rates),
             "subunits_not_seeded": _not_seeded(known),
+            # Earlier days a body carried, offered insert-only: `refilled` is how many were missing.
+            "reread_offered": refill.written,
+            "refilled": -1 if refill.changed is None else refill.changed,
+            "provider_skipped_days": ", ".join(skipped) or "none",
         }
     )
     if stats.get("unreadable"):
