@@ -181,6 +181,11 @@ class Normalised:
 
     rates: list[Rate]
     stats: dict[str, int]
+    #: The most recent moment any body speaks for, as an epoch: its `regularMarketTime` or its
+    #: newest point, whichever is later. A body produced after a day ended can say that day had no
+    #: bar; one produced before it cannot, which is what `fx_rate` needs to tell a provider that
+    #: skipped a day from a cache that served an old answer.
+    newest_stamp: float | None = None
 
 
 def normalise(
@@ -221,6 +226,7 @@ def normalise(
         # partition, which is one call per currency.
         "legacy_rows": 0,
     }
+    newest_stamp: float | None = None
     for row in rows:
         body = row.get("body")
         if body is None:
@@ -233,6 +239,13 @@ def normalise(
             stats["unreadable"] += 1
             continue
         stats["points"] += len(series.points)
+        stamps = [p.timestamp for p in series.points if p.timestamp is not None]
+        market_time = series.meta.get("regularMarketTime")
+        if isinstance(market_time, int | float) and not isinstance(market_time, bool):
+            stamps.append(float(market_time))
+        if stamps:
+            newest = max(stamps)
+            newest_stamp = newest if newest_stamp is None else max(newest_stamp, newest)
         stats["live_points"] += series.live_points
         stats["null_closes"] += series.null_closes
         stats["undatable"] += series.undatable
@@ -264,7 +277,7 @@ def normalise(
                     derived_from=None,
                 )
             )
-    return Normalised(rates=out, stats=stats)
+    return Normalised(rates=out, stats=stats, newest_stamp=newest_stamp)
 
 
 def with_subunits(rates: Sequence[Rate], *, known: Collection[str] | None = None) -> list[Rate]:

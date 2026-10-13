@@ -115,10 +115,12 @@ def columns_of(parquet: Path) -> list[str]:
     )
 
 
-def chart_body(points: Sequence[tuple[date, float]]) -> bytes:
+def chart_body(
+    points: Sequence[tuple[date, float | None]], *, market_time: datetime | None = None
+) -> bytes:
     """A Yahoo chart body in the provider's real shape — nested parallel arrays under
     `chart.result[0]`, each bar stamped at the London session open with `gmtoffset` saying so, and
-    no live quote."""
+    no live quote. `market_time` is the `regularMarketTime` the body was produced at."""
     tz = timezone(timedelta(hours=1))
     stamps = [int(datetime(d.year, d.month, d.day, tzinfo=tz).timestamp()) for d, _ in points]
     closes = [close for _, close in points]
@@ -129,7 +131,12 @@ def chart_body(points: Sequence[tuple[date, float]]) -> bytes:
         "close": closes,
         "volume": [0] * len(closes),
     }
-    meta = {"gmtoffset": 3600, "exchangeTimezoneName": "Europe/London", "regularMarketTime": 0}
+    produced = int(market_time.timestamp()) if market_time is not None else 0
+    meta = {
+        "gmtoffset": 3600,
+        "exchangeTimezoneName": "Europe/London",
+        "regularMarketTime": produced,
+    }
     result = {"meta": meta, "timestamp": stamps, "indicators": {"quote": [quote]}}
     return json.dumps({"chart": {"error": None, "result": [result]}}).encode()
 
@@ -451,8 +458,81 @@ def test_a_stale_body_fails_a_weekday_fx_partition_instead_of_publishing_nothing
     assert saturday.success, "a weekend has no session, so an empty day there is the truth"
 
 
+def test_a_weekday_the_provider_left_out_materialises_empty_and_says_so(tmp_path: Path) -> None:
+    """A BODY PRODUCED AFTER THE DAY ENDED IS THE PROVIDER'S ANSWER FOR IT.
+
+    Yahoo has no bar for Monday 2026-10-12 in any pair's daily series: the body fetched at
+    2026-10-13 00:00 ran Thursday, Friday, then Tuesday, and a re-fetch at 19:07 was the same. The
+    guard failed the partition as stale, and a re-run could never change that. The 09-17 decision
+    was to fail only a body produced before the day ended, which is what a stale cache serves.
+    """
+    from muffin_ingest_dagster.defs.fx import core as fx_core
+    from muffin_ingest_dagster.defs.fx import raw as fx_raw
+
+    resources = {
+        "postgres": FxPostgres(),
+        "parquet_io": ParquetIOManager(str(tmp_path)),
+        "postgres_io": CapturingPostgresIO(),
+    }
+    without_monday = chart_body(
+        [(date(2026, 10, 8), 1.1201), (date(2026, 10, 9), 1.1213), (date(2026, 10, 13), None)],
+        market_time=datetime(2026, 10, 13, 0, 0, 27, tzinfo=UTC),
+    )
+    CAPTURED_WRITES.clear()
+    with serving(without_monday):
+        result = dg.materialize(
+            [fx_raw.raw_fx_spot, fx_core.fx_rate], partition_key="2026-10-12", resources=resources
+        )
+    assert result.success, "a day the provider left out is not a stale answer"
+    meta = {
+        k: v.value for k, v in result.asset_materializations_for_node("fx_rate")[0].metadata.items()
+    }
+    assert meta["provider_skipped_days"] == "2026-10-12"
+    assert CAPTURED_WRITES == [[]], "the partition claims the day and holds no rate for it"
+
+
+def test_a_night_offers_the_days_before_its_own_insert_only(tmp_path: Path) -> None:
+    """A DAY YAHOO FILLS LATE ARRIVES WITH A LATER NIGHT, and never overwrites a stored one.
+
+    The 10-09 partition's body also carries 10-07 and a 10-08 Yahoo filled late. Those go out as
+    an insert that does nothing on a conflict, so a day already stated by its own partition keeps
+    that partition's value; only the partition's own day is written through the manager.
+    """
+    from muffin_ingest_dagster.defs.fx import core as fx_core
+    from muffin_ingest_dagster.defs.fx import raw as fx_raw
+
+    resources = {
+        "postgres": FxPostgres(),
+        "parquet_io": ParquetIOManager(str(tmp_path)),
+        "postgres_io": CapturingPostgresIO(),
+    }
+    filled = chart_body(
+        [(date(2026, 10, 7), 1.1254), (date(2026, 10, 8), 1.1201), (date(2026, 10, 9), 1.1213)],
+        market_time=datetime(2026, 10, 10, 0, 0, 30, tzinfo=UTC),
+    )
+    CAPTURED_WRITES.clear()
+    FX_STATEMENTS.clear()
+    with serving(filled):
+        result = dg.materialize(
+            [fx_raw.raw_fx_spot, fx_core.fx_rate], partition_key="2026-10-09", resources=resources
+        )
+    assert result.success
+    own = {(r["currency_code"], r["as_of"]) for batch in CAPTURED_WRITES for r in batch}
+    assert own == {("EUR", "2026-10-09"), ("JPY", "2026-10-09")}
+    offers = [(sql, params) for sql, params in FX_STATEMENTS if sql.startswith("insert into")]
+    assert len(offers) == 1
+    sql, params = offers[0]
+    assert sql.endswith("on conflict (currency_code, as_of) do nothing"), sql
+    assert "2026-10-08" in params and "2026-10-07" in params and "2026-10-09" not in params
+
+
+#: Every statement the FX lane sent its own connection, in order: the askable query, the known
+#: currencies, and the re-read's insert-only offer.
+FX_STATEMENTS: list[tuple[str, list[Any]]] = []
+
+
 class FxConn:
-    """Answers the one query `raw_fx_spot` makes."""
+    """Answers the one query `raw_fx_spot` makes, and records every statement."""
 
     def cursor(self) -> FxConn:
         return self
@@ -464,7 +544,7 @@ class FxConn:
         return None
 
     def execute(self, sql_text: str, params: Any = ()) -> None:
-        return None
+        FX_STATEMENTS.append((" ".join(sql_text.split()), list(params)))
 
     def fetchall(self) -> list[tuple[Any, ...]]:
         return [("EUR",), ("JPY",)]
