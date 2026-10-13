@@ -173,6 +173,36 @@ docker rm -f t-pg; docker image rm postgres:17-alpine
   was OOM-killed on 2026-10-04; the kernel picked the probe, and could as well have picked a run.
   Batch, and watch the RSS.
 
+## Run a lane end to end on the node, writing, as the worker
+
+When local Docker is wedged and the question is "does this branch's lane run, and what does it
+write?", build the database the way CI does and run the lane against it, writing. Done 2026-10-13
+for the companies family (muffin-ingest#110): five companies, three jobs, sixteen Yahoo requests.
+
+1. **Sync** muffin-deployment's `stack/supabase/migrations-legacy/` and `migrations/`, and this
+   checkout's `libs/muffin-ingest-lib/src/` and `projects/muffin-ingest/src/`, to a directory on the
+   node with `rsync`.
+2. **Build the database as CI's `migrations` job does:** `postgres:17-alpine`, the roles `anon`,
+   `authenticated` and `service_role`, every legacy migration, then every migration after the
+   baseline (`grep -v _baseline`), each `--single-transaction -v ON_ERROR_STOP=1`. Wait on a real
+   query first, not `pg_isready`.
+3. **Seed what the ingest learns at runtime.** `market.currency` holds only what a migration seeds
+   (`GBX`), so add the codes the lane will meet. Add the subjects: `market.security` rows (`name`,
+   `security_type_code` are required) and their `market.security_provider_symbol` rows.
+4. **Connect as the worker.** `ingest_rw` exists with its 120 s timeout and no login; give it one
+   (`alter role ingest_rw login password …`). The run then needs every grant production needs, so a
+   missing one fails here instead of passing under a superuser.
+5. **Run the production image** with `--network container:<pg>`, `PYTHONPATH` set to the synced
+   sources, `INGEST_DATABASE_URL` the worker, `MUFFIN_RAW_ROOT` a writable directory and a memory
+   limit. Without `HTTP_CACHE_URL` the providers are asked directly; set it only where the cache
+   already has the location the lane needs.
+6. **Drive the assets with `dg.materialize`**, explicit resources (`Postgres()`, `ParquetIOManager`,
+   `RawStore`, `PostgresIOManager`) and the two range tags, so the multi-partition seam is the one
+   exercised. Print each asset's metadata and each check, then read the rows with `psql`. Run it a
+   second time: a lane that extends or rotates should ask nothing and change nothing.
+7. **Tear down** the container and the directory. Raw files the image wrote are not yours to delete
+   without `sudo`.
+
 ## Drive a branch read-only against production
 
 The question a fixture cannot answer is "what would this branch do to the REAL data?". Measured
