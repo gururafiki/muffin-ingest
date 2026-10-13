@@ -114,6 +114,7 @@ def _clean(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     fakes.PROBES.clear()
     fakes.RETRACTIONS.clear()
     fakes.STORED_LABELS.clear()
+    fakes.ACTION_RETRACTIONS.clear()
     saved = list(fakes.UNIVERSE)
     yield
     fakes.UNIVERSE[:] = saved
@@ -126,6 +127,7 @@ def night(
     *,
     stage_2: bool = True,
     check: bool = False,
+    actions: bool = False,
 ) -> dg.ExecuteInProcessResult:
     """One run of the nightly job over `subjects` as a range, the shape a night's slice takes."""
     fakes.UNIVERSE[:] = subjects
@@ -133,6 +135,8 @@ def night(
     assets: list[Any] = [prices_raw.raw_price_chart]
     if stage_2:
         assets.append(prices_core.price_bar_history)
+    if actions:
+        assets.append(prices_core.yahoo_corporate_action)
     if check:
         assets.append(prices_checks.a_bar_s_label_is_its_listing_s)
     with dg.instance_for_test() as instance:
@@ -419,3 +423,34 @@ def test_the_check_names_a_bar_whose_label_disagrees_with_its_provider(tmp_path:
     [evaluation] = result.get_asset_check_evaluations()
     assert not evaluation.passed
     assert VOD[0] in str(evaluation.metadata["disagreeing"].value)
+
+
+# --- dividends and splits, from the same documents ------------------------------------------------
+
+
+def test_the_night_files_dividends_from_its_own_documents_and_retracts_only_yahoo_s(
+    tmp_path: Path,
+) -> None:
+    """NO REQUEST OF ITS OWN: the chart documents already carry the events. Toyota's extension
+    holds one dividend, dated in Tokyo; the retraction is scoped to Yahoo's rows and to the span
+    the documents cover, so a Tiingo row on the same key is never touched."""
+    with yahoo({"7203.T": body("7203_t_ext")}) as calls:
+        result = night(tmp_path, [TOYOTA], stage_2=False, actions=True)
+    assert result.success
+    assert len(calls) == 1, "the actions cost no request"
+    actions_written = [r for r in WRITTEN if "kind" in r]
+    assert actions_written == [
+        {
+            "security_id": TOYOTA[0],
+            "ex_date": "2026-09-29",
+            "kind": "dividend",
+            "value": 50.0,
+            "observed_symbol": "7203.T",
+            "source_code": "yfinance",
+            "as_of": actions_written[0]["as_of"],
+        }
+    ]
+    (retraction,) = fakes.ACTION_RETRACTIONS
+    assert retraction[0] == [TOYOTA[0]] and retraction[3] == "yfinance"
+    spec = prices_core.yahoo_corporate_action.specs_by_key[dg.AssetKey("yahoo_corporate_action")]
+    assert spec.metadata["only_replacing"] == {"source_code": "yfinance"}

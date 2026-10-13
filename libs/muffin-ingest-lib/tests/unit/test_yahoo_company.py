@@ -454,3 +454,139 @@ def test_the_chart_and_document_refusals_are_counted_as_refused(
     with pytest.raises(documents.DocumentRefused):
         documents.sec_company_tickers()
     assert outcomes == [("yahoo", "refused"), ("sec", "refused")]
+
+
+# --- stage 2: the writes that need SQL -----------------------------------------------------------
+
+
+#: The sector nodes the recording cursor answers with.
+SECTORS = {
+    "information-technology": "node-it",
+    "communication-services": "node-comm",
+    "financials": "node-fin",
+}
+
+
+class RecordingCursor:
+    """Answers the classification's two reads and records every statement it is sent."""
+
+    def __init__(self, existing: dict[str, str] | None = None) -> None:
+        self.calls: list[tuple[str, tuple[Any, ...]]] = []
+        self.nodes = dict(existing or {})
+        self.rows: list[tuple[Any, ...]] = []
+        self.rowcount = 0
+
+    def execute(self, sql: str, params: Any = ()) -> None:
+        text = " ".join(sql.split())
+        self.calls.append((text, tuple(params)))
+        self.rows, self.rowcount = [], 0
+        if "and level = 1" in text:
+            self.rows = list(SECTORS.items())
+        elif text.startswith("insert into market.taxonomy_node"):
+            _, codes, _names, _parents = params
+            new = [c for c in codes if c not in self.nodes]
+            self.nodes.update({c: f"node-{c}" for c in new})
+            self.rowcount = len(new)
+        elif "and code = any" in text:
+            self.rows = [(c, self.nodes[c]) for c in params[1] if c in self.nodes]
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self.rows
+
+
+def test_a_headquarters_country_resolves_through_the_aliases_and_the_rest_are_named() -> None:
+    known = {"united states": "US", "united kingdom": "GB", "korea, republic of": "KR"}
+    aliases = {**known, "south korea": "KR"}
+    us, uk = facts("AAPL"), facts("VOD.L")
+    korean = facts("005930.KS")
+    korean.country_name = "South Korea"
+    nowhere = facts("NBK.KW")
+    nowhere.country_name = "Atlantis"
+    rows, unresolved = company.country_rows([us, uk, korean, nowhere], aliases)
+    assert sorted((r["security_id"], r["provider_country_iso2"]) for r in rows) == [
+        ("sec-005930.KS", "KR"),
+        ("sec-AAPL", "US"),
+        ("sec-VOD.L", "GB"),
+    ]
+    assert unresolved == {"Atlantis": 1}, "a name we cannot place is named, never dropped"
+
+
+def test_the_aliases_win_over_the_formal_names() -> None:
+    """`country_codes` reads the formal names first and the aliases after, so a provider spelling
+    stored as an alias overrides a formal name that happens to collide with it."""
+
+    class Names:
+        def __init__(self) -> None:
+            self.rows: list[tuple[Any, ...]] = []
+
+        def execute(self, sql: str, params: Any = ()) -> None:
+            assert "order by rank" in " ".join(sql.split())
+            self.rows = [("russia", "XX", 0), ("russia", "RU", 1)]
+
+        def fetchall(self) -> list[tuple[Any, ...]]:
+            return self.rows
+
+    assert company.country_codes(Names()) == {"russia": "RU"}
+
+
+def test_officers_are_retracted_only_where_the_profile_lists_them() -> None:
+    """A profile listing officers states the whole board; one listing none states there are none;
+    a document with no profile module states nothing, so its company keeps what it has."""
+    listed = facts("AAPL")
+    empty = facts("SPY")
+    silent = facts("AAPL", body=edited("AAPL", lambda r: r.pop("assetProfile")))
+    silent.security_id = "sec-silent"
+    assert empty.officers == [] and silent.officers is None
+
+    cur = RecordingCursor()
+    assert company.retract_officers(cur, [listed, empty, silent]) == 0
+    ((sql, params),) = cur.calls
+    assert sql.startswith("delete from market.security_officer")
+    ids, source, keep_ids, keep_names = params
+    assert ids == ["sec-AAPL", "sec-SPY"], "only companies whose document lists its officers"
+    assert source == company.OFFICER_SOURCE
+    assert set(keep_ids) == {"sec-AAPL"} and len(keep_names) == len(listed.officers or [])
+    assert company.retract_officers(RecordingCursor(), [silent]) == 0
+
+
+def test_an_industry_hangs_under_yahoo_s_own_sector_and_is_created_once() -> None:
+    apple, vodafone = facts("AAPL"), facts("VOD.L")
+    cur = RecordingCursor(existing={"communication-services--telecom-services": "node-telecom"})
+    out = company.classify(cur, [apple, vodafone])
+
+    inserted = next(params for sql, params in cur.calls if sql.startswith("insert into"))
+    taxonomy, codes, names, parents = inserted
+    assert taxonomy == company.TAXONOMY
+    assert dict(zip(codes, parents, strict=True)) == {
+        "communication-services--telecom-services": "node-comm",
+        "information-technology--consumer-electronics": "node-it",
+    }
+    assert dict(zip(codes, names, strict=True))["information-technology--consumer-electronics"] == (
+        "Consumer Electronics"
+    )
+    assert out.nodes_created == 1, "the telecom node already existed"
+    assert sorted((r["security_id"], r["node_id"]) for r in out.rows) == [
+        ("sec-AAPL", "node-information-technology--consumer-electronics"),
+        ("sec-AAPL", "node-it"),
+        ("sec-VOD.L", "node-comm"),
+        ("sec-VOD.L", "node-telecom"),
+    ]
+    assert {r["source_code"] for r in out.rows} == {company.SOURCE}
+    assert sorted(out.replaced) == ["sec-AAPL", "sec-VOD.L"]
+
+
+def test_a_sector_we_cannot_map_keeps_the_stored_rows_and_no_sector_replaces_them() -> None:
+    """An unmapped label is a vocabulary change upstream, not Yahoo withdrawing a sector, so the
+    company keeps what it has. A profile with NO sector (SPY's) is a statement, and replaces."""
+    renamed = facts("AAPL", body=edited("AAPL", lambda r: r["assetProfile"].update(sector="Tech")))
+    fund = facts("SPY")
+    out = company.classify(RecordingCursor(), [renamed, fund])
+    assert out.unmapped == {"Tech": 1}
+    assert out.replaced == ["sec-SPY"] and out.rows == []
+
+    cur = RecordingCursor()
+    assert company.retract_classification(cur, out) == 0
+    ((sql, params),) = cur.calls
+    assert sql.startswith("delete from market.security_taxonomy")
+    assert params == (["sec-SPY"], company.SOURCE, company.TAXONOMY, [], [])
+    assert company.retract_classification(RecordingCursor(), company.Classification()) == 0

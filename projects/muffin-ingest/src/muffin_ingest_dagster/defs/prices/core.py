@@ -1,11 +1,11 @@
 """Stage 2 of the prices family: raw parsed and normalised into core rows."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import dagster as dg
 from dagster import AssetExecutionContext
-from muffin_ingest.facets import fx, price_chart, prices
+from muffin_ingest.facets import actions, fx, price_chart, prices
 
 from muffin_ingest_dagster.defs.prices.partitions import (
     HISTORY_PARTITIONS_PER_RUN,
@@ -95,3 +95,57 @@ def price_bar_history(
         }
     )
     return parsed.rows
+
+
+@dg.asset(
+    partitions_def=security_partitions,
+    backfill_policy=dg.BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN),
+    pool="sql",
+    io_manager_key="postgres_io",
+    group_name="prices",
+    kinds={"postgres"},
+    metadata={
+        "table": "market.security_corporate_action",
+        "conflict": ["security_id", "ex_date", "kind"],
+        # THE KEY LEAVES THE SOURCE OUT, and Tiingo wrote 6,799 rows under it. A day Tiingo holds
+        # keeps Tiingo's row until its parity check retires it (Phase 4 decision 9).
+        "only_replacing": {"source_code": actions.SOURCE},
+    },
+    # IN THE NIGHTLY JOB, so it runs whenever the sweep does: a night without it is a stopped lane.
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),
+    description="Each security's dividends and splits, from the documents its bars come from.",
+)
+def yahoo_corporate_action(
+    context: AssetExecutionContext, postgres: Postgres, raw_price_chart: Any
+) -> list[dict[str, Any]]:
+    """`market.security_corporate_action`, Yahoo's rows, from documents the sweep already stores.
+
+    NO REQUEST OF ITS OWN: every chart document is asked with `events=div,split` (Stage 0), so the
+    edge's `security-dividends` asked openbb, monthly, for data this lane holds.
+
+    WITHIN A SECURITY'S COVERED SPAN, ITS DOCUMENTS ARE THE ANSWER, as for bars: a Yahoo row on a
+    day they no longer state is retracted (`actions.retract_absent`), and only Yahoo's.
+    """
+    stats: dict[str, int] = {}
+    merged = {
+        security_id: actions.merge(rows, stats)
+        for security_id, rows in partitioned.rows_per_partition(context, raw_price_chart).items()
+    }
+    # BEFORE THE WRITE, IN ITS OWN TRANSACTION, as `price_bar_history` retracts: it deletes only
+    # days the documents no longer state, which the write never produces.
+    with postgres.connect() as conn:
+        with conn.cursor() as cur:
+            retracted = actions.retract_absent(cur, merged)
+        conn.commit()
+    rows = [row for sid, held in sorted(merged.items()) for row in actions.rows_for(sid, held)]
+    context.add_output_metadata(
+        {
+            **stats,
+            "securities": len(merged),
+            "covered": sum(1 for held in merged.values() if held.first is not None),
+            "dividends": sum(1 for r in rows if r["kind"] == actions.DIVIDEND),
+            "splits": sum(1 for r in rows if r["kind"] == actions.SPLIT),
+            "retracted": retracted,
+        }
+    )
+    return rows

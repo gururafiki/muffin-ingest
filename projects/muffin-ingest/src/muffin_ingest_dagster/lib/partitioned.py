@@ -14,7 +14,13 @@ A rule written at one call site is not a rule. This is the call site.
 from collections.abc import Callable, Collection, Mapping, Sequence
 from typing import Any
 
+import dagster as dg
 from dagster import AssetExecutionContext
+from dagster._core.storage.tags import (
+    ASSET_PARTITION_RANGE_END_TAG,
+    ASSET_PARTITION_RANGE_START_TAG,
+    PARTITION_NAME_TAG,
+)
 
 Row = dict[str, Any]
 Rows = list[Row]
@@ -218,3 +224,25 @@ def rows_per_partition(context: AssetExecutionContext, loaded: Any) -> dict[str,
         f"raw input is {type(loaded).__name__} for {len(keys)} partition(s) — the I/O manager "
         f"hands over a mapping for several and a sequence for exactly one"
     )
+
+
+def run_partition_keys(context: dg.AssetCheckExecutionContext, partitions: str) -> list[str]:
+    """The dynamic partitions the run being checked wrote.
+
+    A CHECK ON A PARTITIONED ASSET IS ONE RESULT PER RUN (Dagster 1.13), with no partition key of
+    its own, so the run's tags are where its partitions are named: one key, or a range resolved
+    against the grid. A range is contiguous in the grid's insertion order, which never moves a key.
+    """
+    tags = context.run.tags
+    single = tags.get(PARTITION_NAME_TAG)
+    if single:
+        return [single]
+    start = tags.get(ASSET_PARTITION_RANGE_START_TAG)
+    end = tags.get(ASSET_PARTITION_RANGE_END_TAG)
+    if not start or not end:
+        return []
+    keys: Sequence[str] = context.instance.get_dynamic_partitions(partitions)
+    try:
+        return list(keys[keys.index(start) : keys.index(end) + 1])
+    except ValueError:
+        return []

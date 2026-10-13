@@ -1,13 +1,6 @@
 """Asset checks of the prices family."""
 
-from collections.abc import Sequence
-
 import dagster as dg
-from dagster._core.storage.tags import (
-    ASSET_PARTITION_RANGE_END_TAG,
-    ASSET_PARTITION_RANGE_START_TAG,
-    PARTITION_NAME_TAG,
-)
 from muffin_ingest.facets import fx, price_chart
 from muffin_ingest.providers import yahoo_chart
 
@@ -15,6 +8,7 @@ from muffin_ingest_dagster.defs.prices.automation import SWEEP_SLICE
 from muffin_ingest_dagster.defs.prices.core import price_bar_history
 from muffin_ingest_dagster.defs.prices.partitions import SECURITY_PARTITION
 from muffin_ingest_dagster.defs.prices.raw import raw_price_chart
+from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -91,28 +85,6 @@ def no_security_is_far_behind_the_sweep(postgres: Postgres) -> dg.AssetCheckResu
     )
 
 
-def _run_partition_keys(context: dg.AssetCheckExecutionContext) -> list[str]:
-    """The security partitions the run being checked wrote.
-
-    A CHECK ON A PARTITIONED ASSET IS ONE RESULT PER RUN (Dagster 1.13), with no partition key of
-    its own, so the run's tags are where its partitions are named: one key, or a range resolved
-    against the grid. A range is contiguous in the grid's insertion order, which never moves a key.
-    """
-    tags = context.run.tags
-    single = tags.get(PARTITION_NAME_TAG)
-    if single:
-        return [single]
-    start = tags.get(ASSET_PARTITION_RANGE_START_TAG)
-    end = tags.get(ASSET_PARTITION_RANGE_END_TAG)
-    if not start or not end:
-        return []
-    keys: Sequence[str] = context.instance.get_dynamic_partitions(SECURITY_PARTITION)
-    try:
-        return list(keys[keys.index(start) : keys.index(end) + 1])
-    except ValueError:
-        return []
-
-
 @dg.asset_check(asset=price_bar_history, blocking=False)
 def a_bar_s_label_is_its_listing_s(
     context: dg.AssetCheckExecutionContext, postgres: Postgres, raw_store: RawStore
@@ -125,7 +97,7 @@ def a_bar_s_label_is_its_listing_s(
     named here so it can be seeded. Spec §8: umbrella
     docs/specs/2026-10-06-the-price-lane-reads-the-quote-currency.md.
     """
-    keys = _run_partition_keys(context)
+    keys = partitioned.run_partition_keys(context, SECURITY_PARTITION)
     with postgres.connect() as conn:
         known = fx.known_currencies(conn)
         stored = price_chart.newest_labels(conn, keys)

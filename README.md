@@ -49,7 +49,9 @@ Conventions — what belongs in which stage, and why a rename is a migration —
 
 Dagster's per-item primitive is partitions, documented at 100,000 per asset. Where a provider is
 asked about one subject at a time, the asset is partitioned by that subject, so a partition is
-exactly what one ask claims: the price history lane has one partition per security (~12,350).
+exactly what one ask claims: the price history lane has one partition per security (~12,350),
+and the company lane (`defs/companies/`, Yahoo's quoteSummary and statements) uses the same grid,
+visiting a seventh of it a day.
 
 What a provider said about a subject's IDENTIFIER is a different fact. A symbol the provider
 rejected when asked alone, with a control symbol answering in the same run, is an observation in

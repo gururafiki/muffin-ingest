@@ -25,3 +25,9 @@ SHORT_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "300"}
 #: p99 (237 s) would end those runs every night, and a new security would never get its history: a
 #: hang turned into a policy. Thirty minutes is three times the slowest run.
 PRICE_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
+
+#: ONE COMPANY RUN, at most 100 companies. Each costs at most three requests at 1.4 s, so a full
+#: run is ~7 minutes and its own budget stops asking at 15. Thirty minutes is twice that budget,
+#: for stage 2 and a slow provider, and well short of the six-hour default that would let a hung
+#: run hold the `yfinance` pool through the price night.
+COMPANY_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
