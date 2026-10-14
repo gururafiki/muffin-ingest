@@ -381,6 +381,25 @@ def test_the_fx_request_is_the_url_it_has_always_been(sent: list[httpx.URL]) -> 
     assert str(sent[0]).endswith("/v8/finance/chart/EURUSD=X?range=5d&interval=1d")
 
 
+def test_a_caller_whose_urls_never_repeat_asks_the_cache_not_to_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The price lane starts each window at a security's own watermark, so no URL is sent twice and
+    a stored body would sit in http-cache for a year evicting useful entries. A request that does
+    not say otherwise is stored, as the FX lane's must be: its URLs repeat within the hour."""
+    headers_sent: list[dict[str, str]] = []
+
+    def get(url: str, *, headers: dict[str, str], **kwargs: Any) -> httpx.Response:
+        headers_sent.append(headers)
+        return httpx.Response(200, content=body("aapl_ext"))
+
+    monkeypatch.setattr(httpx, "get", get)
+    yahoo_chart.fetch("AAPL", interval="1d", period1=0, period2=1, store=False)
+    yahoo_chart.fetch("EURUSD=X", range_="5d", interval="1d")
+    assert headers_sent[0].get("X-Muffin-Cache-No-Store") == "1"
+    assert "X-Muffin-Cache-No-Store" not in headers_sent[1]
+
+
 def test_a_slash_in_a_symbol_stays_inside_one_path_segment(sent: list[httpx.URL]) -> None:
     """Asked raw, `3BBIF/F.BK` is two path segments, and Yahoo's answer to that is an HTML 404 that
     names nothing, so the lane cannot record the absence. Encoded, it is one symbol."""

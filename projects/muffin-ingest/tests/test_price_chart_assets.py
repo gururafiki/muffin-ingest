@@ -207,6 +207,8 @@ def test_a_first_visit_asks_for_the_whole_history_by_dates(tmp_path: Path) -> No
             "div,split",
             True,
         )
+        # No URL is asked twice, so http-cache is told not to keep the body.
+        assert kwargs["store"] is False
 
     m = meta(result, "raw_price_chart")
     assert (m["plan_never_loaded"], m["answered"], m["documents"]) == (4, 4, 4)

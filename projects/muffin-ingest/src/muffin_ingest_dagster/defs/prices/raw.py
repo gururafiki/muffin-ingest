@@ -540,6 +540,10 @@ def _ask_chart(
         period2=period2,
         events="div,split",
         adjusted=True,
+        # THE WINDOW STARTS AT THIS SECURITY'S OWN WATERMARK, so this URL is never asked again and
+        # http-cache is told not to keep the body:
+        # docs/deferred/2026-10-10-http-cache-keeps-every-yahoo-chart-for-a-year.md (umbrella).
+        store=False,
     )
     return document, period1, period2
 
