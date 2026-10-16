@@ -65,7 +65,9 @@ hub = [
 filings = [
   "edgartools>=4.14,<5",
   "pdfplumber>=0.11,<0.12",
-  "lxml>=5.3,<6",
+  # 6.1.0 is the first release without the iterparse/ETCompatXMLParser advisory (Dependabot,
+  # high, 2026-10).
+  "lxml>=6.1,<7",
 ]
 
 [dependency-groups]
