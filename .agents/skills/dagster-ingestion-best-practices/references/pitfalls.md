@@ -411,6 +411,27 @@ steps above 5x were subunit-sized, and most were bounces. Look for the opposite 
 horizon (`BOUNCE_HORIZON`, 10 bars): a bounce's bars are the odd ones out, and a change makes
 everything before it the odd one out. Capture one of each as a fixture, so the two rules disagree.
 
+## Do not give an input metadata on a multi-asset built from specs
+
+`@dg.multi_asset(specs=…, ins=…)` requires each input to be one of the specs' deps, and then refuses
+an `AssetIn` carrying anything but its key (`validate_can_coexist`, Dagster 1.13). So
+`allow_missing_partitions` cannot be set there. The companies family's `company_facts` lives with
+that: in its job, stage 1 writes a file for every partition of the run, so only a hand-launched
+re-parse can meet a missing one. A single `@dg.asset` with `ins=` can still carry it.
+
+## Do not keep a module-level list of specs in a defs module
+
+`load_from_defs_folder` collects every module-level LIST whose members are all definitions
+(`find_objects_in_module_of_types`), whatever its name. The list of `AssetSpec`s a multi-asset was
+built from therefore defined each asset a second time: "Asset key security_profile is defined
+multiple times". Keep such a sequence a tuple.
+
+## Do not postpone annotations in a defs module
+
+`from __future__ import annotations` turns `config: CompanyRun` into the string `'CompanyRun'`, and
+Dagster cannot resolve it: "Error defining config. Original value passed: 'CompanyRun'". The same
+applies to resource parameters. No family module uses it; library modules may.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies

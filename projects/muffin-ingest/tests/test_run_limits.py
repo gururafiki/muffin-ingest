@@ -12,6 +12,8 @@ from __future__ import annotations
 import dagster as dg
 from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
 
+from muffin_ingest_dagster.defs.companies.automation import COMPANY_SCHEDULE
+from muffin_ingest_dagster.defs.companies.raw import CompanyRun
 from muffin_ingest_dagster.defs.platform.heartbeat import heartbeat_schedule
 from muffin_ingest_dagster.defs.prices.automation import SWEEP_SCHEDULE
 from muffin_ingest_dagster.lib import runtime
@@ -36,17 +38,25 @@ def test_every_scheduled_run_has_a_time_limit() -> None:
     assert not missing, f"scheduled runs with no time limit: {missing}"
 
 
-def test_the_price_sweep_gets_room_for_a_full_history_and_the_rest_are_short() -> None:
-    """THE TWO SIZES ARE DIFFERENT ON PURPOSE. A nightly price run that finds securities with
-    nothing stored fetches each one's whole history, and its slowest real run took 579 s. Held to
-    the short jobs' five minutes, those runs would end every night and the securities would never
-    get a history, so the sweep must keep its own, longer limit.
+def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None:
+    """THE SIZES ARE DIFFERENT ON PURPOSE. A nightly price run that finds securities with nothing
+    stored fetches each one's whole history, and its slowest real run took 579 s. Held to the short
+    jobs' five minutes, those runs would end every night and the securities would never get a
+    history, so the sweep must keep its own, longer limit.
+
+    The company rotation is the second long lane: up to three paced requests for each of 100
+    companies, bounded by its own budget, then stage 2. Its limit must leave that budget room, or
+    the monitor ends a run that is still writing.
     """
     limits = _limits()
     assert limits[SWEEP_SCHEDULE] == runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]
-    others = {name: limit for name, limit in limits.items() if name != SWEEP_SCHEDULE}
+    assert limits[COMPANY_SCHEDULE] == runtime.COMPANY_RUN[MAX_RUNTIME_SECONDS_TAG]
+    long_lanes = {SWEEP_SCHEDULE, COMPANY_SCHEDULE}
+    others = {name: limit for name, limit in limits.items() if name not in long_lanes}
     assert set(others.values()) == {runtime.SHORT_RUN[MAX_RUNTIME_SECONDS_TAG]}, others
     assert float(runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 3 * 579, "below 3x the slowest run"
+    budget = CompanyRun().budget_seconds
+    assert float(runtime.COMPANY_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * budget, "below 2x the budget"
 
 
 def test_a_plain_schedule_s_tags_reach_its_run_request() -> None:

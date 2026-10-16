@@ -56,6 +56,9 @@ PROBES: list[dict[str, Any]] = []
 #: ranges' first and last dates, and the (security, date) pairs the raw history holds.
 RETRACTIONS: list[tuple[Any, ...]] = []
 
+#: Every corporate-action retraction sent, as its parameters.
+ACTION_RETRACTIONS: list[tuple[Any, ...]] = []
+
 #: What `market.currency` holds for a fake run. Module-level for the same reason `UNIVERSE` is.
 CURRENCY_CODES: list[str] = ["USD", "GBP", "GBX", "JPY", "KWD", "KWF", "ZAR", "ZAC", "ILS", "ILA"]
 
@@ -97,6 +100,10 @@ class FakeCursor:
             # ANSWERED WITH NO ROWS, NOT WITH THE UNIVERSE. The fall-through below would hand back
             # the subjects, and a retraction counted from them reads as bars deleted.
             RETRACTIONS.append(tuple(params))
+            self.rows = []
+            return
+        if text.startswith("delete from market.security_corporate_action"):
+            ACTION_RETRACTIONS.append(tuple(params))
             self.rows = []
             return
         if text.startswith("select code from market.currency"):

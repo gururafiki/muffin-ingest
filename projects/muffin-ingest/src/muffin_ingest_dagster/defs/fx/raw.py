@@ -88,8 +88,10 @@ def _collect(
 
         stats["calls"] += 1
         try:
+            # STORED: the same pair and preset are asked again within the hour, so a cached body is
+            # read again, unlike the price lane's one-off windows.
             document = yahoo_chart.fetch(
-                yahoo_chart.pair(currency), range_=range_, interval=interval
+                yahoo_chart.pair(currency), range_=range_, interval=interval, store=True
             )
         except yahoo_chart.YahooRefused as exc:
             stats["transport"] += 1

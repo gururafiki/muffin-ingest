@@ -234,6 +234,7 @@ def fetch(
     period2: int | None = None,
     events: str | None = None,
     adjusted: bool = False,
+    store: bool = True,
     timeout_s: float = 20.0,
 ) -> Document:
     """The response body, EXACTLY as Yahoo sent it. No parse, no reshape, no interpretation.
@@ -261,6 +262,13 @@ def fetch(
 
     `fetched_at` IS RECORDED HERE because the date travels with the data: a chart body carries
     epoch stamps for its points and nothing at all about when it was served.
+
+    `store=False` ASKS http-cache NOT TO KEEP THE BODY. The price lane starts each window at the
+    security's own watermark, so no URL it sends is sent again, while the cache keeps an entry for a
+    year and evicts useful ones first to make room. The header maps to `proxy_no_cache`
+    (muffin-deployment#428), which skips the store and still serves anything already stored. The FX
+    lane's URLs repeat within the hour, so it stores. Before that nginx change is deployed the
+    header reaches Yahoo, which ignores it.
     """
     if (range_ is None) == (period1 is None or period2 is None):
         raise ValueError("ask for a range preset or for period1 and period2, not both or neither")
@@ -277,15 +285,13 @@ def fetch(
         params["includeAdjustedClose"] = "true"
     if events:
         params["events"] = events
+    headers = {"User-Agent": BROWSER_UA}
+    if not store:
+        headers["X-Muffin-Cache-No-Store"] = "1"
     refused: YahooRefused | None = None
     with metrics.request("yahoo") as outcome:
         try:
-            response = httpx.get(
-                url,
-                params=params,
-                headers={"User-Agent": BROWSER_UA},
-                timeout=timeout_s,
-            )
+            response = httpx.get(url, params=params, headers=headers, timeout=timeout_s)
         except httpx.HTTPError as exc:
             raise YahooRefused(f"{type(exc).__name__}: {exc}") from exc
         if response.status_code != 200 and not _names_an_absence(response.content):

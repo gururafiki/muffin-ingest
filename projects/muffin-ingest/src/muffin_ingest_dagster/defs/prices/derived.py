@@ -8,7 +8,7 @@ from dagster import AssetExecutionContext, DagsterInstance
 from muffin_ingest.derive import returns
 from muffin_ingest.facets import prices
 
-from muffin_ingest_dagster.defs.prices.core import price_bar_history
+from muffin_ingest_dagster.defs.prices.core import price_bar_history, yahoo_corporate_action
 from muffin_ingest_dagster.defs.prices.partitions import PROVIDER
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -29,7 +29,8 @@ class ReturnsRun(dg.Config):
 
 
 @dg.asset(
-    deps=[price_bar_history],
+    # THE DIVIDENDS ARE AN INPUT: a total return reinvests them (`security_corporate_action`).
+    deps=[price_bar_history, yahoo_corporate_action],
     # EAGER, MINUS THE GATE THAT MADE IT NEVER FIRE.
     #
     # Plain `eager()` requires that NO upstream partition is missing, and an unpartitioned asset

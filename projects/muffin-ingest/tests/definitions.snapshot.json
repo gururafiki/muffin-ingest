@@ -16,6 +16,14 @@
       "additional_deps": [],
       "blocking": false
     },
+    "security_fundamentals:fundamental_units_are_conventional": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "security_fundamentals:no_company_is_far_behind_the_rotation": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "security_listing:listing_covers_legacy": {
       "additional_deps": [],
       "blocking": false
@@ -23,9 +31,38 @@
     "security_symbology:one_security_per_share_class": {
       "additional_deps": [],
       "blocking": false
+    },
+    "yahoo_statement:statements_carry_a_currency": {
+      "additional_deps": [],
+      "blocking": false
     }
   },
   "assets": {
+    "derived_security_metrics": {
+      "automation_condition": "on new statements, or every half hour (b8658346f8fd)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "yahoo_statement": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 10800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "discovered_security": {
       "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
@@ -593,6 +630,66 @@
       ],
       "tags": {}
     },
+    "raw_yahoo_statements": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
+    "raw_yahoo_summary": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
     "raw_yahoo_symbol": {
       "automation_condition": null,
       "backfill_policy": {
@@ -669,6 +766,68 @@
       ],
       "tags": {}
     },
+    "security_estimate": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_fundamentals": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_listing": {
       "automation_condition": "on an upstream change, or daily (910c21a4e37c)",
       "backfill_policy": null,
@@ -721,6 +880,37 @@
       ],
       "tags": {}
     },
+    "security_officer": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_price_span": {
       "automation_condition": "eager (b561cc032c71)",
       "backfill_policy": null,
@@ -746,12 +936,44 @@
       ],
       "tags": {}
     },
+    "security_profile": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_return": {
       "automation_condition": "eager (b561cc032c71)",
       "backfill_policy": null,
       "code_version": null,
       "deps": {
-        "price_bar_history": null
+        "price_bar_history": null,
+        "yahoo_corporate_action": null
       },
       "execution_type": "MATERIALIZATION",
       "freshness_policy": {
@@ -766,6 +988,37 @@
       ],
       "owners": [],
       "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_share_stats": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
       "pools": [
         "sql"
       ],
@@ -878,6 +1131,99 @@
       ],
       "owners": [],
       "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "yahoo_classification": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "yahoo_corporate_action": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 25,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_price_chart": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "prices",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "yahoo_statement": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_statements": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
       "pools": [
         "sql"
       ],
@@ -1005,7 +1351,26 @@
     "nightly_prices": {
       "assets": [
         "price_bar_history",
-        "raw_price_chart"
+        "raw_price_chart",
+        "yahoo_corporate_action"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      }
+    },
+    "yahoo_companies": {
+      "assets": [
+        "raw_yahoo_statements",
+        "raw_yahoo_summary",
+        "security_estimate",
+        "security_fundamentals",
+        "security_officer",
+        "security_profile",
+        "security_share_stats",
+        "yahoo_classification",
+        "yahoo_statement"
       ],
       "ops": [],
       "partitions": {
@@ -1056,6 +1421,12 @@
       "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "__anonymous_asset_job_weekly_registries"
+    },
+    "yahoo_companies": {
+      "cron_schedule": "30 3 * * *",
+      "default_status": "STOPPED",
+      "execution_timezone": null,
+      "job": "yahoo_companies"
     }
   },
   "sensors": {

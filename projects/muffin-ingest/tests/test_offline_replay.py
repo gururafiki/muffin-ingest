@@ -142,13 +142,16 @@ def chart_body(
 
 
 @contextmanager
-def serving(body: bytes) -> Iterator[None]:
-    """Yahoo answering every pair with `body`, byte for byte. Patched on the provider MODULE, which
-    is the name the asset calls through."""
+def serving(body: bytes) -> Iterator[list[dict[str, Any]]]:
+    """Yahoo answering every pair with `body`, byte for byte, recording what each request asked.
+    Patched on the provider MODULE, which is the name the asset calls through."""
     from muffin_ingest.providers import yahoo_chart
     from muffin_ingest.providers.documents import Document
 
+    asked: list[dict[str, Any]] = []
+
     def fetch(symbol: str, **kwargs: Any) -> Document:
+        asked.append(kwargs)
         return Document(
             url=f"https://query2.finance.yahoo.com/v8/finance/chart/{symbol}",
             body=body,
@@ -159,7 +162,7 @@ def serving(body: bytes) -> Iterator[None]:
     saved = yahoo_chart.fetch
     yahoo_chart.fetch = fetch
     try:
-        yield
+        yield asked
     finally:
         yahoo_chart.fetch = saved
 
@@ -383,7 +386,7 @@ def test_the_fx_spot_lane_keeps_only_its_own_partition_s_day(tmp_path: Path) -> 
     body = chart_body([(date(2026, 9, 10), 1.16), (date(2026, 9, 11), 1.17)])
 
     CAPTURED_WRITES.clear()
-    with serving(body):
+    with serving(body) as asked:
         result = dg.materialize(
             [fx_raw.raw_fx_spot, fx_core.fx_rate],
             partition_key=key,
@@ -395,6 +398,8 @@ def test_the_fx_spot_lane_keeps_only_its_own_partition_s_day(tmp_path: Path) -> 
         )
 
     assert result.success
+    # The same pair and preset are asked again within the hour, so http-cache keeps the body.
+    assert asked and all(kwargs["store"] is True for kwargs in asked)
     stored = sql(
         tmp_path / "raw_fx_spot" / f"{key}.parquet",
         "select currency_code, body from {f} order by 1",

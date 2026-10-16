@@ -23,6 +23,7 @@ from muffin_ingest_dagster.defs.prices.partitions import (
 )
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.io_managers import RawStore
+from muffin_ingest_dagster.lib.pacing import Pacer
 from muffin_ingest_dagster.lib.resources import Postgres
 
 
@@ -515,22 +516,13 @@ def _read_chart(document: Document) -> tuple[yahoo_chart.Series | None, str]:
     return series, ("answered" if series.points else "empty")
 
 
-class _Pacer:
-    """The spacing between the STARTS of two requests, read from the module so a test can set it."""
-
-    def __init__(self) -> None:
-        self._last = 0.0
-
-    def wait(self) -> None:
-        if self._last:
-            gap = prices_partitions.CHART_SECONDS_BETWEEN_REQUESTS - (time.monotonic() - self._last)
-            if gap > 0:
-                time.sleep(gap)
-        self._last = time.monotonic()
+def _pacer() -> Pacer:
+    """The chart lane's pace, read from the module at every wait so a test can set it."""
+    return Pacer(lambda: prices_partitions.CHART_SECONDS_BETWEEN_REQUESTS)
 
 
 def _ask_chart(
-    pacer: _Pacer, symbol: str, start: date | None, end: date
+    pacer: Pacer, symbol: str, start: date | None, end: date
 ) -> tuple[Document, int, int]:
     """One chart request: everything when `start` is None, else the days from `start` to `end`.
 
@@ -548,6 +540,10 @@ def _ask_chart(
         period2=period2,
         events="div,split",
         adjusted=True,
+        # THE WINDOW STARTS AT THIS SECURITY'S OWN WATERMARK, so this URL is never asked again and
+        # http-cache is told not to keep the body:
+        # docs/deferred/2026-10-10-http-cache-keeps-every-yahoo-chart-for-a-year.md (umbrella).
+        store=False,
     )
     return document, period1, period2
 
@@ -568,7 +564,7 @@ def _collect_charts(
     read as complete.
     """
     deadline = time.monotonic() + budget_seconds
-    pacer = _Pacer()
+    pacer = _pacer()
     rows: list[dict[str, Any]] = []
     complete: set[str] = set()
     answered: list[prices.Subject] = []

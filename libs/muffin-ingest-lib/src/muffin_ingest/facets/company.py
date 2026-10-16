@@ -490,3 +490,224 @@ def summary_due(stored: Sequence[Mapping[str, Any]], today: date, *, force: bool
         return True
     days = [_day(stamp) for stamp in (_fetched_at(row) for row in stored) if stamp]
     return not days or (today - max(days)).days >= SUMMARY_REFRESH_DAYS
+
+
+# --- stage 2: the writes that need SQL -----------------------------------------------------------
+
+#: Every spelling of a country a provider might use, lower-cased: `countries.name` first, then the
+#: aliases, which win. The globe reads the same table, so the two cannot disagree about a country.
+COUNTRY_NAMES = """
+select lower(trim(name)), iso2, 0 as rank from market.countries
+union all
+select lower(trim(provider_name)), iso2, 1 as rank from market.country_alias
+order by rank
+"""
+
+
+def country_codes(cur: Any) -> dict[str, str]:
+    """Lower-cased country name to ISO-2, the aliases laid over the formal names."""
+    cur.execute(COUNTRY_NAMES)
+    return {str(name): str(iso2) for name, iso2, _ in cur.fetchall()}
+
+
+def country_rows(
+    facts: Sequence[CompanyFacts], iso_by_name: Mapping[str, str]
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """`security.provider_country_iso2` for each company whose headquarters we can place, and the
+    names we could not, with a count each.
+
+    THE OPERATING COUNTRY, NOT THE FILED ONE: N-PORT reports where a company is incorporated
+    (Alibaba in the Cayman Islands), the profile where it is. An unresolved name is NAMED, never
+    dropped silently: `country_alias` is filled from what the provider actually says.
+    """
+    rows: list[dict[str, Any]] = []
+    unresolved: dict[str, int] = {}
+    for fact in facts:
+        name = (fact.country_name or "").strip()
+        if not name:
+            continue
+        iso = iso_by_name.get(name.lower())
+        if iso is None:
+            unresolved[name] = unresolved.get(name, 0) + 1
+            continue
+        rows.append({"security_id": fact.security_id, "provider_country_iso2": iso})
+    return rows, unresolved
+
+
+def reporting_currency_rows(facts: Sequence[CompanyFacts]) -> list[dict[str, Any]]:
+    """`security.reporting_currency`, where the document states one."""
+    return [
+        {"security_id": f.security_id, "reporting_currency": f.reporting_currency}
+        for f in facts
+        if f.reporting_currency
+    ]
+
+
+#: Officers a company's newest profile no longer lists, ONLY THIS LANE'S: the edge never retracted,
+#: so a departed chief executive stayed on the page for as long as the company was tracked.
+RETRACT_OFFICERS_NOT_LISTED = """
+delete from market.security_officer o
+ using unnest(%s::uuid[]) as r(security_id)
+ where o.security_id = r.security_id
+   and o.source_code = %s
+   and not exists (
+         select 1 from unnest(%s::uuid[], %s::text[]) as k(security_id, name)
+          where k.security_id = o.security_id and k.name = o.name)
+returning o.security_id::text
+"""
+
+
+def officer_rows(facts: Sequence[CompanyFacts]) -> list[dict[str, Any]]:
+    return [officer for f in facts if f.officers for officer in f.officers]
+
+
+def retract_officers(cur: Any, facts: Sequence[CompanyFacts]) -> int:
+    """Delete the officers each listed company's newest profile no longer names.
+
+    A DOCUMENT WITH NO PROFILE MODULE RETRACTS NOTHING (`officers is None`): the absence of a module
+    is not a statement that the company has no officers. A profile listing none does retract.
+    """
+    listed = [f for f in facts if f.officers is not None]
+    if not listed:
+        return 0
+    keep = [(o["security_id"], o["name"]) for f in listed for o in (f.officers or ())]
+    cur.execute(
+        RETRACT_OFFICERS_NOT_LISTED,
+        (
+            [f.security_id for f in listed],
+            OFFICER_SOURCE,
+            [sid for sid, _ in keep],
+            [name for _, name in keep],
+        ),
+    )
+    return len(cur.fetchall())
+
+
+SECTOR_NODES = """
+select code, node_id::text from market.taxonomy_node where taxonomy_id = %s and level = 1
+"""
+
+#: One node per (sector, Yahoo industry name), created on discovery: the vocabulary is Yahoo's and
+#: open. DO NOTHING on conflict, then read back, because a concurrent writer may have won the insert
+#: and an id that was never written would fail the foreign key.
+INSERT_INDUSTRY_NODES = """
+insert into market.taxonomy_node (taxonomy_id, code, name, parent_id, level)
+select %s, n.code, n.name, n.parent_id, 2
+  from unnest(%s::text[], %s::text[], %s::uuid[]) as n(code, name, parent_id)
+on conflict (taxonomy_id, code) do nothing
+"""
+
+NODE_IDS = """
+select code, node_id::text
+  from market.taxonomy_node
+ where taxonomy_id = %s and code = any(%s::text[])
+"""
+
+#: Yahoo's classification rows a company's newest profile no longer states. Only Yahoo's, and only
+#: in muffin's taxonomy: N-PORT, the segment derivation, SIC and Wikidata each state their own.
+RETRACT_CLASSIFICATION = """
+delete from market.security_taxonomy t
+ using unnest(%s::uuid[]) as r(security_id)
+ where t.security_id = r.security_id
+   and t.source_code = %s
+   and t.node_id in (select node_id from market.taxonomy_node where taxonomy_id = %s)
+   and not exists (
+         select 1 from unnest(%s::uuid[], %s::uuid[]) as k(security_id, node_id)
+          where k.security_id = t.security_id and k.node_id = t.node_id)
+returning t.security_id::text
+"""
+
+
+@dataclass
+class Classification:
+    """Yahoo's sector and industry rows for the companies a run read, and what it could not
+    place."""
+
+    rows: list[dict[str, Any]] = field(default_factory=list)
+    #: Companies whose Yahoo rows these REPLACE: their profile named a sector we map, or none.
+    replaced: list[str] = field(default_factory=list)
+    nodes_created: int = 0
+    #: Sector labels with no muffin code, with a count. Such a company keeps its stored rows: a
+    #: vocabulary change upstream must not read as Yahoo withdrawing every sector.
+    unmapped: dict[str, int] = field(default_factory=dict)
+
+
+def classify(cur: Any, facts: Sequence[CompanyFacts]) -> Classification:
+    """Sector and industry rows for every company whose document carries a profile.
+
+    A PROFILE WITH NO SECTOR IS A STATEMENT (a fund, a shell), so that company's Yahoo rows are
+    replaced by none. A sector we cannot map is not: the stored rows stay and the label is counted.
+    """
+    out = Classification()
+    cur.execute(SECTOR_NODES, (TAXONOMY,))
+    sector_node = {str(code): str(node) for code, node in cur.fetchall()}
+
+    wanted: dict[str, tuple[str, str]] = {}
+    pairs: list[tuple[CompanyFacts, str, str | None]] = []
+    for fact in facts:
+        if fact.profile is None:
+            continue
+        label = fact.sector_label
+        if label is None:
+            out.replaced.append(fact.security_id)
+            continue
+        code = SECTOR_CODES.get(label)
+        node = sector_node.get(code) if code else None
+        if code is None or node is None:
+            out.unmapped[label] = out.unmapped.get(label, 0) + 1
+            continue
+        out.replaced.append(fact.security_id)
+        industry = None
+        if fact.industry_label:
+            industry = industry_code(code, fact.industry_label)
+            wanted.setdefault(industry, (fact.industry_label, node))
+        pairs.append((fact, node, industry))
+
+    industry_node: dict[str, str] = {}
+    if wanted:
+        codes = sorted(wanted)
+        cur.execute(
+            INSERT_INDUSTRY_NODES,
+            (
+                TAXONOMY,
+                codes,
+                [wanted[c][0] for c in codes],
+                [wanted[c][1] for c in codes],
+            ),
+        )
+        count = getattr(cur, "rowcount", None)
+        out.nodes_created = count if isinstance(count, int) and count > 0 else 0
+        cur.execute(NODE_IDS, (TAXONOMY, codes))
+        industry_node = {str(code): str(node) for code, node in cur.fetchall()}
+
+    for fact, sector, industry in pairs:
+        nodes = [sector]
+        if industry is not None and industry in industry_node:
+            nodes.append(industry_node[industry])
+        out.rows += [
+            {
+                "security_id": fact.security_id,
+                "node_id": node,
+                "source_code": SOURCE,
+                "as_of": fact.fetched_at,
+            }
+            for node in nodes
+        ]
+    return out
+
+
+def retract_classification(cur: Any, classification: Classification) -> int:
+    """Delete the Yahoo rows each replaced company's newest profile no longer states."""
+    if not classification.replaced:
+        return 0
+    cur.execute(
+        RETRACT_CLASSIFICATION,
+        (
+            sorted(classification.replaced),
+            SOURCE,
+            TAXONOMY,
+            [r["security_id"] for r in classification.rows],
+            [r["node_id"] for r in classification.rows],
+        ),
+    )
+    return len(cur.fetchall())

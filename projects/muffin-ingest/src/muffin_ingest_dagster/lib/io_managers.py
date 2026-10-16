@@ -429,6 +429,17 @@ class PostgresIOManager(dg.ConfigurableIOManager):
         # that way, because the guard that stopped PRODUCING a number could never REMOVE the stale
         # one. An asset declaring `replace_scope` gets delete-then-insert per scope value instead.
         scope_columns = [str(c) for c in (meta.get("replace_scope") or [])]
+        # A TABLE TWO WRITERS SHARE, declared beside the asset like the key: `only_replacing`
+        # updates a conflicting row only if it is this writer's own (a period SEC holds keeps SEC's
+        # statement), and `merge_json` lays the offered jsonb over the stored one rather than
+        # replacing it (Yahoo's statement window rolls per line). See `writers.upsert`.
+        only_replacing = meta.get("only_replacing")
+        merge_json = [str(c) for c in (meta.get("merge_json") or [])]
+        if scope_columns and (only_replacing or merge_json):
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} declares replace_scope with only_replacing "
+                f"or merge_json; a scope it deletes has nothing left to guard or merge into"
+            )
 
         with self.postgres.connect() as conn:
             with conn.cursor() as cur:
@@ -441,6 +452,8 @@ class PostgresIOManager(dg.ConfigurableIOManager):
                         rows,
                         conflict=list(conflict),
                         update=_updatable(rows, conflict),
+                        only_replacing=dict(only_replacing) if only_replacing else None,
+                        merge_json=merge_json,
                     )
             conn.commit()
 
