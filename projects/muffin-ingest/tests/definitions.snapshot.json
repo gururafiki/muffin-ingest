@@ -1424,7 +1424,7 @@
     },
     "yahoo_companies": {
       "cron_schedule": "30 3 * * *",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "yahoo_companies"
     }

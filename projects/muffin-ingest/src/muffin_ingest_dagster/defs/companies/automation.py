@@ -39,9 +39,12 @@ yahoo_companies_job = dg.define_asset_job(
     # 03:30 UTC: after the price night (00:00, ~2 hours) and the 03:00 symbology re-ask, so the
     # `yfinance` pool is free. Both lanes ask Yahoo at the same pace, one at a time.
     cron_schedule="30 3 * * *",
-    # STOPPED UNTIL THE LANE HAS RUN LIVE ON A TINY SUBSET (Phase 4 step 7). Its first rotation then
-    # starts by decision rather than by a deploy.
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING SINCE 2026-10-17 (Phase 4 step 8). It shipped STOPPED until the lane had run live
+    # on a tiny subset (step 7). That run found two defects the lane would have spread to every
+    # company on a 52/53-week calendar: a TTM refused over the same quarter from two sources
+    # (muffin-deployment#439) and a quarter split across two columns (#441). Both are fixed.
+    # Declared here rather than toggled in the UI, so a reset of Dagster's state cannot stop it.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="A seventh of the universe a day, so each company's summary is a week old at most.",
 )
 def yahoo_companies(
