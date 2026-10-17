@@ -659,7 +659,11 @@ def test_a_day_asks_a_seventh_of_the_grid_and_the_next_day_starts_after_it() -> 
         assert {r.tags[company_automation.COMPANY_DAY_TAG] for r in second} == {"2026-10-15"}
 
 
-def test_the_schedule_ships_stopped() -> None:
-    """The first rotation starts by decision, after the live run on a tiny subset (step 7)."""
+def test_the_schedule_runs() -> None:
+    """Started by decision after the live subset (Phase 4 step 8), and declared in code.
+
+    A schedule turned on in the UI is database state: a reset of Dagster's instance turns it off and
+    nothing in the repo says it should be on.
+    """
     schedule = company_automation.yahoo_companies
-    assert schedule.default_status == dg.DefaultScheduleStatus.STOPPED
+    assert schedule.default_status == dg.DefaultScheduleStatus.RUNNING
