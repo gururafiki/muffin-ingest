@@ -256,10 +256,16 @@ def test_classification_and_reporting_currency() -> None:
     assert company.slug("Software—Infrastructure") == "software-infrastructure"
 
 
-def test_a_named_absence_is_counted_and_yields_nothing() -> None:
+#: Yahoo's two wordings for a symbol it does not carry, each a body captured from the node. The
+#: second fixture's name is the symbol as it is sent: a `/` is the path segment's `%2F`.
+NAMED_ABSENCES = ("BDMS-F.BK", "3BBIF%2FF.BK")
+
+
+@pytest.mark.parametrize("fixture", NAMED_ABSENCES)
+def test_a_named_absence_is_counted_and_yields_nothing(fixture: str) -> None:
     """Never a negative cache: a `(symbol, yfinance)` miss would hide the security from the price
     sweep for thirty days, on the strength of one endpoint."""
-    out = company.normalise([stored("BDMS-F.BK")], known_currencies=KNOWN)
+    out = company.normalise([stored("X", body=summary_body(fixture))], known_currencies=KNOWN)
     assert out.facts == [] and out.stats["absent"] == 1
 
 
@@ -396,14 +402,19 @@ def _session() -> yahoo_session.Session:
     return yahoo_session.Session(cookie="A3=c", crumb="k", opened_at=datetime.now(UTC))
 
 
+@pytest.mark.parametrize(
+    ("symbol", "fixture"), [("BDMS-F.BK", "BDMS-F.BK"), ("3BBIF/F.BK", "3BBIF%2FF.BK")]
+)
 def test_a_summary_answer_that_names_the_absence_is_returned_not_raised(
-    monkeypatch: pytest.MonkeyPatch, outcomes: list[tuple[str, str]]
+    monkeypatch: pytest.MonkeyPatch, outcomes: list[tuple[str, str]], symbol: str, fixture: str
 ) -> None:
+    """Both wordings: `3BBIF/F.BK` read as a transport fault on the first scheduled day."""
     monkeypatch.setattr(
-        httpx, "get", lambda url, **kw: httpx.Response(404, content=summary_body("BDMS-F.BK"))
+        httpx, "get", lambda url, **kw: httpx.Response(404, content=summary_body(fixture))
     )
-    document = yahoo_summary.fetch("BDMS-F.BK", _session())
+    document = yahoo_summary.fetch(symbol, _session())
     assert yahoo_summary.parse(document.body).error is not None
+    assert outcomes == [("yahoo-summary", "answered")]
 
 
 @pytest.mark.parametrize(

@@ -15,7 +15,8 @@ WHAT AN ANSWER IS, measured from the node:
     absent; it never fails the request (non-US listings lack `upgradeDowngradeHistory` and
     `secFilings`, and `esgScores` was absent for every symbol, so it is not asked for).
   * **404 `Quote not found for symbol: BDMS-F.BK`**: an absence that NAMES THE SYMBOL. Kept as an
-    answer, like the chart's `No data found`, so stage 2 can count it.
+    answer, like the chart's `No data found`, so stage 2 can count it. A symbol containing a `/`
+    gets **`Quote not found for ticker symbol: 3BBIF/F.BK`** instead (see `ABSENCE_WORDINGS`).
   * a 404 that names no symbol (a wrong route): a transport fault, never an absence.
   * **401 `Invalid Crumb`** or `Invalid Cookie`: the session expired. `CrumbRejected`, so the caller
     opens a new session once rather than reading the rest of the run as refusals.
@@ -66,6 +67,18 @@ MODULES: tuple[str, ...] = (
 )
 
 
+#: YAHOO'S TWO WORDINGS FOR A SYMBOL IT DOES NOT CARRY, measured from the node 2026-10-18:
+#: `Quote not found for symbol: ZZQQXX` (and `ZZQQXX.BK`, `BDMS-F.BK`), and
+#: `Quote not found for ticker symbol: KEY/R.TO` for every symbol containing a `/` (`ACS/D.MC`,
+#: `3BBIF/F.BK`, `ZZQ/X`). The first schedule day matched only the first wording, so a slash line
+#: read as a transport fault on every weekly visit, and three in a row at the start of a run would
+#: have stopped it. A third wording still reads as transport: loud, and never a wrong absence.
+ABSENCE_WORDINGS: tuple[str, ...] = (
+    "quote not found for symbol",
+    "quote not found for ticker symbol",
+)
+
+
 class CrumbRejected(yahoo_chart.YahooRefused):
     """Yahoo refused the session (401). Open a new one; this says nothing about the symbol."""
 
@@ -95,7 +108,7 @@ def names_an_absence(body: bytes) -> bool:
     """
     error = _error_of(body)
     description = str((error or {}).get("description") or "").lower()
-    return "not found for symbol" in description
+    return any(wording in description for wording in ABSENCE_WORDINGS)
 
 
 def _refusal(status: int, body: bytes) -> yahoo_chart.YahooRefused | None:

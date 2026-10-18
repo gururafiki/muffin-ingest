@@ -172,6 +172,7 @@ The listings are chosen so the plausible wrong rules disagree with the right one
 | `0992.HK` (timeseries) | — | a quarterly reporter whose fiscal Q4 is missing: one 182-day gap among 92-day ones |
 | `ASMLF`, `SPY` | USD / EUR, an ETF | an OTC foreign-ordinary line; an ETF's three modules |
 | `BDMS-F.BK` | — | HTTP 404 `Quote not found for symbol` — a named absence |
+| `3BBIF/F.BK` (2026-10-18) | — | HTTP 404 `Quote not found for ticker symbol` — Yahoo's wording for every symbol with a `/` |
 
 `yahoo_statement_stored_005930.KS_income_annual.json` is the row the edge wrote for Samsung's 2025
 annual income statement (through openbb), read from production on 2026-10-10: the spelling contract.
