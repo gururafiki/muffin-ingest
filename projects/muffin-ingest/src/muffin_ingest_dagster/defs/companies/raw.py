@@ -84,7 +84,7 @@ class _Visit:
 def read_summary(body: bytes) -> tuple[yahoo_summary.Summary | None, str]:
     """What one summary response was, as the outcome it is counted under.
 
-    `absent` is Yahoo naming the symbol as one it does not carry (`Quote not found for symbol`),
+    `absent` is Yahoo naming the symbol as one it does not carry (`yahoo_summary.ABSENCE_WORDINGS`),
     `empty` an answer with no modules. Neither becomes a miss: a `(symbol, yfinance)` miss would
     hide the security from the price sweep on the strength of one endpoint.
     """
