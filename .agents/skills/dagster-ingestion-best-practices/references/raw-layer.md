@@ -65,8 +65,13 @@ Keep each lane's set in one constant (`prices.CONTEXT_COLUMNS`) and test raw aga
 
 ## Known gaps
 
-- `Document.as_row` stores `url` verbatim, so a provider with a key in its query string (Alpha Vantage,
-  Tiingo, FRED, DART) would write the secret to Parquet. Redaction must land before the first keyed
-  provider — `docs/deferred/2026-09-16-raw-request-credentials.md` in the umbrella.
+- `Document.as_row` stores `url` verbatim, so a key in a query string would be written to Parquet
+  for good. **The adapter redacts it, by name**: `yahoo_summary.fetch` stores `crumb=redacted`, and
+  its test asserts the stored URL holds no crumb. Each keyed provider (Alpha Vantage `apikey`, Tiingo
+  `token`, FRED `api_key`, DART `crtfc_key`) does the same, with the same test, before its first live
+  run. After that run, scan the node's raw files with `muffin-dagster-operations`'
+  `scripts/scan_raw_urls.py`, which prints names and counts only. On 2026-10-20 it found all 5,176
+  summary URLs redacted and no credential in any of 62,959 stored URLs. Umbrella note:
+  `docs/deferred/2026-09-16-raw-request-credentials.md`.
 - `ParquetIOManager` writes in place rather than temp-and-rename; a killed write leaves a truncated
   file that fails loudly on load. Re-materialize the partition.
