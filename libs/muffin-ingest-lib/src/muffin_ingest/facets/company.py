@@ -261,6 +261,8 @@ def normalise(
         "no_quote_unit": 0,
         "cap_withheld": 0,
         "estimate_currency_withheld": 0,
+        "reporting_currency_mapped": 0,
+        "reporting_currency_withheld": 0,
     }
     newest: dict[str, Mapping[str, Any]] = {}
     for row in sorted(rows, key=_fetch_order):
@@ -314,13 +316,10 @@ def _facts(
         stats["no_quote_unit"] += 1
 
     facts = CompanyFacts(security_id=sid, fetched_at=fetched)
-    reporting_code = _text(reporting)
-    if (
-        reporting_code
-        and len(reporting_code) == 3
-        and reporting_code.isalpha()
-        and reporting_code.isupper()
-    ):
+    reporting_code, how = price_chart.reporting_currency(_text(reporting), known)
+    if how in ("mapped", "withheld"):
+        stats[f"reporting_currency_{how}"] += 1
+    if reporting_code is not None:
         facts.reporting_currency = reporting_code
 
     beta = _num(v(detail, "beta"))

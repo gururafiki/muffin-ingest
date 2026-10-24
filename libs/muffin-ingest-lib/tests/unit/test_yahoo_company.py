@@ -256,6 +256,24 @@ def test_classification_and_reporting_currency() -> None:
     assert company.slug("Software—Infrastructure") == "software-infrastructure"
 
 
+def test_a_reporting_currency_is_mapped_from_yahoo_s_spelling_or_withheld() -> None:
+    """`financialCurrency` follows the statements' rule: Yahoo's retired `TRL` is the lira, and a
+    code `market.currency` lacks is withheld rather than written."""
+
+    def lira(result: dict[str, Any]) -> None:
+        result["financialData"]["financialCurrency"] = "TRL"
+
+    out = company.normalise(
+        [stored("BHP.AX", body=edited("BHP.AX", lira))], known_currencies=KNOWN | {"TRY"}
+    )
+    assert out.facts[0].reporting_currency == "TRY"
+    assert out.stats["reporting_currency_mapped"] == 1
+
+    out = company.normalise([stored("BHP.AX", body=edited("BHP.AX", lira))], known_currencies=KNOWN)
+    assert out.facts[0].reporting_currency is None
+    assert out.stats["reporting_currency_withheld"] == 1
+
+
 #: Yahoo's two wordings for a symbol it does not carry, each a body captured from the node. The
 #: second fixture's name is the symbol as it is sent: a `/` is the path segment's `%2F`.
 NAMED_ABSENCES = ("BDMS-F.BK", "3BBIF%2FF.BK")
