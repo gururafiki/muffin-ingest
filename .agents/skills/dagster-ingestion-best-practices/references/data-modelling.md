@@ -21,6 +21,16 @@ once; a bad model is paid on every query, every guard and every UI section that 
 - **No polymorphic keys** (a `scope_id` that is sometimes a symbol and sometimes a sector), no
   sampling concept in a primary key, no pipeline state on a fact table — per-subject ingestion state
   belongs to Dagster.
+- **Every ingested row names its provider** (the user's rule, 2026-10-24): a `source_code`
+  referencing `data_source`, on every row a provider produced. Where two providers can state the
+  same fact, **the provider is part of the key** and serving views pick by
+  `market.source_priority`; a writer-side "never replace the other provider" guard loses the lower
+  provider's row and is the wrong shape (Phase 5 moved `security_statement` to
+  `(security_id, source_code, statement, period_ending, period_type)`). A derived table may keep one
+  winner per key, but it carries the winner's `source_code`, and its inputs keep every provider. A
+  value copied onto another table (`security.sic`) needs a provenance-bearing home beside it.
+  Distinguish the provider (`sec`) from the writer that fetched it (`sec-submissions`): if a table
+  needs both, they are two columns.
 - **Lookups are control tables with foreign keys** (`data_source`, `return_period`, `currency`), never
   CHECK lists or code constants. Editorial choices are rows, so they change without a deploy.
 - **Units are schema:** money carries `currency_code`; a `_pct` column holds a percent, never a

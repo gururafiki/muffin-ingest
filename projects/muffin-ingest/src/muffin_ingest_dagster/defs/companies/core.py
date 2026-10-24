@@ -298,14 +298,20 @@ def company_facts(
     description="Yahoo's annual, quarterly and half-yearly statements, with their currency.",
 )
 def yahoo_statement(
-    context: AssetExecutionContext, raw_yahoo_statements: Any
+    context: AssetExecutionContext, postgres: Postgres, raw_yahoo_statements: Any
 ) -> list[dict[str, Any]]:
     """Every stored timeseries document, merged per line, as `market.security_statement` rows.
 
     The writer re-queues a row for the metric derivation when its values change (a trigger on the
     table), so `derived_security_metrics` picks up exactly what moved.
     """
-    parsed = statements.normalise(partitioned.loaded_rows(raw_yahoo_statements))
+    # A CURRENCY THE METRICS CANNOT REFERENCE IS WITHHELD HERE: `TRL` stalled the derivation for
+    # every company from 2026-10-21 to 10-24.
+    with postgres.connect() as conn:
+        known = fx.known_currencies(conn)
+    parsed = statements.normalise(
+        partitioned.loaded_rows(raw_yahoo_statements), known_currencies=known
+    )
     if parsed.unknown_keys:
         context.log.warning(
             "timeseries types in none of the three statements (raw keeps them): %s",

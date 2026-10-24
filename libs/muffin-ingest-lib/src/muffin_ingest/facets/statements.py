@@ -27,11 +27,12 @@ import itertools
 import json
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+from muffin_ingest.facets import price_chart
 from muffin_ingest.facets.prices import Subject
 from muffin_ingest.providers import yahoo_chart, yahoo_summary, yahoo_timeseries
 from muffin_ingest.providers.documents import Document
@@ -158,7 +159,9 @@ def _fetched_at(row: Mapping[str, Any]) -> str | None:
     return str(value) if value else None
 
 
-def normalise(rows: Sequence[Mapping[str, Any]]) -> Normalised:
+def normalise(
+    rows: Sequence[Mapping[str, Any]], *, known_currencies: Collection[str] | None = None
+) -> Normalised:
     """Stored timeseries documents to statement rows. No provider call.
 
     A VALUE IS THE NEWEST ONE ANY DOCUMENT CARRIES FOR ITS LINE AND PERIOD. Yahoo keeps a rolling
@@ -173,7 +176,9 @@ def normalise(rows: Sequence[Mapping[str, Any]]) -> Normalised:
 
     A CURRENCY IS WHAT THE PERIOD'S VALUES SAY. They agree in every document measured; when they do
     not, the most common code wins and the row is counted under `mixed_currency`, because one
-    currency column cannot hold two and a guess would be worse than a count.
+    currency column cannot hold two and a guess would be worse than a count. Yahoo's own spellings
+    are mapped (`price_chart.YAHOO_REPORTING_CURRENCY`) and a code `known_currencies` lacks is
+    withheld, so a row can never carry a code the metrics cannot reference.
     """
     stats = {
         "documents": 0,
@@ -188,6 +193,8 @@ def normalise(rows: Sequence[Mapping[str, Any]]) -> Normalised:
         "half_years": 0,
         "mixed_currency": 0,
         "no_currency": 0,
+        "currency_mapped": 0,
+        "currency_withheld": 0,
     }
     unknown: dict[str, int] = {}
     by_security: dict[str, list[Mapping[str, Any]]] = {}
@@ -254,7 +261,7 @@ def normalise(rows: Sequence[Mapping[str, Any]]) -> Normalised:
             for _, code in carried.values():
                 if code:
                     counts[code] = counts.get(code, 0) + 1
-            currency = _currency_of(counts, stats)
+            currency = _currency_of(counts, stats, known_currencies)
             data: dict[str, Any] = {"period_ending": end.isoformat()}
             for line in sorted(lines.get((frequency, statement), ())):
                 data[line] = carried[line][0] if line in carried else None
@@ -274,15 +281,28 @@ def normalise(rows: Sequence[Mapping[str, Any]]) -> Normalised:
     return Normalised(rows=out, stats=stats, unknown_keys=unknown)
 
 
-def _currency_of(currencies: Mapping[str, int], stats: dict[str, int]) -> str | None:
-    """The period's currency, if its points name a plain three-letter code."""
-    codes = {c: n for c, n in currencies.items() if len(c) == 3 and c.isalpha() and c.isupper()}
+def _currency_of(
+    currencies: Mapping[str, int], stats: dict[str, int], known: Collection[str] | None
+) -> str | None:
+    """The period's currency, if its points name a plain three-letter code we can reference."""
+    codes: dict[str, int] = {}
+    mapped = False
+    for code, n in currencies.items():
+        ours = price_chart.YAHOO_REPORTING_CURRENCY.get(code, code)
+        if len(ours) == 3 and ours.isalpha() and ours.isupper():
+            codes[ours] = codes.get(ours, 0) + n
+            mapped = mapped or ours != code
     if not codes:
         stats["no_currency"] += 1
         return None
     if len(codes) > 1:
         stats["mixed_currency"] += 1
-    return sorted(codes.items(), key=lambda item: (-item[1], item[0]))[0][0]
+    chosen = sorted(codes.items(), key=lambda item: (-item[1], item[0]))[0][0]
+    if known is not None and chosen not in known:
+        stats["currency_withheld"] += 1
+        return None
+    stats["currency_mapped"] += int(mapped)
+    return chosen
 
 
 # --- what a visit asks for -----------------------------------------------------------------------

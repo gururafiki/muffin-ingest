@@ -52,7 +52,9 @@ def rows_by_key(rows: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[s
     return {(r["statement"], r["period_type"], r["period_ending"]): r for r in rows}
 
 
-def synthetic(frequency: str, lines: dict[str, list[tuple[str, float | None]]]) -> bytes:
+def synthetic(
+    frequency: str, lines: dict[str, list[tuple[str, float | None]]], *, currency: str = "KRW"
+) -> bytes:
     """A timeseries body in Yahoo's shape: one result per line, a point per period."""
     result = []
     for key, points in lines.items():
@@ -64,7 +66,7 @@ def synthetic(frequency: str, lines: dict[str, list[tuple[str, float | None]]]) 
                     {
                         "asOfDate": day,
                         "periodType": "3M" if frequency == "quarterly" else "12M",
-                        "currencyCode": "KRW",
+                        "currencyCode": currency,
                         "reportedValue": {"raw": value, "fmt": str(value)},
                     }
                     for day, value in points
@@ -247,3 +249,32 @@ def test_a_period_the_timeseries_never_carries_is_asked_for_three_times_then_lef
     today = date(2026, 11, 20)
     assert statements.due(held + tries[:2], stated=stated, today=today) == "new_period"
     assert statements.due(held + tries, stated=stated, today=today) is None
+
+
+# --- the currency ---------------------------------------------------------------------------------
+
+
+def test_yahoo_s_retired_lira_code_is_read_as_the_lira() -> None:
+    """`TRL` is the code the lira lost in 2005; Yahoo still labels some Turkish statements with it
+    while the values are TRY (Aksigorta 2022: 7.2 bn beside its TRY 2021 and 2023 figures).
+    Written through, it stopped the metric derivation for every company from 2026-10-21 to 10-24."""
+    body = synthetic("annual", {"TotalRevenue": [("2022-12-31", 7227436471.0)]}, currency="TRL")
+    out = statements.normalise([stored("X", "annual", body=body)], known_currencies={"TRY", "USD"})
+    assert [r["currency"] for r in out.rows] == ["TRY"]
+    assert out.stats["currency_mapped"] == 1
+    assert out.stats["currency_withheld"] == 0
+
+
+def test_a_currency_the_metrics_cannot_reference_is_withheld() -> None:
+    """A plain code `market.currency` does not hold is withheld and counted, never written: the
+    derivation copies it into `security_metric`, whose currency is a foreign key."""
+    body = synthetic("annual", {"TotalRevenue": [("2023-12-31", 1.0)]}, currency="XYZ")
+    withheld = statements.normalise([stored("X", "annual", body=body)], known_currencies={"USD"})
+    assert [r["currency"] for r in withheld.rows] == [None]
+    assert withheld.stats["currency_withheld"] == 1
+    # The control: a known code passes, and with no database there is no membership test at all.
+    known = synthetic("annual", {"TotalRevenue": [("2023-12-31", 1.0)]}, currency="USD")
+    kept = statements.normalise([stored("X", "annual", body=known)], known_currencies={"USD"})
+    assert [r["currency"] for r in kept.rows] == ["USD"]
+    unchecked = statements.normalise([stored("X", "annual", body=body)])
+    assert [r["currency"] for r in unchecked.rows] == ["XYZ"]

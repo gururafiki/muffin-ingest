@@ -46,6 +46,32 @@ INTERVAL = "1d"
 #: themselves, so the four subunit spellings Yahoo uses are visible in one place.
 YAHOO_CURRENCY: dict[str, str] = {"GBp": "GBX", "ZAc": "ZAC", "ILA": "ILA", "KWF": "KWF"}
 
+#: Yahoo's REPORTING-currency codes that are not ours, the statements' and `financialCurrency`'s
+#: counterpart of the map above, equally never case-folded. `TRL` is the Turkish lira code retired
+#: in 2005, and Yahoo still labels some Turkish statements with it while their values are plainly
+#: TRY: Aksigorta's 2022 revenue is 7.2 bn, between its TRY 2021 and 2023 figures (measured
+#: 2026-10-21). Written through unmapped, it stopped the metric derivation for every company from
+#: 2026-10-21 to 10-24, because `security_metric.currency_code` references `market.currency`.
+YAHOO_REPORTING_CURRENCY: dict[str, str] = {"TRL": "TRY"}
+
+
+def reporting_currency(code: object, known: Collection[str] | None) -> tuple[str | None, str]:
+    """Our code for a reporting currency Yahoo names, and what happened to it.
+
+    The outcome is `ours` (passed through), `mapped` (renamed by `YAHOO_REPORTING_CURRENCY`),
+    `withheld` (a plain code `market.currency` does not hold, so none is given rather than one that
+    fails the write or a later derivation) or `none` (no plain code at all). `known=None` skips the
+    membership test, for callers with no database.
+    """
+    if not isinstance(code, str) or not code:
+        return None, "none"
+    ours = YAHOO_REPORTING_CURRENCY.get(code, code)
+    if not (len(ours) == 3 and ours.isalpha() and ours.isupper()):
+        return None, "none"
+    if known is not None and ours not in known:
+        return None, "withheld"
+    return ours, ("mapped" if ours != code else "ours")
+
 
 def quote_currency(code: object, known: Collection[str]) -> str | None:
     """Our code for the currency Yahoo says a line is quoted in, or None when there is none to give.
