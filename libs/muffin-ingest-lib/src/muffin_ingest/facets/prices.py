@@ -276,43 +276,6 @@ def row_date(row: Mapping[str, Any]) -> date | None:
     return _as_date(row.get("date"))
 
 
-# --- one security, one listing's history ----------------------------------------------------------
-#
-# A SECURITY'S SYMBOL CAN CHANGE UNDER ITS STORED HISTORY, AND THE EXTENSION THEN APPENDS ANOTHER
-# LISTING TO IT. The lane asks with `coalesce(provider symbol, ticker)`, so a security priced
-# through its ticker (OpenFIGI's US line, usually a thin OTC foreign-ordinary line) moves to its
-# home line the moment symbology adopts one. Measured 2026-10-04: 69 history partitions held two
-# asked symbols, years of the OTC line in dollars followed by days of the home line: Geely as
-# `GELYF` from 2007 then `0175.HK`, SATS as `SPASF` then `S58.SI`, Wuxi Biologics as `WXIBF` then
-# `2269.HK`. Each series jumps in price and currency at the switch, and every return across it is
-# wrong. The extension never looked at the symbol, only at the newest date.
-
-
-def asked_with_another_symbol(stored: Sequence[Mapping[str, Any]], symbol: str) -> bool:
-    """Whether a stored history holds a row asked with a symbol other than `symbol`.
-
-    A row with no `asked_symbol` says nothing about which symbol it came from, so it counts as
-    another. Measured 2026-10-04: every non-empty partition records one, so this reloads exactly the
-    mixed ones.
-    """
-    return any(row.get("asked_symbol") != symbol for row in stored)
-
-
-def dates_by_security(rows: Sequence[Mapping[str, Any]]) -> dict[str, set[date]]:
-    """Each security's raw trade dates, every row counted, the ones stage 2 refuses included.
-
-    A row whose close stage 2 refuses (an unclosed session's NaN) still says the provider has that
-    day, so a bar already published for it is not retracted on the strength of a glitch.
-    """
-    out: dict[str, set[date]] = {}
-    for row in rows:
-        day, sid = row_date(row), row.get("security_id")
-        if day is None or sid is None:
-            continue
-        out.setdefault(str(sid), set()).add(day)
-    return out
-
-
 #: WITHIN THE RANGE A RAW HISTORY COVERS, `price_bar` MIRRORS IT. Measured 2026-10-04: 95
 #: securities held 5,097 bars on dates their raw history lacks, and every one of the twelve largest
 #: was a Hong Kong home line (2018.HK, 2331.HK, 2688.HK…) carrying its OTC line's dollar bars on

@@ -556,32 +556,6 @@
       ],
       "tags": {}
     },
-    "raw_price_history": {
-      "automation_condition": null,
-      "backfill_policy": {
-        "max_partitions_per_run": 25,
-        "type": "MULTI_RUN"
-      },
-      "code_version": null,
-      "deps": {},
-      "execution_type": "MATERIALIZATION",
-      "freshness_policy": null,
-      "group_name": "prices",
-      "io_manager_key": "parquet_io",
-      "kinds": [
-        "parquet",
-        "yfinance"
-      ],
-      "owners": [],
-      "partitions": {
-        "kind": "dynamic",
-        "name": "security"
-      },
-      "pools": [
-        "yfinance"
-      ],
-      "tags": {}
-    },
     "raw_sec_cik_map": {
       "automation_condition": null,
       "backfill_policy": null,

@@ -1,10 +1,10 @@
-"""The whole price graph, offline, over CAPTURED provider bytes — asserted in SQL.
+"""The FX and index graphs, offline, over CAPTURED provider shapes — asserted in SQL.
 
 WHY THIS EXISTS ALONGSIDE THE OTHER ASSET TESTS. Those drive shapes someone wrote out, and every
-shape that has actually cost this pipeline something was one nobody would have written: a
-single-symbol response with no `symbol` column, an unknown symbol RAISING instead of answering
-empty, a provider returning bars outside the range it was asked for. `price_history.json` is what
-yfinance really said on 2026-09-11, so these assertions run against evidence.
+shape that has actually cost this pipeline something was one nobody would have written: a body
+that is the previous day's, a weekday the provider left out, a session it has not closed. The
+price lane's replays over openbb's captured answers left with that lane on 2026-10-24; the chart
+lane replays Yahoo's captured bodies in `test_price_chart_assets.py`.
 
 AND DUCKDB IS THE ASSERTION ENGINE, NOT AN I/O MANAGER. `dagster-duckdb` pins `dagster==1.13.21`
 against our `<1.13`, and it is not needed anyway: raw already lands as Parquet and DuckDB reads
@@ -24,95 +24,18 @@ from typing import Any
 
 import dagster as dg
 import duckdb
-from muffin_ingest.providers import openbb
 from muffin_ingest.providers.openbb import Answer
 
-from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
-from muffin_ingest_dagster.defs.prices import raw as prices_raw
-from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
+from muffin_ingest_dagster.lib.io_managers import ParquetIOManager
 from muffin_ingest_dagster.lib.resources import Postgres
-from tests import FIXTURES
 
-from . import test_price_assets as fakes
-
-CAPTURED = json.loads((FIXTURES / "price_history.json").read_text())
-
-#: The captured window. The fixture was taken over 2026-09-08..09.
 PARTITION = "2026-09-08"
-
-
-def replaying(group: str) -> Any:
-    """A fetcher that answers from captured bytes, raising where the provider raised."""
-    captured = CAPTURED[group]
-
-    def fetch(symbols: Sequence[str], **kwargs: Any) -> Answer:
-        if captured["error"]:
-            # THE PROVIDER RAISES FOR AN UNKNOWN SYMBOL rather than answering with no rows.
-            # Replaying that faithfully is the point: a fake returning [] would exercise a path the
-            # provider does not take.
-            raise RuntimeError(captured["error"])
-        return Answer(rows=list(captured["rows"]), warnings=list(captured["warnings"]))
-
-    return fetch
-
-
-def _history(
-    tmp_path: Path, fetch: Any, subjects: list[tuple[str, str, float]], assets: list[Any]
-) -> dg.ExecuteInProcessResult:
-    """The security lane over `subjects` as ONE RANGE RUN — the shape a night's slice takes.
-
-    THE DAY LANE CARRIED THIS SUITE UNTIL 2026-10-04. Its rules about what raw keeps and what stage
-    2 publishes are the security lane's too, so they replay through it rather than leaving with the
-    lane that first carried them.
-    """
-    keys = [sid for sid, _, _ in subjects]
-    saved_fetch, saved_universe = openbb.price_history, list(fakes.UNIVERSE)
-    openbb.price_history = fetch
-    fakes.UNIVERSE[:] = subjects
-    try:
-        with dg.instance_for_test() as instance:
-            instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
-            return dg.materialize(
-                assets,
-                instance=instance,
-                tags={
-                    "dagster/asset_partition_range_start": keys[0],
-                    "dagster/asset_partition_range_end": keys[-1],
-                },
-                resources={
-                    "postgres": fakes.FakePostgres(),
-                    "parquet_io": ParquetIOManager(str(tmp_path)),
-                    "raw_store": RawStore(base_path=str(tmp_path)),
-                    "postgres_io": CapturingPostgresIO(),
-                },
-            )
-    finally:
-        openbb.price_history = saved_fetch
-        fakes.UNIVERSE[:] = saved_universe
-
-
-def raw_files(tmp_path: Path) -> Path:
-    """Every security's raw file, as one glob DuckDB reads together."""
-    return tmp_path / "raw_price_history" / "*.parquet"
-
-
-def materialise(tmp_path: Path, group: str, subjects: list[tuple[str, str, float]]) -> Path:
-    _history(tmp_path, replaying(group), subjects, [prices_raw.raw_price_history])
-    return raw_files(tmp_path)
 
 
 def sql(parquet: Path, query: str) -> list[tuple[Any, ...]]:
     # BY NAME, because a security the provider answered with no dividend field writes a file whose
     # columns differ from its neighbours', and a positional union would misread every row after it.
     return duckdb.sql(query.format(f=f"read_parquet('{parquet}', union_by_name = true)")).fetchall()
-
-
-def columns_of(parquet: Path) -> list[str]:
-    """The column names raw actually wrote — the shape, which no test asserted until raw was
-    found to be dropping four of the provider's ten fields."""
-    return list(
-        duckdb.sql(f"select * from read_parquet('{parquet}', union_by_name = true) limit 1").columns
-    )
 
 
 def chart_body(
@@ -165,186 +88,6 @@ def serving(body: bytes) -> Iterator[list[dict[str, Any]]]:
         yield asked
     finally:
         yahoo_chart.fetch = saved
-
-
-BATCH_SUBJECTS = [
-    ("11111111-1111-1111-1111-111111111111", "AAPL", 5.0),
-    ("22222222-2222-2222-2222-222222222222", "005930.KS", 4.0),
-    ("33333333-3333-3333-3333-333333333333", "QIBK.QA", 3.0),
-    ("44444444-4444-4444-4444-444444444444", "SQM-B.SN", 2.0),
-]
-
-
-def test_every_captured_bar_is_attributed_to_the_right_security(tmp_path: Path) -> None:
-    """The batch response DOES carry a `symbol` column, so this is the easy direction — and it is
-    still worth pinning, because the hard direction below is the same code path."""
-    parquet = materialise(tmp_path, "batch_mixed_venues", BATCH_SUBJECTS)
-    got = dict(sql(parquet, "select asked_symbol, security_id from {f}"))
-    assert got["005930.KS"] == "22222222-2222-2222-2222-222222222222"
-    assert got["SQM-B.SN"] == "44444444-4444-4444-4444-444444444444"
-
-
-def test_a_single_symbol_response_carries_no_symbol_column_and_is_still_attributed(
-    tmp_path: Path,
-) -> None:
-    """THE SHAPE NOBODY WOULD HAVE INVENTED. Captured: a one-symbol request comes back with no
-    `symbol` field at all, so the rows have to be told what was asked. Getting this wrong attributes
-    a whole series to the wrong company, silently."""
-    assert "symbol" not in CAPTURED["single_symbol_no_symbol_column"]["rows"][0], (
-        "the fixture must actually exhibit the shape this test is named for"
-    )
-    subjects = [("55555555-5555-5555-5555-555555555555", "NESN.SW", 1.0)]
-    parquet = materialise(tmp_path, "single_symbol_no_symbol_column", subjects)
-    assert sql(parquet, "select distinct security_id from {f}") == [
-        ("55555555-5555-5555-5555-555555555555",)
-    ]
-
-
-def test_a_symbol_the_provider_raises_on_is_not_recorded_as_a_bar(tmp_path: Path) -> None:
-    """Captured: an unknown symbol raises `EmptyDataError` rather than answering empty. The run must
-    survive it and write nothing for that security — never a row, and never a mark, because a raise
-    is not evidence about the subject until it has been asked alone with a control answering."""
-    subjects = [("66666666-6666-6666-6666-666666666666", "ZZZZ.NOPE", 0.1)]
-    parquet = materialise(tmp_path, "provider_has_nothing", subjects)
-    # Readable by DuckDB even though it holds nothing — an empty partition is a RESULT, and one
-    # that only our own loader can open is not inspectable raw.
-    assert sql(parquet, "select count(*) from {f}") == [(0,)]
-
-
-def test_ohlcv_survives_the_round_trip_through_parquet(tmp_path: Path) -> None:
-    """Raw records what the provider said — EVERY field, under the provider's own name. A column
-    silently lost in serialisation would only show up when a later stage wanted it."""
-    parquet = materialise(tmp_path, "batch_mixed_venues", BATCH_SUBJECTS)
-    cols = {r[0] for r in sql(parquet, "select column_name from (describe select * from {f})")}
-    sent = set(CAPTURED["batch_mixed_venues"]["rows"][0])
-    assert sent <= cols, f"raw dropped the provider's {sorted(sent - cols)}"
-    assert {"security_id", "asked_symbol", "provider"} <= cols
-    # NOTHING DERIVED. A parsed `trade_date` was written into raw until 2026-09-12 — an
-    # interpretation of the vendor's own `date`, made before anything was stored.
-    assert "trade_date" not in cols
-
-
-def test_the_window_asked_for_is_half_open_and_never_degenerate(tmp_path: Path) -> None:
-    """A DEGENERATE RANGE IS IGNORED BY THE PROVIDER, measured against the real hub:
-
-        start=2026-09-01 end=2026-09-01  ->  7 rows, 2026-09-01..2026-09-10
-        start=2026-09-01 end=2026-09-02  ->  2 rows, exactly those two
-
-    `start == end` returns everything from `start` to TODAY. The security lane asks a security it
-    has never collected for `[1970-01-01, today)`, and one it holds for `[watermark - REREAD,
-    today)` — held at least a day wide by `_earliest`, which is what keeps it from ever being
-    degenerate however recent the watermark.
-    """
-    asked: dict[str, Any] = {}
-
-    def recording(symbols: Sequence[str], **kwargs: Any) -> Answer:
-        asked.update(kwargs)
-        return Answer(rows=list(CAPTURED["batch_mixed_venues"]["rows"]))
-
-    _history(tmp_path, recording, BATCH_SUBJECTS, [prices_raw.raw_price_history])
-
-    assert asked["start"] == prices_partitions.HISTORY_START
-    assert asked["end"] == date.today()
-    assert asked["end"] > asked["start"]
-
-    # A WATERMARK OF TODAY, AND NO RE-READ: the one input that could make the window empty.
-    today = date.today()
-    saved = prices_raw.REREAD
-    prices_raw.REREAD = timedelta(0)
-    try:
-        start = prices_raw._earliest({"held": today}, today)
-    finally:
-        prices_raw.REREAD = saved
-    assert start == today - timedelta(days=1), "start == end makes the provider ignore the range"
-
-
-def _asking(group: str, asked: dict[str, Any]) -> Any:
-    """The captured answer, recording the window it was asked for."""
-
-    def fetch(symbols: Sequence[str], **kwargs: Any) -> Answer:
-        asked.update(kwargs, symbols=list(symbols))
-        return Answer(rows=list(CAPTURED[group]["rows"]))
-
-    return fetch
-
-
-def test_a_symbol_change_restarts_the_history_instead_of_extending_another_listing(
-    tmp_path: Path,
-) -> None:
-    """A STORED HISTORY ASKED WITH ANOTHER SYMBOL IS ANOTHER LISTING'S.
-
-    Measured 2026-10-04: 69 partitions held two asked symbols, years of an OTC line in dollars and
-    then days of the home line — SATS as `SPASF` from 2010, then `S58.SI` from 2026-09-17 — because
-    the extension read only the newest stored date. The capture answers a one-symbol request
-    whatever it is called, so the same rows stand in for both listings here.
-    """
-    sid = "55555555-5555-5555-5555-555555555555"
-    group = "single_symbol_no_symbol_column"
-    own = tmp_path / "raw_price_history" / f"{sid}.parquet"
-    materialise(tmp_path, group, [(sid, "SPASF", 1.0)])
-    assert sql(own, "select distinct asked_symbol from {f}") == [("SPASF",)]
-
-    asked: dict[str, Any] = {}
-    result = _history(
-        tmp_path, _asking(group, asked), [(sid, "S58.SI", 1.0)], [prices_raw.raw_price_history]
-    )
-
-    assert asked["symbols"] == ["S58.SI"]
-    assert asked["start"] == prices_partitions.HISTORY_START, (
-        "a history asked with another symbol is reloaded in full, never extended"
-    )
-    assert sql(own, "select distinct asked_symbol from {f}") == [("S58.SI",)], (
-        "the reload replaces the file; a merge would keep the other listing's rows beside it"
-    )
-    meta = result.asset_materializations_for_node("raw_price_history")[0].metadata
-    assert meta["restarting_history"].value == 1
-    assert meta["loading_full_history"].value == 1
-
-
-def test_the_same_symbol_extends_from_its_watermark(tmp_path: Path) -> None:
-    """THE CONTROL. The rule above must not turn every extension into a reload, which would fetch
-    ten years of every security every night."""
-    sid = "55555555-5555-5555-5555-555555555555"
-    group = "single_symbol_no_symbol_column"
-    materialise(tmp_path, group, [(sid, "NESN.SW", 1.0)])
-
-    asked: dict[str, Any] = {}
-    result = _history(
-        tmp_path, _asking(group, asked), [(sid, "NESN.SW", 1.0)], [prices_raw.raw_price_history]
-    )
-
-    assert asked["start"] > prices_partitions.HISTORY_START
-    meta = result.asset_materializations_for_node("raw_price_history")[0].metadata
-    assert meta["restarting_history"].value == 0
-    assert meta["extending_from_watermark"].value == 1
-
-
-def test_a_single_run_covering_several_partitions_writes_one_file_each(tmp_path: Path) -> None:
-    """A MULTI-PARTITION RUN MUST FILE EACH ROW UNDER ITS OWN PARTITION. `UPathIOManager` refuses a
-    multi-partition output outright —
-
-        does not support persisting an output associated with multiple partitions
-
-    — so the first 96-security history backfill fetched every security's full history, paid the
-    provider for all of it, and died at the WRITE. Nothing before the write could see it: the asset
-    ran, logged "full history for 96 of 96", and failed afterwards. A night's slice is exactly such
-    a run: 25 securities, one file each, each holding only its own security.
-    """
-    _history(
-        tmp_path,
-        replaying("batch_mixed_venues"),
-        BATCH_SUBJECTS,
-        [prices_raw.raw_price_history],
-    )
-
-    keys = sorted(sid for sid, _, _ in BATCH_SUBJECTS)
-    written = sorted(p.stem for p in (tmp_path / "raw_price_history").glob("*.parquet"))
-    assert written == keys, "one file per partition, named for the partition it claims"
-
-    for key in keys:
-        own = tmp_path / "raw_price_history" / f"{key}.parquet"
-        rows = sql(own, "select distinct security_id from {f}")
-        assert rows == [(key,)], f"{key}'s file holds only {key}"
 
 
 class CapturingPostgresIO(dg.ConfigurableIOManager):
@@ -776,33 +519,6 @@ def test_a_session_the_provider_has_not_closed_is_not_the_newest_bar(tmp_path: P
     events = result.asset_materializations_for_node(indices_core.index_return.op.name)
     metadata = {k: v.value for k, v in events[0].metadata.items()}
     assert (metadata["with_returns"], metadata["null_closes"]) == (1, 1)
-
-
-def test_a_range_of_exactly_one_partition_is_written_as_one_partition(tmp_path: Path) -> None:
-    """A RANGE OF ONE IS NOT A RANGE, AND THE I/O MANAGER DISAGREES ABOUT WHICH IT IS.
-
-    `BackfillPolicy.multi_run` groups CONTIGUOUS partitions, so a backfill whose keys are scattered
-    through the partition set produces ONE RUN PER PARTITION — each carrying a
-    `partition_key_range` whose start equals its end. `_by_partition` saw the range and returned a
-    mapping; `UPathIOManager` saw one partition and took its single-partition path, handing the
-    mapping straight to the writer:
-
-        AttributeError: 'str' object has no attribute 'get'
-
-    — naming neither the partition nor the shape. Measured in production: 250 requested partitions
-    became 250 single-partition runs and the first three failed exactly this way. The `_history`
-    helper sets exactly the tags Dagster sets for such a run.
-    """
-    one = [BATCH_SUBJECTS[0]]
-    result = _history(
-        tmp_path, replaying("batch_mixed_venues"), one, [prices_raw.raw_price_history]
-    )
-
-    assert result.success, "a one-partition range must write as a single partition"
-    written = sorted(p.stem for p in (tmp_path / "raw_price_history").glob("*.parquet"))
-    assert written == [one[0][0]]
-    got = sql(raw_files(tmp_path), "select count(*) from {f}")
-    assert got[0][0] > 0, "and it must hold rows rather than a serialised mapping"
 
 
 def test_a_multi_day_fx_backfill_writes_one_file_per_day(tmp_path: Path) -> None:

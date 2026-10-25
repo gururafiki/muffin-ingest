@@ -343,7 +343,7 @@ def test_no_run_covers_more_partitions_than_the_measured_memory_budget() -> None
     2.5 GiB, the run failing at 00:07:08 with `ChildProcessCrashException`. No bars were published
     for three days.
 
-    `raw_price_history` declares `BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN)` precisely
+    The history lane declares `BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN)` precisely
     to bound that — 96 securities of full history measured 683,391 bars and OOM at 2.4 GB, 25
     measured ~178k rows and ~600 MB. **A backfill policy does not apply to a schedule's
     RunRequest**, so naming a wide range walks straight past the one number that was measured to

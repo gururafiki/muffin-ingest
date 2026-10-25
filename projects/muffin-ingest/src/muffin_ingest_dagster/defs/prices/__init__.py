@@ -7,9 +7,8 @@
           night the provider refuses simply leaves partitions unmaterialised for the next run to
           collect. A first visit loads the whole history; later ones extend it by a week.
 
-  `raw_price_history`  the same grid through openbb, the lane until 2026-10-10. Defined and
-          unscheduled as the rollback; its files stay on disk until the drop date in umbrella
-          docs/deferred/2026-10-10-the-openbb-price-raw-is-the-rollback.md.
+  `raw_price_history`  the same grid through openbb, the lane until 2026-10-10. DELETED
+          2026-10-24 with its files, after two clean rotations of the chart lane.
 
   `raw_price_bars`     DAILY partitions, DELETED 2026-10-04 after two weeks of clean sweeps. It
           was kept as the rollback from the cutover; its offline replay tests now drive the
