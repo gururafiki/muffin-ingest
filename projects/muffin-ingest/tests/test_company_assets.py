@@ -548,9 +548,13 @@ def test_stage_2_writes_each_table_from_the_newest_summary_in_one_transaction(
     assert meta(result, "yahoo_classification")["nodes_created"] == 2
 
 
-def test_yahoo_statements_keep_sec_rows_and_merge_into_the_stored_lines(tmp_path: Path) -> None:
-    """THE GUARD AND THE MERGE ARE METADATA ON THE ASSET, read by the Postgres manager: a dict and a
-    list survive definition metadata, and the SQL the writer sends carries both."""
+def test_yahoo_statements_are_keyed_by_their_provider_and_merge_into_the_stored_lines(
+    tmp_path: Path,
+) -> None:
+    """THE KEY AND THE MERGE ARE METADATA ON THE ASSET, read by the Postgres manager, and the SQL
+    the writer sends carries both. The conflict target names the provider, so Yahoo's row for a
+    period SEC reports lands beside SEC's; there is no guard on whose row it may replace, since the
+    key already keeps each provider to its own (Phase 5 decision 6)."""
     with yahoo(Yahoo({"AAPL": summary_body("AAPL")})):
         result = visit(
             tmp_path,
@@ -560,7 +564,9 @@ def test_yahoo_statements_keep_sec_rows_and_merge_into_the_stored_lines(tmp_path
     assert result.success
     inserts = [sql for sql, _ in CALLS if sql.startswith("insert into market.security_statement")]
     assert inserts, "no statements were written"
-    assert all("stored_row.source_code = %s" in sql for sql in inserts)
+    key = "on conflict (security_id, source_code, statement, period_ending, period_type)"
+    assert all(key in sql for sql in inserts)
+    assert not any("stored_row.source_code = %s" in sql for sql in inserts)
     assert all("jsonb_strip_nulls(excluded.data)" in sql for sql in inserts)
     rows = OFFERED["market.security_statement"]
     assert {r["currency"] for r in rows} == {"USD"}
