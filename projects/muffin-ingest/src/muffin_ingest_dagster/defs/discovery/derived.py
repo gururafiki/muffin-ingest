@@ -79,10 +79,11 @@ def venue_listing_absence(
         row = cur.fetchone()
     outcome: dict[str, Any] = row[0] if row else {}
     context.log.info(
-        "absence: %s windows judged, %s lines marked (%s absent in all); unfinished %s; "
-        "refused %s; not yet filed %s",
+        "absence: %s windows judged, %s lines marked, %s un-marked past a window (%s absent in "
+        "all); unfinished %s; refused %s; not yet filed %s",
         outcome.get("windows_judged"),
         outcome.get("marked"),
+        outcome.get("cleared"),
         outcome.get("absent"),
         outcome.get("unfinished"),
         outcome.get("refused"),
@@ -93,6 +94,9 @@ def venue_listing_absence(
             "queries": len(keys),
             "windows_judged": outcome.get("windows_judged"),
             "marked": outcome.get("marked"),
+            # Past a capped window an alias that returns a line again un-marks it at judgement;
+            # inside, only the venue's own page does, through the database trigger.
+            "cleared": outcome.get("cleared"),
             "absent": outcome.get("absent"),
             "marked_by_window": dg.MetadataValue.json(outcome.get("marked_by_window") or {}),
             # NAMED, NOT JUST COUNTED: each is a window nothing was decided about today.
