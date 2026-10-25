@@ -107,9 +107,14 @@ def price_bar_history(
     metadata={
         "table": "market.security_corporate_action",
         "conflict": ["security_id", "ex_date", "kind"],
-        # THE KEY LEAVES THE SOURCE OUT, and Tiingo wrote 6,799 rows under it. A day Tiingo holds
-        # keeps Tiingo's row until its parity check retires it (Phase 4 decision 9).
-        "only_replacing": {"source_code": actions.SOURCE},
+        # THE KEY LEAVES THE SOURCE OUT, and Tiingo wrote 6,914 rows under it. Retired 2026-10-25
+        # (Phase 4 decision 9, the user): the parity check over its 388 securities found Yahoo
+        # stating 5,828 of its 6,823 dividends on the same day and value, and 732 more on the same
+        # day with Tiingo's figure NOT split-adjusted, which inflated total returns (AVGO 5y +1,140%
+        # against +527% price). So Yahoo replaces Tiingo's row on every day its documents state;
+        # a day only Tiingo holds keeps its row until the contract, and every other source's row
+        # stays. The retraction below still deletes only Yahoo's own rows.
+        "only_replacing": {"source_code": [actions.SOURCE, actions.RETIRED_SOURCE]},
     },
     # IN THE NIGHTLY JOB, so it runs whenever the sweep does: a night without it is a stopped lane.
     freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(hours=36)),

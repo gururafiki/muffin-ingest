@@ -340,6 +340,23 @@ def test_only_replacing_updates_a_conflicting_row_only_if_it_is_the_writer_s_own
         )
 
 
+def test_only_replacing_with_a_list_replaces_any_named_source_and_no_other() -> None:
+    """A retired source's rows are superseded by the writer that replaces it (Tiingo by Yahoo,
+    2026-10-25), and every other source's rows still stay. The list is ONE array parameter."""
+    cur = FakeCursor()
+    writers.upsert(
+        cur,
+        "market.security_corporate_action",
+        [STATEMENT],
+        conflict=STATEMENT_KEY,
+        update=["data", "source_code"],
+        only_replacing={"source_code": ["yfinance", "tiingo"]},
+    )
+    sql, params = cur.calls[0]
+    assert sql.endswith("and stored_row.source_code = any(%s)")
+    assert params[-1] == ["yfinance", "tiingo"] and "tiingo" not in sql
+
+
 def test_merge_json_lays_the_offered_values_over_the_stored_object() -> None:
     """Yahoo's statement lines roll per line: a narrower answer must not erase a stored figure."""
     cur = FakeCursor()
