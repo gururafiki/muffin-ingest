@@ -579,41 +579,6 @@ def test_the_askable_query_binds_a_miss_to_its_symbol_and_its_age() -> None:
     assert "ingest." not in sql, "the ledger is gone; nothing may read it"
 
 
-# --- one security, one listing's history ---------------------------------------------------------
-
-
-def test_a_history_asked_with_another_symbol_is_another_listing_s() -> None:
-    """Geely's partition held `GELYF` from 2007 and `0175.HK` from 2026-09-17 (measured
-    2026-10-04). Any row asked with another symbol makes the stored history another listing's."""
-    gely = [{"asked_symbol": "GELYF"}, {"asked_symbol": "0175.HK"}]
-    assert prices.asked_with_another_symbol(gely, "0175.HK")
-    assert prices.asked_with_another_symbol([{"asked_symbol": "GELYF"}], "0175.HK")
-    assert not prices.asked_with_another_symbol([{"asked_symbol": "0175.HK"}] * 3, "0175.HK")
-
-
-def test_an_empty_history_is_nobody_s_and_a_row_without_a_symbol_is_another_s() -> None:
-    """An empty partition (a refusal, a dead symbol) restarts nothing. A row that does not say
-    which symbol it was asked with cannot vouch for this one."""
-    assert not prices.asked_with_another_symbol([], "S58.SI")
-    assert prices.asked_with_another_symbol([{"date": date(2026, 9, 1)}], "S58.SI")
-
-
-def test_raw_dates_count_every_row_including_the_ones_stage_2_refuses() -> None:
-    """A NaN close still says the provider has that day, so it must protect a bar already
-    published for it. A row with no date or no security says nothing."""
-    rows: list[dict[str, Any]] = [
-        {"security_id": "a", "date": date(2026, 9, 1), "close": 10.0},
-        {"security_id": "a", "date": date(2026, 9, 2), "close": float("nan")},
-        {"security_id": "b", "date": "2026-09-01", "close": 3.0},
-        {"security_id": "b", "date": None, "close": 3.0},
-        {"date": date(2026, 9, 3), "close": 1.0},
-    ]
-    assert prices.dates_by_security(rows) == {
-        "a": {date(2026, 9, 1), date(2026, 9, 2)},
-        "b": {date(2026, 9, 1)},
-    }
-
-
 class _RetractionCursor:
     def __init__(self, deleted: int) -> None:
         self.calls: list[tuple[str, tuple[Any, ...]]] = []

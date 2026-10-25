@@ -73,9 +73,8 @@ SWEEP_NIGHT_TAG = "muffin/sweep_night"
 SWEEP_LAST_TAG = "muffin/sweep_last"
 
 #: SINCE 2026-10-10 THE NIGHT ASKS YAHOO'S CHART DIRECTLY (`raw_price_chart`), so each bar is
-#: labelled with the currency the provider states. `raw_price_history`, the openbb lane, is left
-#: defined and unscheduled as the rollback until its files are dropped (umbrella
-#: docs/deferred/2026-10-10-the-openbb-price-raw-is-the-rollback.md).
+#: labelled with the currency the provider states. `raw_price_history`, the openbb lane, stayed
+#: defined and unscheduled as the rollback until 2026-10-24 and was then deleted, with its files.
 nightly_prices_job = dg.define_asset_job(
     SWEEP_SCHEDULE,
     selection=dg.AssetSelection.assets(raw_price_chart, price_bar_history, yahoo_corporate_action),
@@ -140,7 +139,7 @@ def nightly_prices(
     # 2026-09-21 00:06:57, `Killed process (python) anon-rss 2,199,804 kB` against the container's
     # 2.5 GiB, and the run failed at 00:07:08 with `ChildProcessCrashException`.
     #
-    # `raw_price_history` carries `BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN)` precisely
+    # The history lane carries `BackfillPolicy.multi_run(HISTORY_PARTITIONS_PER_RUN)` precisely
     # to bound that memory — 96 securities of full history measured 683,391 bars and OOM-killed at
     # 2.4 GB, 25 measured ~178k rows and ~600 MB. **A backfill policy does not apply to a
     # schedule's RunRequest.** It governs how a BACKFILL is split, so naming a 2,500-key range in a

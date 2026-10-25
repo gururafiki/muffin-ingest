@@ -17,8 +17,6 @@ from typing import Any, ClassVar
 import dagster as dg
 import pytest
 from muffin_ingest.facets import prices
-from muffin_ingest.providers import openbb
-from muffin_ingest.providers.openbb import Answer, ProviderRefused
 
 from muffin_ingest_dagster.defs.platform.heartbeat import heartbeat
 from muffin_ingest_dagster.defs.prices import checks as prices_checks
@@ -26,7 +24,6 @@ from muffin_ingest_dagster.defs.prices import core as prices_core
 from muffin_ingest_dagster.defs.prices import derived as prices_derived
 from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
 from muffin_ingest_dagster.defs.prices import raw as prices_raw
-from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import loaded_defs
 
@@ -147,231 +144,6 @@ class FakePostgres(Postgres):
         yield FakeConn(UNIVERSE)
 
 
-def materialise(tmp_path: Path, fetch: Any) -> dg.ExecuteInProcessResult:
-    """The security lane over every security in `UNIVERSE`, as one range run — a night's shape.
-
-    WAS THE DAY LANE until 2026-10-04. The rules these tests hold (attribution, empty versus dead,
-    a throttle counted, a window refused in stage 2) are the security lane's too, so they drive it
-    now rather than leaving with the lane that first carried them.
-    """
-    from dagster._core.storage.tags import (
-        ASSET_PARTITION_RANGE_END_TAG,
-        ASSET_PARTITION_RANGE_START_TAG,
-    )
-
-    keys = [sid for sid, _, _ in UNIVERSE]
-    assets: list[Any] = [prices_raw.raw_price_history]
-    resources: dict[str, Any] = {
-        "postgres": FakePostgres(),
-        "parquet_io": ParquetIOManager(str(tmp_path)),
-        "raw_store": RawStore(base_path=str(tmp_path)),
-    }
-    saved = openbb.price_history
-    openbb.price_history = fetch
-    try:
-        with dg.instance_for_test() as instance:
-            instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
-            return dg.materialize(
-                assets,
-                instance=instance,
-                tags={
-                    ASSET_PARTITION_RANGE_START_TAG: keys[0],
-                    ASSET_PARTITION_RANGE_END_TAG: keys[-1],
-                },
-                resources=resources,
-            )
-    finally:
-        openbb.price_history = saved
-
-
-def bars_for(symbols: Sequence[str]) -> Answer:
-    return Answer(
-        rows=[
-            {"symbol": s, "date": KEY, "close": 100.0 + i, "volume": 10}
-            for i, s in enumerate(symbols)
-        ]
-    )
-
-
-def meta(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
-    events = result.asset_materializations_for_node(asset.op.name)
-    return {k: v.value for k, v in events[0].metadata.items()}
-
-
-def test_a_batched_answer_is_attributed_by_symbol(tmp_path: Path) -> None:
-    result = materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
-    assert result.success
-    m = meta(result, prices_raw.raw_price_history)
-    assert (m["requested"], m["answered"], m["rows"]) == (2, 2, 2)
-
-
-def test_a_symbol_the_batch_omitted_is_empty_and_not_dead(tmp_path: Path) -> None:
-    """The distinction the whole price lane turns on. A symbol missing from an answer has NOT been
-    shown to be unanswerable — only asking it alone with a healthy control can show that, and a run
-    that blurs the two is how ~8,300 securities were negative-cached in an afternoon."""
-
-    def only_apple(symbols: Sequence[str], **kw: Any) -> Answer:
-        return bars_for([s for s in symbols if s == "AAPL"])
-
-    PROBES.clear()
-    m = meta(materialise(tmp_path, only_apple), prices_raw.raw_price_history)
-    assert m["answered"] == 1
-    assert m["empty"] == 1
-    assert m["dead"] == 0, "a batch that answered for someone proves nothing about the rest"
-    assert [(p["asked_with"], p["outcome"]) for p in PROBES] == [("AAPL", "hit")], (
-        "the omitted symbol is unknown, so nothing is recorded about it"
-    )
-
-
-def test_a_throttle_stops_the_run_and_marks_nothing(tmp_path: Path) -> None:
-    """`ProviderRefused` is the whole reason the hub is imported rather than called over HTTP: over
-    the wire this is an empty 204, byte-identical to a symbol the provider does not carry."""
-
-    def refusing(symbols: Sequence[str], **kw: Any) -> Answer:
-        raise ProviderRefused("equity.price.historical: YFRateLimitError: Too Many Requests")
-
-    PROBES.clear()
-    m = meta(materialise(tmp_path, refusing), prices_raw.raw_price_history)
-    assert m["throttled"] >= 1
-    assert m["dead"] == 0, "a provider refusing us is evidence about the provider, never a symbol"
-    assert m["rows"] == 0
-    assert PROBES == [], "a refused batch established nothing about anybody"
-
-
-def test_a_throttle_halfway_counts_every_subject_it_never_asked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """THE THROTTLE BRANCH ONCE HID HALF A NIGHT, and the sweep's counters must still sum.
-
-    Measured on the day lane's 2026-09-16 partition: yfinance refused call 329 of ~601, the loop
-    broke, and the run reported `answered=5974 empty=586 throttled=1 unasked=0` against 12,017
-    subjects — 5,437 securities never asked, and the partition read as complete. The budget and
-    transport branches both counted the remainder; this one did not. A refused ask is not an answer,
-    so its batch counts as unasked — in the security lane, whose run reads the same identity.
-    """
-    monkeypatch.setattr(prices_partitions.PROVIDER, "history_batch_size", 1)
-    monkeypatch.setattr(prices_partitions.PROVIDER, "min_seconds_between_calls", 0.0)
-    calls: list[list[str]] = []
-
-    def answers_once_then_refuses(symbols: Sequence[str], **kw: Any) -> Answer:
-        calls.append(list(symbols))
-        if len(calls) > 1:
-            raise ProviderRefused("equity.price.historical: YFRateLimitError: Too Many Requests")
-        return bars_for(symbols)
-
-    m = meta(materialise(tmp_path, answers_once_then_refuses), prices_raw.raw_price_history)
-    assert (m["requested"], m["answered"], m["throttled"]) == (2, 1, 1)
-    assert m["unasked"] == 1, "the refused batch and everything after it were never answered"
-    accounted = (
-        m["answered"] + m["empty"] + m["dead"] + m["transport"] + m["unasked"] + m["not_askable"]
-    )
-    missing = m["requested"] - accounted
-    assert missing == 0, f"{missing} subjects fell out of every count"
-
-
-def test_an_answer_with_no_bars_still_materialises(tmp_path: Path) -> None:
-    """A security the provider has nothing for yet is a fact we collected, not a failed run."""
-    result = materialise(tmp_path, lambda symbols, **kw: Answer(rows=[]))
-    assert result.success
-    assert meta(result, prices_raw.raw_price_history)["rows"] == 0
-
-
-def test_the_history_lane_asks_only_for_the_securities_its_partitions_name(tmp_path: Path) -> None:
-    """Lane B's partition IS the subject, so a run must not quietly widen to the whole universe."""
-    asked: list[str] = []
-
-    def record(symbols: Sequence[str], **kw: Any) -> Answer:
-        asked.extend(symbols)
-        return bars_for(list(symbols))
-
-    with dg.instance_for_test() as instance:
-        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
-        saved = openbb.price_history
-        openbb.price_history = record
-        try:
-            result = dg.materialize(
-                [prices_raw.raw_price_history],
-                partition_key=SUBJECTS[1][0],
-                instance=instance,
-                resources={
-                    "postgres": FakePostgres(),
-                    "parquet_io": ParquetIOManager(str(tmp_path)),
-                    "raw_store": RawStore(base_path=str(tmp_path)),
-                },
-            )
-        finally:
-            openbb.price_history = saved
-
-    assert result.success
-    assert asked == ["005930.KS"], "the whole universe is askable; only this partition was asked"
-
-
-def test_a_batch_that_never_answered_is_transport_and_never_empty(tmp_path: Path) -> None:
-    """THE DISTINCTION THIS PIPELINE IS BEING REWRITTEN AROUND, and the first version of the
-    collection loop got it wrong.
-
-    openbb could not import in the deployed image — it rebuilds its extension map inside
-    site-packages and the container runs as a non-root user — so every call raised. The asset
-    reported `empty: 50`: fifty securities that had answered nothing, when the truth was that we
-    had never asked one of them. Nothing was marked, because a miss needs an isolated ask and a
-    healthy control, so the damage was a wasted run rather than a month of negative caching. The
-    counter was still lying.
-    """
-
-    def broken(symbols: Sequence[str], **kw: Any) -> Answer:
-        raise PermissionError("[Errno 13] Permission denied: '.../openbb/.build.lock'")
-
-    PROBES.clear()
-    m = meta(materialise(tmp_path, broken), prices_raw.raw_price_history)
-    assert m["empty"] == 0, "a call that raised says nothing about its subjects"
-    assert m["dead"] == 0, "and it certainly does not make them unanswerable"
-    assert m["transport"] == m["requested"], "every subject we failed to ask is counted as such"
-    assert PROBES == [], "an outage is evidence about the provider, never about a symbol"
-
-
-def test_a_run_that_cannot_reach_the_provider_stops_instead_of_asking_everything(
-    tmp_path: Path,
-) -> None:
-    """Three consecutive failures with nothing answered anywhere is our fault or the provider's.
-    Asking the remaining batches would only produce a longer record of the same thing — and the
-    isolation pass has already re-asked each subject of each batch individually."""
-    calls: list[int] = []
-
-    def broken(symbols: Sequence[str], **kw: Any) -> Answer:
-        calls.append(1)
-        raise ConnectionRefusedError("connection refused")
-
-    materialise(tmp_path, broken)
-    # 3 batches of 20 over 50 subjects; without the rule it would keep going through every batch of
-    # a real universe. The isolation pass inflates the raw call count, so the assertion is on the
-    # BATCHES having stopped rather than on an exact number of calls.
-    assert len(calls) > 0
-
-
-def test_a_bar_outside_the_window_is_kept_in_raw(tmp_path: Path) -> None:
-    """MEASURED AGAINST THE REAL HUB, NOT IMAGINED. The provider widens a degenerate range rather
-    than refusing it, and a run made while Tokyo was trading brought back a bar for a session still
-    in progress — whose "close" is not a close, and looks exactly like a real one.
-
-    Raw keeps it, because it is what the provider said. Refusing it is stage 2's, which since
-    2026-10-10 reads the chart lane (`facets.price_chart`, `test_the_window_refuses_today`).
-    """
-
-    def spilling(symbols: Sequence[str], **kw: Any) -> Answer:
-        rows = []
-        for s in symbols:
-            for d in (KEY, "2099-01-01"):  # the second is unambiguously outside any window
-                rows.append({"symbol": s, "date": d, "close": 100.0})
-        return Answer(rows=rows)
-
-    result = materialise(tmp_path, spilling)
-
-    assert result.success
-    m = meta(result, prices_raw.raw_price_history)
-    assert m["outside_window"] == m["answered"], "the spillover is counted, not dropped in silence"
-    assert m["rows"] == 2 * m["answered"], "and kept"
-
-
 # --- returns ------------------------------------------------------------------------------------
 
 
@@ -403,17 +175,18 @@ def test_the_security_lane_s_run_width_is_a_memory_budget() -> None:
     provider has been paid. (The day lane, deleted 2026-10-04, was the opposite case: a date
     partition is one batched sweep, and `single_run` made a week-long gap cost one run.)
 
-    The lane is partitioned by security. `openbb_yfinance` calls `yf.download(..., threads=False)`,
-    so the vendor is asked once per symbol however many partitions a run covers — there is nothing
-    to batch across them, and all `single_run` bought was an unbounded memory footprint. Measured:
-    96 securities is 683,391 raw bars and the child process was OOM-killed at 2.4 GB, because
+    The lane is partitioned by security, and Yahoo's chart is asked once per symbol however many
+    partitions a run covers, so there is nothing to batch across them and all `single_run` bought
+    was an unbounded memory footprint. Measured on the openbb lane this replaced (whose adapter
+    asked the same endpoint once per ticker): 96 securities is 683,391 raw bars and the child
+    process was OOM-killed at 2.4 GB, because
     `UPathIOManager.load_input` is eager and the clean stage holds the raw rows and their
     normalised copies at once.
 
     Pinned because the tidying instinct runs the wrong way: making the widths "consistent" with an
     unpartitioned asset's reintroduces the failure.
     """
-    for asset in (prices_raw.raw_price_history, prices_core.price_bar_history):
+    for asset in (prices_raw.raw_price_chart, prices_core.price_bar_history):
         policy = asset.backfill_policy
         assert policy is not None, f"{asset.key.to_user_string()} has no backfill policy"
         assert policy.max_partitions_per_run == prices_partitions.HISTORY_PARTITIONS_PER_RUN, (
@@ -567,63 +340,6 @@ def test_a_snapshot_is_UNPARTITIONED_because_it_cannot_be_asked_about_a_past_day
     # Its consumers stay partitioned — the bars genuinely do have dates on them.
     assert indices_raw.raw_index_bars.partitions_def is not None
     assert indices_core.index_return.partitions_def is not None
-
-
-def meta_of(result: dg.ExecuteInProcessResult, asset: Any) -> dict[str, Any]:
-    events = result.asset_materializations_for_node(asset.op.name)
-    return {k: v.value for k, v in events[0].metadata.items()}
-
-
-def test_a_dead_symbol_becomes_a_miss_and_an_answering_one_a_hit(tmp_path: Path) -> None:
-    """THE MOST EXPENSIVE CONFUSION IN THIS CODEBASE, AS A UNIT TEST.
-
-    A symbol yfinance will never serve costs a REAL vendor request every day, because the vendor is
-    asked once per symbol whatever we batch — ~425 dead symbols is ~155,000 wasted requests a year,
-    spent re-learning an answer we already had. So the verdict has to be recorded.
-
-    And for the right subjects. `dead` is populated only after the isolation pass asked each
-    subject ALONE and a control answered; anything else is unknown and must be asked again.
-    Recording the second as the first is how ~8,300 securities were negative-cached in one
-    afternoon. The miss carries the symbol it was asked with, so a corrected spelling is askable at
-    once.
-    """
-    PROBES.clear()
-
-    # ONE DEAD SYMBOL POISONS ITS WHOLE BATCH, which is the realistic shape and the only one that
-    # can justify a miss. A PARTIAL answer must NOT: yfinance throttles by omitting symbols from a
-    # 200, so a symbol missing from a batch that answered for others is unknown, never dead.
-    #
-    # So: the batch raises, isolation re-asks each subject alone, AAPL answers alone (and is also
-    # the control, proving the provider healthy), and the Korean line fails alone.
-    def selective(symbols: Sequence[str], **kw: Any) -> Answer:
-        if any(s != "AAPL" for s in symbols):
-            raise RuntimeError("No data found for 005930.KS, symbol may be delisted")
-        return bars_for(list(symbols))
-
-    result = materialise(tmp_path, selective)
-    assert result.success
-
-    by_security = {str(p["security_id"]): p for p in PROBES}
-    korean, apple = SUBJECTS[1][0], SUBJECTS[0][0]
-    assert by_security[korean]["outcome"] == "miss", f"probes were {PROBES}"
-    assert by_security[korean]["asked_with"] == "005930.KS", "a miss is bound to its spelling"
-    assert by_security[apple]["outcome"] == "hit", "a security that ANSWERED must never be a miss"
-    assert {(p["scheme"], p["provider"]) for p in PROBES} == {("symbol", "yfinance")}
-
-
-def test_a_batch_that_answers_records_no_miss_at_all(tmp_path: Path) -> None:
-    """A BATCH THAT ANSWERS IS NEVER ISOLATED, so it can prove nothing dead.
-
-    The ledger this replaced kept the proof rule in SQL; it lives in `prices.symbol_probes` now,
-    unit-tested there on the flags, and this is the same rule driven through the real asset: an
-    answering batch yields hits only.
-    """
-    PROBES.clear()
-    materialise(tmp_path, lambda symbols, **kw: bars_for(list(symbols)))
-    assert sorted((p["asked_with"], p["outcome"]) for p in PROBES) == [
-        ("005930.KS", "hit"),
-        ("AAPL", "hit"),
-    ]
 
 
 def test_the_automation_sensor_is_declared_and_running() -> None:
@@ -814,7 +530,6 @@ def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does(
     #: Idles at zero by design: the load is one backfill, then nothing until a new subject appears.
     backfill_only = {
         "raw_price_chart",
-        "raw_price_history",
         "price_bar_history",
         "raw_fx_history",
         "fx_rate_history",
@@ -852,238 +567,6 @@ def test_every_scheduled_asset_has_a_freshness_policy_and_no_backfill_lane_does(
     )
 
 
-def _history_run(
-    tmp_path: Path,
-    instance: dg.DagsterInstance,
-    asked_windows: list[tuple[Any, Any]],
-    rows: list[dict[str, Any]],
-    *,
-    honour_window: bool = False,
-) -> dg.ExecuteInProcessResult:
-    """One materialisation of the history lane, recording the WINDOW the provider was asked for.
-
-    `honour_window` makes the fake answer only the bars inside `[start, end)`, as the provider does
-    for a range it can serve; left off, it answers every row whatever it was asked.
-    """
-
-    def record(symbols: Sequence[str], **kw: Any) -> Answer:
-        start, end = kw.get("start"), kw.get("end")
-        asked_windows.append((start, end))
-        if honour_window:
-            return Answer(rows=[r for r in rows if start <= r["date"] < end])
-        return Answer(rows=list(rows))
-
-    saved = openbb.price_history
-    openbb.price_history = record
-    try:
-        return dg.materialize(
-            [prices_raw.raw_price_history],
-            partition_key=SUBJECTS[1][0],
-            instance=instance,
-            resources={
-                "postgres": FakePostgres(),
-                "parquet_io": ParquetIOManager(str(tmp_path)),
-                "raw_store": RawStore(base_path=str(tmp_path)),
-            },
-        )
-    finally:
-        openbb.price_history = saved
-
-
-def test_a_subject_the_sweep_cannot_ask_is_counted_so_the_outcomes_sum_to_requested(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """EVERY PARTITION IN THE RUN LANDS IN ONE COUNTER, including one nobody asks about.
-
-    The nightly sweep names a contiguous slice of the grid, and `askable_subjects` leaves out a
-    security whose symbol was rejected alone within 30 days. Measured 2026-09-30: `requested 2500`,
-    `answered 2463`, and no other outcome, so 37 securities were accounted for nowhere. That hole
-    looks like the throttle-branch defect this file already tests for, so without its own counter a
-    correct exclusion reads as a counting bug and a real one can hide inside it.
-
-    Two partitions in one range run, one of them outside the askable universe, as a night's run
-    has.
-    """
-    from dagster._core.storage.tags import (
-        ASSET_PARTITION_RANGE_END_TAG,
-        ASSET_PARTITION_RANGE_START_TAG,
-    )
-
-    askable, held_absent = SUBJECTS[0][0], SUBJECTS[1][0]
-    monkeypatch.setattr(prices_partitions.PROVIDER, "min_seconds_between_calls", 0.0)
-    monkeypatch.setitem(globals(), "UNIVERSE", [SUBJECTS[0]])
-    saved = openbb.price_history
-    openbb.price_history = lambda symbols, **kw: bars_for(list(symbols))
-    try:
-        with dg.instance_for_test() as instance:
-            instance.add_dynamic_partitions(
-                prices_partitions.SECURITY_PARTITION, [askable, held_absent]
-            )
-            result = dg.materialize(
-                [prices_raw.raw_price_history],
-                instance=instance,
-                tags={
-                    ASSET_PARTITION_RANGE_START_TAG: askable,
-                    ASSET_PARTITION_RANGE_END_TAG: held_absent,
-                },
-                resources={
-                    "postgres": FakePostgres(),
-                    "parquet_io": ParquetIOManager(str(tmp_path)),
-                    "raw_store": RawStore(base_path=str(tmp_path)),
-                },
-            )
-    finally:
-        openbb.price_history = saved
-
-    assert result.success
-    m = meta(result, prices_raw.raw_price_history)
-    assert (m["requested"], m["answered"], m["not_askable"]) == (2, 1, 1)
-    outcomes = ("answered", "empty", "dead", "throttled", "unasked", "transport", "not_askable")
-    assert sum(m.get(k, 0) for k in outcomes) == m["requested"], m
-
-
-def test_the_history_lane_extends_from_its_watermark_rather_than_refetching(tmp_path: Path) -> None:
-    """The second run asks from the newest bar it already holds, not from the start of history.
-
-    This is the whole economy of the lane: the vendor is asked once per symbol whatever the range,
-    so what a watermark saves is not calls but ten years of payload per security per night — and,
-    more importantly, it is what lets a partition be re-materialised at all without either losing
-    its history or re-paying for it.
-    """
-    windows: list[tuple[Any, Any]] = []
-    stored = {"symbol": "005930.KS", "date": date(2026, 9, 17), "close": 1.0, "volume": 1}
-
-    with dg.instance_for_test() as instance:
-        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
-        first = _history_run(tmp_path, instance, windows, [stored])
-        assert first.success
-        second = _history_run(
-            tmp_path,
-            instance,
-            windows,
-            [{**stored, "date": date(2026, 9, 18), "close": 2.0}],
-        )
-        assert second.success
-
-    assert windows[0][0] == prices_partitions.HISTORY_START, "a new subject is asked for everything"
-    assert windows[1][0] == date(2026, 9, 17) - prices_raw.REREAD, (
-        f"the second run asked from {windows[1][0]}; it holds a bar for 2026-09-17 and must extend "
-        f"from it, a re-read week behind it, not re-fetch the whole history"
-    )
-    assert meta(second, prices_raw.raw_price_history)["extending_from_watermark"] == 1
-
-
-def test_a_day_the_provider_fills_late_is_read_again_at_the_next_extension(
-    tmp_path: Path,
-) -> None:
-    """A GAP BEHIND THE WATERMARK IS RE-READ BY RULE, NOT BY ACCIDENT OF COHORT MEMBERSHIP.
-
-    Measured 2026-09-24: the 09-22 bar was still `null` in Yahoo two days later for KO, CZR, EMBC
-    and PRAA while MSFT, SPY and JPM had it. The extension used to start at the watermark, so once
-    09-23 was stored, 09-22 was never asked for again. The fixture's provider honours the window and
-    fills the missing day only on the second ask, so the old rule leaves the hole and this one does
-    not.
-    """
-    windows: list[tuple[Any, Any]] = []
-    base = {"symbol": "005930.KS", "close": 1.0, "volume": 1}
-    first = [{**base, "date": date(2026, 9, d)} for d in (14, 15, 17)]
-    later = [{**base, "date": date(2026, 9, d)} for d in (14, 15, 16, 17, 18)]
-
-    with dg.instance_for_test() as instance:
-        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
-        assert _history_run(tmp_path, instance, windows, first, honour_window=True).success
-        assert _history_run(tmp_path, instance, windows, later, honour_window=True).success
-
-    held = RawStore(base_path=str(tmp_path)).stored_rows_for(
-        prices_raw.raw_price_history.key, SUBJECTS[1][0]
-    )
-    assert sorted(str(r["date"]) for r in held) == [
-        "2026-09-14",
-        "2026-09-15",
-        "2026-09-16",
-        "2026-09-17",
-        "2026-09-18",
-    ], f"the second extension asked from {windows[1][0]} and left the gap the provider had filled"
-
-
-def test_extending_a_partition_keeps_the_bars_it_already_held(tmp_path: Path) -> None:
-    """The extension must not overwrite the history it extends — `merge_on` is what stops it."""
-    windows: list[tuple[Any, Any]] = []
-    base = {"symbol": "005930.KS", "close": 1.0, "volume": 1}
-
-    with dg.instance_for_test() as instance:
-        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [SUBJECTS[1][0]])
-        _history_run(tmp_path, instance, windows, [{**base, "date": date(2026, 9, 17)}])
-        _history_run(tmp_path, instance, windows, [{**base, "date": date(2026, 9, 18)}])
-
-    held = RawStore(base_path=str(tmp_path)).stored_rows_for(
-        prices_raw.raw_price_history.key, SUBJECTS[1][0]
-    )
-    assert sorted(str(r["date"]) for r in held) == ["2026-09-17", "2026-09-18"]
-
-
-def test_a_partition_stored_in_an_older_shape_is_replaced_rather_than_doubled(
-    tmp_path: Path,
-) -> None:
-    """The live case, measured 2026-09-20 on the first real run of this lane.
-
-    Every raw price partition on disk was written before raw stopped adding `trade_date`, so none
-    carries the provider `date` that `merge_on` keys on. The watermark therefore reads nothing, the
-    asset asks for the subject's WHOLE history, and the merge — which keeps a stored row it cannot
-    key, deliberately — kept all 4,496 of them beside the 4,502 just fetched. One partition went to
-    8,998 rows; across 12,016 partitions that is raw doubling, with `rows_unkeyable` non-zero for
-    ever and therefore useless as a signal that something is wrong.
-
-    A run that fetched everything supersedes everything, so the partition is REPLACED. Without that
-    rule this file holds five rows rather than three.
-    """
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    security_id = SUBJECTS[1][0]
-    legacy = tmp_path / "raw_price_history"
-    legacy.mkdir(parents=True, exist_ok=True)
-    pq.write_table(
-        pa.table(
-            {
-                "security_id": [security_id, security_id],
-                # THE OLD SHAPE: the placement column, and no provider `date` at all.
-                "trade_date": [date(2026, 9, 15), date(2026, 9, 16)],
-                "close": [1.0, 2.0],
-            }
-        ),
-        str(legacy / f"{security_id}.parquet"),
-    )
-
-    windows: list[tuple[Any, Any]] = []
-    base = {"symbol": "005930.KS", "close": 3.0, "volume": 1}
-    with dg.instance_for_test() as instance:
-        instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, [security_id])
-        result = _history_run(
-            tmp_path,
-            instance,
-            windows,
-            [{**base, "date": date(2026, 9, d)} for d in (16, 17, 18)],
-        )
-        assert result.success
-
-    assert windows[0][0] == prices_partitions.HISTORY_START, (
-        "a partition whose stored rows carry no usable date has no watermark, so the run must ask "
-        "for the whole history — that is what makes replacing it honest"
-    )
-    assert meta(result, prices_raw.raw_price_history)["loading_full_history"] == 1
-
-    held = RawStore(base_path=str(tmp_path)).stored_rows_for(
-        prices_raw.raw_price_history.key, security_id
-    )
-    assert sorted(str(r["date"]) for r in held) == ["2026-09-16", "2026-09-17", "2026-09-18"]
-    assert not [r for r in held if r.get("trade_date") is not None], (
-        "the older shape survived beside the history that supersedes it"
-    )
-
-
-#: What the staleness check's two counts answer, set per test. Module-level for the same reason as
-#: `UNIVERSE`: a class attribute on a `ConfigurableResource` becomes a config field.
 COUNTS: dict[str, int] = {"stale": 0, "equities": 0}
 
 

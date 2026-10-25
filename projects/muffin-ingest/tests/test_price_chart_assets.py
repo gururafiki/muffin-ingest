@@ -128,10 +128,17 @@ def night(
     stage_2: bool = True,
     check: bool = False,
     actions: bool = False,
+    askable: list[tuple[str, str, float]] | None = None,
+    as_range: bool = False,
 ) -> dg.ExecuteInProcessResult:
-    """One run of the nightly job over `subjects` as a range, the shape a night's slice takes."""
-    fakes.UNIVERSE[:] = subjects
+    """One run of the nightly job over `subjects` as a range, the shape a night's slice takes.
+
+    `askable` narrows the universe the run may ask about (default: every subject), and `as_range`
+    sends a single partition as a range of one, which is how a scattered backfill sends it.
+    """
+    fakes.UNIVERSE[:] = subjects if askable is None else askable
     keys = [sid for sid, _, _ in subjects]
+    single = len(keys) == 1 and not as_range
     assets: list[Any] = [prices_raw.raw_price_chart]
     if stage_2:
         assets.append(prices_core.price_bar_history)
@@ -141,16 +148,12 @@ def night(
         assets.append(prices_checks.a_bar_s_label_is_its_listing_s)
     with dg.instance_for_test() as instance:
         instance.add_dynamic_partitions(prices_partitions.SECURITY_PARTITION, keys)
-        tags = (
-            {"dagster/partition": keys[0]}
-            if len(keys) == 1
-            else {ASSET_PARTITION_RANGE_START_TAG: keys[0], ASSET_PARTITION_RANGE_END_TAG: keys[-1]}
-        )
+        tags = {ASSET_PARTITION_RANGE_START_TAG: keys[0], ASSET_PARTITION_RANGE_END_TAG: keys[-1]}
         return dg.materialize(
             assets,
             instance=instance,
-            partition_key=keys[0] if len(keys) == 1 else None,
-            tags=None if len(keys) == 1 else tags,
+            partition_key=keys[0] if single else None,
+            tags=None if single else tags,
             resources={
                 "postgres": fakes.FakePostgres(),
                 "parquet_io": ParquetIOManager(str(tmp_path)),
@@ -231,6 +234,48 @@ def test_each_security_s_bars_carry_its_own_quote_currency(tmp_path: Path) -> No
         by_security.setdefault(row["security_id"], set()).add(row["currency_code"])
     assert by_security == {AAPL[0]: {"USD"}, VOD[0]: {"GBX"}, ALG[0]: {"KWF"}, TOYOTA[0]: {"JPY"}}
     assert meta(result, "price_bar_history")["bars"] == len(WRITTEN) == 10 + 10 + 15 + 10
+
+
+def test_a_subject_the_sweep_cannot_ask_is_counted_so_the_outcomes_sum_to_requested(
+    tmp_path: Path,
+) -> None:
+    """EVERY PARTITION IN THE RUN LANDS IN ONE COUNTER, including one nobody asks about.
+
+    The nightly sweep names a contiguous slice of the grid, and `askable_subjects` leaves out a
+    security whose symbol was rejected alone within 30 days. Measured 2026-09-30 on the openbb lane:
+    `requested 2500`, `answered 2463`, and no other outcome, so 37 securities were accounted for
+    nowhere. That hole looks like the throttle-branch defect, so without its own counter a correct
+    exclusion reads as a counting bug and a real one can hide inside it. Moved here when that lane
+    was deleted (2026-10-24); no chart test had a partition outside the askable universe.
+    """
+    with yahoo({"AAPL": body(BODIES["AAPL"])}) as calls:
+        result = night(tmp_path, [AAPL, VOD], stage_2=False, askable=[AAPL])
+
+    assert result.success
+    assert [symbol for symbol, _ in calls] == ["AAPL"], "a subject it may not ask is not asked"
+    m = meta(result, "raw_price_chart")
+    assert (m["requested"], m["answered"], m["not_askable"]) == (2, 1, 1)
+    assert outcomes_sum(m) == m["requested"]
+
+
+def test_a_range_of_exactly_one_partition_is_written_as_one_partition(tmp_path: Path) -> None:
+    """A RANGE OF ONE IS NOT A RANGE, AND THE I/O MANAGER DISAGREES ABOUT WHICH IT IS.
+
+    `BackfillPolicy.multi_run` groups CONTIGUOUS partitions, so a backfill whose keys are scattered
+    through the partition set produces ONE RUN PER PARTITION, each carrying a `partition_key_range`
+    whose start equals its end. `partitioned.by_partition` once saw the range and returned a
+    mapping while `UPathIOManager` saw one partition and handed the mapping straight to the writer:
+    `AttributeError: 'str' object has no attribute 'get'`, naming neither the partition nor the
+    shape. Measured in production, 250 requested partitions became 250 single-partition runs and
+    the first three failed this way. Moved here from the openbb lane's replay (2026-10-24).
+    """
+    with yahoo({"AAPL": body(BODIES["AAPL"])}):
+        result = night(tmp_path, [AAPL], stage_2=False, as_range=True)
+
+    assert result.success, "a one-partition range must write as a single partition"
+    written = sorted(p.stem for p in (tmp_path / "raw_price_chart").glob("*.parquet"))
+    assert written == [AAPL[0]]
+    assert stored(tmp_path, AAPL[0]) == [("AAPL", 0)], "the document, not a serialised mapping"
 
 
 def test_the_next_visit_extends_from_the_newest_point_less_a_week(tmp_path: Path) -> None:
