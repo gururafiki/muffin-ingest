@@ -363,6 +363,13 @@ def venue_listing(
     line, and a run filing both would otherwise hand the writer two rows for one FIGI, of which it
     keeps the last — the OLDER sighting whenever the alias was walked first. The capped walk would
     then appear not to have seen a line it returned, and the mark would mark it.
+
+    ONLY THE LINE'S OWN VENUE PAGE STAMPS `venue_seen_at`; an alias page stamps `last_seen_at`
+    alone. Inside a capped window the mark judges the venue's sighting, so NYSE Arca, which keeps
+    lines for US companies that are gone, cannot vouch for one the US walk stopped returning, in
+    whichever order the two were walked (muffin-deployment migration 20261025130000). A line both
+    return carries the newer sighting overall and the venue's own: the two can come from different
+    pages.
     """
     with postgres.connect() as conn:
         exchanges = _exchanges(conn)
@@ -385,11 +392,17 @@ def venue_listing(
                     f"{listing['ticker']}{suffix}" if suffix else listing["ticker"]
                 )
                 listing["last_seen_at"] = seen
+                listing["venue_seen_at"] = None if query.maps_to_composite else seen
                 kept = newest.get(listing["figi"])
                 if kept is not None:
                     returned_twice += 1
+                    venue = max(
+                        (t for t in (kept["venue_seen_at"], listing["venue_seen_at"]) if t),
+                        default=None,
+                    )
                     if kept["last_seen_at"] > seen:
-                        continue
+                        listing = kept
+                    listing["venue_seen_at"] = venue
                 newest[listing["figi"]] = listing
     rows = list(newest.values())
     by_type: dict[str, int] = {}
@@ -405,6 +418,8 @@ def venue_listing(
             "unplaced_without_composite": unplaced,
             # A US line both `US.common` and `US.arca` return is the expected case, not a defect.
             "returned_by_two_pages": returned_twice,
+            # Lines only an alias page returned in this run; their venue sighting is left as it was.
+            "seen_by_alias_only": sum(1 for r in rows if r["venue_seen_at"] is None),
         }
     )
     return rows

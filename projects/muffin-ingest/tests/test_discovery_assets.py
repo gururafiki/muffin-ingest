@@ -1210,7 +1210,11 @@ def test_stage_2_files_an_alias_line_as_the_us_line_it_names(
     assert [(r["figi"], r["exch_code"], r["provider_symbol"]) for r in _Capture.last] == [
         ("BBG013QNJHP8", "US", "BRBR")
     ]
+    # AN ALIAS PAGE IS NOT THE VENUE'S: it stamps `last_seen_at` and leaves the venue's sighting.
+    assert [r["venue_seen_at"] for r in _Capture.last] == [None]
+    assert _Capture.last[0]["last_seen_at"] is not None
     meta = result.asset_materializations_for_node("venue_listing")[0].metadata
+    assert meta["seen_by_alias_only"].value == 1
     assert meta["mapped_to_composite"].value == 1
     assert meta["unplaced_without_composite"].value == 1
 
@@ -1851,8 +1855,13 @@ def test_each_line_carries_its_page_s_fetch_time_and_the_newer_sighting_wins(
     assert [(r["figi"], r["last_seen_at"]) for r in _Capture.last] == [
         ("BBG013QNJHP8", max(arca_at, common_at))
     ]
+    # THE VENUE'S OWN SIGHTING IS THE US PAGE'S, in both orders: when Arca's page is the newer one,
+    # a writer keeping the newer row whole would hand the database Arca's time as the venue's, and
+    # Arca, which keeps lines for companies that are gone, would vouch inside the US window.
+    assert [r["venue_seen_at"] for r in _Capture.last] == [common_at]
     meta = result.asset_materializations_for_node("venue_listing")[0].metadata
     assert meta["returned_by_two_pages"].value == 1
+    assert meta["seen_by_alias_only"].value == 0
 
 
 def test_the_mark_is_handed_every_walk_and_judges_only_what_stage_2_has_filed(
