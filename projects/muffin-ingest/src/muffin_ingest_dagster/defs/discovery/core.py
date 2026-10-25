@@ -95,6 +95,14 @@ def _exchanges(conn: Any) -> dict[str, tuple[str | None, str | None]]:
         return {row[0]: (row[1], row[2]) for row in cur.fetchall()}
 
 
+def _labelled_suffixes(conn: Any) -> dict[tuple[str, str], str]:
+    """(exch_code, LABEL) → the suffix a line carrying that OpenFIGI label takes
+    (`market.exchange_label`): `('TT', 'TAIPEI STOCK EXCHANGE')` → `.TWO`."""
+    with conn.cursor() as cur:
+        cur.execute("select exch_code, label, suffix from market.exchange_label")
+        return {(row[0], str(row[1]).upper()): row[2] for row in cur.fetchall()}
+
+
 @dg.asset(
     partitions_def=nport_filings,
     backfill_policy=dg.BackfillPolicy.multi_run(NPORT_PER_RUN),
@@ -373,23 +381,34 @@ def venue_listing(
     """
     with postgres.connect() as conn:
         exchanges = _exchanges(conn)
+        labelled = _labelled_suffixes(conn)
         queries = directory_queries(conn)
     parts = partitioned.rows_per_partition(context, raw_exchange_sweep)
     newest: dict[str, dict[str, Any]] = {}
-    mapped = unplaced = returned_twice = 0
+    mapped = unplaced = returned_twice = by_label = 0
     for key, doc_rows in parts.items():
         query = query_for(queries, key)
         suffix, _ = exchanges.get(query.files_under, ("", None))
         for r in doc_rows:
             seen = datetime.fromisoformat(str(r["fetched_at"]))
-            listings, _, _ = openfigi.parse_filter(bytes(r["body"]), exch_code=query.files_under)
+            body = bytes(r["body"])
+            listings, _, _ = openfigi.parse_filter(body, exch_code=query.files_under)
+            # A SHARED CODE'S LINES ARE TOLD APART BY THEIR LABEL: TPEx files under `TT` with the
+            # Taiwan Stock Exchange, and only `TT (Taipei Stock Exchange)` says which is `.TWO`. An
+            # alias's lines become composite lines of another venue, so its labels do not apply.
+            labels = {} if query.maps_to_composite else openfigi.line_labels(body)
             if query.maps_to_composite:
                 listings, lost = openfigi.as_composite(listings)
                 mapped += len(listings)
                 unplaced += lost
             for listing in listings:
+                label = labels.get(listing["figi"])
+                line_suffix = suffix
+                if label and (query.files_under, label.upper()) in labelled:
+                    line_suffix = labelled[(query.files_under, label.upper())]
+                    by_label += 1
                 listing["provider_symbol"] = (
-                    f"{listing['ticker']}{suffix}" if suffix else listing["ticker"]
+                    f"{listing['ticker']}{line_suffix}" if line_suffix else listing["ticker"]
                 )
                 listing["last_seen_at"] = seen
                 listing["venue_seen_at"] = None if query.maps_to_composite else seen
@@ -418,6 +437,8 @@ def venue_listing(
             "unplaced_without_composite": unplaced,
             # A US line both `US.common` and `US.arca` return is the expected case, not a defect.
             "returned_by_two_pages": returned_twice,
+            # Lines whose suffix came from their OpenFIGI label (`market.exchange_label`): TPEx.
+            "suffix_by_label": by_label,
             # Lines only an alias page returned in this run; their venue sighting is left as it was.
             "seen_by_alias_only": sum(1 for r in rows if r["venue_seen_at"] is None),
         }

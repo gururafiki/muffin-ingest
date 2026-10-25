@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from muffin_ingest.facets.openfigi import OpenFigiUnreadable
+from muffin_ingest.facets.openfigi import OpenFigiUnreadable, exchange_label
 from muffin_ingest.providers import yahoo_search
 
 
@@ -129,6 +129,12 @@ def _suffixes(country_iso2: str | None, venues: dict[str, list[tuple[str, str]]]
     return [s for _, s in venues.get(country_iso2.upper(), ())]
 
 
+def _code_and_label(exch_code: str) -> tuple[str, str]:
+    """`TT (Taipei Stock Exchange)` → (`TT`, `TAIPEI STOCK EXCHANGE`); a bare code → (code, "")."""
+    code = exch_code.split(" (")[0].strip().upper()
+    return code, (exchange_label(exch_code) or "").upper()
+
+
 def pick_local_symbol(
     country_iso2: str | None,
     matches: Sequence[dict[str, Any]],
@@ -137,21 +143,36 @@ def pick_local_symbol(
     """The best LOCAL listing OpenFIGI returned for a security in `country_iso2`.
 
     OpenFIGI returns `exchCode` INCONSISTENTLY — Samsung as `KS`, TSMC as `TT (Taiwan Stock
-    Exchange)` — so the match is exact on the code STRIPPED of its label (`split(' (')`), never a
+    Exchange)` — so a bare venue matches the code STRIPPED of its label (`split(' (')`), never a
     `startswith`. Among the venues a country knows (best first), the first venue whose listing
     matched wins; the composite FIGI comes back with the match and is the ONLY key that joins a
     security to the venue directory, so it is carried even though the ladder itself needs only the
     symbol.
+
+    A LABELLED VENUE (`TT (Taipei Stock Exchange)`, from `market.exchange_label`) matches only the
+    line carrying that label, and the bare code then does NOT match it. OpenFIGI files Taiwan's two
+    markets under `TT`, and a TPEx line priced as `.TW` was dead for 100 securities (2026-10-04).
+    Excluding the labelled market from the bare code, rather than listing the labelled venue
+    first, keeps the bare venue's preference: a company on both boards takes its Taiwan Stock
+    Exchange line.
     """
     upper = (country_iso2 or "").upper()
-    for exch_code, suffix in venues.get(upper, ()):
+    known = venues.get(upper, ())
+    labelled = {(c, lab) for c, lab in (_code_and_label(e) for e, _ in known) if lab}
+    for exch_code, suffix in known:
+        want_code, want_label = _code_and_label(exch_code)
         for m in matches:
-            code = str(m.get("exch_code") or "").split(" (")[0].strip().upper()
-            if code == exch_code and m.get("ticker"):
-                return {
-                    "symbol": f"{m['ticker']}{suffix}",
-                    "composite_figi": m.get("composite_figi"),
-                }
+            code, label = _code_and_label(str(m.get("exch_code") or ""))
+            if code != want_code or not m.get("ticker"):
+                continue
+            if want_label and label != want_label:
+                continue
+            if not want_label and (code, label) in labelled:
+                continue
+            return {
+                "symbol": f"{m['ticker']}{suffix}",
+                "composite_figi": m.get("composite_figi"),
+            }
     return None
 
 

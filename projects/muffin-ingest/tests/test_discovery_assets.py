@@ -67,6 +67,8 @@ class FakeCursor:
     writes: ClassVar[list[tuple[str, tuple[Any, ...]]]] = []
     #: What `market.mark_venue_absence` answers; the rules are tested against real Postgres in
     #: muffin-deployment, so here only what the asset hands it and records matters.
+    #: `market.exchange_label` as production seeds it.
+    labels: ClassVar[list[tuple[str, str, str]]] = [("TT", "Taipei Stock Exchange", ".TWO")]
     absence_outcome: ClassVar[dict[str, Any]] = {
         "windows_judged": 3,
         "marked": 2,
@@ -127,6 +129,8 @@ class FakeCursor:
         if text.startswith("select"):
             if "from market.directory_query" in text:
                 self.rows = list(self._directory_query)
+            elif "from market.exchange_label" in text:
+                self.rows = list(FakeCursor.labels)
             elif "from market.exchange where enabled" in text:
                 self.rows = list(self._exchanges)
             elif "from market.countries" in text:
@@ -1217,6 +1221,44 @@ def test_stage_2_files_an_alias_line_as_the_us_line_it_names(
     assert meta["seen_by_alias_only"].value == 1
     assert meta["mapped_to_composite"].value == 1
     assert meta["unplaced_without_composite"].value == 1
+
+
+def test_stage_2_suffixes_a_shared_code_s_lines_by_their_label(
+    tmp_path: Path,
+    instance: dg.DagsterInstance,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OpenFIGI's `TT` page holds both Taiwanese markets, each line labelled (2026-10-25: 1,424
+    Taipei, 1,090 Taiwan, 5 bare). The Taipei Exchange's lines must be priced `.TWO`, the rest
+    `.TW`, or every TPEx listing the directory offers is promoted already dead."""
+    monkeypatch.setattr(
+        FakePostgres,
+        "directory_query",
+        [*DIRECTORY_QUERY, ("TT.common", "TT", "TT", "Common Stock", False)],
+    )
+    monkeypatch.setattr(FakePostgres, "exchanges", [*EXCHANGES, ("TT", ".TW", "TW")])
+    instance.add_dynamic_partitions(discovery_partitions.SWEEP_PARTITIONS, ["TT.common"])
+    _walk_at(
+        tmp_path,
+        instance,
+        "TT.common",
+        [
+            _line("BBG000TPEX01", ticker="6488", exchCode="TT (Taipei Stock Exchange)"),
+            _line("BBG000TWSE01", ticker="2330", exchCode="TT (Taiwan Stock Exchange)"),
+            _line("BBG000BARE01", ticker="1101", exchCode="TT"),
+        ],
+        at=EARLIER,
+    )
+
+    result = _file(tmp_path, instance, "TT.common")
+
+    assert sorted((r["ticker"], r["provider_symbol"], r["exch_code"]) for r in _Capture.last) == [
+        ("1101", "1101.TW", "TT"),
+        ("2330", "2330.TW", "TT"),
+        ("6488", "6488.TWO", "TT"),
+    ]
+    meta = result.asset_materializations_for_node("venue_listing")[0].metadata
+    assert meta["suffix_by_label"].value == 1
 
 
 # --- the checks ----------------------------------------------------------------------------------

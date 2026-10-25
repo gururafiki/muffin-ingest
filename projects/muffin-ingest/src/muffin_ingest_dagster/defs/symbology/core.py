@@ -18,11 +18,22 @@ from muffin_ingest_dagster.lib.resources import Postgres
 
 
 def _venues(conn: Any) -> dict[str, list[tuple[str, str]]]:
-    """country_iso2 → [(exch_code, suffix)], best first — the shape `market.exchange` seeds."""
+    """country_iso2 → [(exch_code, suffix)], best first — the shape `market.exchange` seeds.
+
+    A LABELLED VENUE (`market.exchange_label`) follows its bare code at the same preference,
+    spelled as OpenFIGI writes it (`TT (Taipei Stock Exchange)`); `pick_local_symbol` matches it
+    on the label and keeps it out of the bare code.
+    """
     with conn.cursor() as cur:
         cur.execute(
-            "select country_iso2, exch_code, suffix from market.exchange "
-            "where enabled order by country_iso2, preference"
+            "select country_iso2, exch_code, suffix from ("
+            " select e.country_iso2, e.exch_code, e.suffix, e.preference, 0 as labelled"
+            " from market.exchange e where e.enabled"
+            " union all"
+            " select e.country_iso2, e.exch_code || ' (' || l.label || ')', l.suffix,"
+            " e.preference, 1 from market.exchange_label l"
+            " join market.exchange e on e.exch_code = l.exch_code where e.enabled"
+            ") v order by country_iso2, preference, labelled, exch_code"
         )
         out: dict[str, list[tuple[str, str]]] = {}
         for country, exch, suffix in cur.fetchall():

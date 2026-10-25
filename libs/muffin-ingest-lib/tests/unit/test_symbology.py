@@ -110,6 +110,43 @@ def test_the_us_case_has_no_suffix_at_all() -> None:
     assert pick == {"symbol": "BRK-B", "composite_figi": None}
 
 
+#: Taiwan as `_venues` builds it: the bare code at its preference, then its labelled market.
+TAIWAN: dict[str, list[tuple[str, str]]] = {
+    "TW": [("TT", ".TW"), ("TT (Taipei Stock Exchange)", ".TWO")],
+}
+
+
+@pytest.mark.parametrize(
+    ("lines", "want"),
+    [
+        # GlobalWafers is a TPEx company: its only line carries the Taipei label.
+        ([{"ticker": "6488", "exch_code": "TT (Taipei Stock Exchange)"}], "6488.TWO"),
+        ([{"ticker": "2330", "exch_code": "TT (Taiwan Stock Exchange)"}], "2330.TW"),
+        ([{"ticker": "1101", "exch_code": "TT"}], "1101.TW"),
+        # On both boards, the bare code's preference holds: the Taiwan Stock Exchange line.
+        (
+            [
+                {"ticker": "9999", "exch_code": "TT (Taipei Stock Exchange)"},
+                {"ticker": "9998", "exch_code": "TT (Taiwan Stock Exchange)"},
+            ],
+            "9998.TW",
+        ),
+    ],
+    ids=["tpex", "twse", "unlabelled", "both-boards"],
+)
+def test_a_shared_code_is_told_apart_by_its_label(lines: list[dict[str, str]], want: str) -> None:
+    """OpenFIGI files Taiwan's two markets under `TT` and labels them. A TPEx line priced `.TW` is
+    dead (100 securities on 2026-10-04), so the labelled venue must claim it and the bare code must
+    let it go; ordering alone cannot do both, since the bare code comes first by preference."""
+    pick = symbology.pick_local_symbol("TW", lines, TAIWAN)
+    assert pick is not None and pick["symbol"] == want
+
+
+def test_a_labelled_market_s_yahoo_line_is_a_home_listing() -> None:
+    hits = [{"symbol": "6488.TWO", "quote_type": "EQUITY"}]
+    assert symbology.pick_home_listing("TW", hits, TAIWAN) == "6488.TWO"
+
+
 def test_the_captured_yahoo_searches_parse_to_their_quotes() -> None:
     assert [
         q["symbol"]

@@ -93,6 +93,37 @@ def parse_filter(
     return rows, parsed.get("next"), parsed.get("total")
 
 
+def exchange_label(exch_code: str | None) -> str | None:
+    """The label OpenFIGI puts on a shared exchange code, or None for a bare one.
+
+    `TT (Taipei Stock Exchange)` → `Taipei Stock Exchange`. OpenFIGI files Taiwan's two markets
+    under `TT` and tells them apart only here, so the label decides the Yahoo suffix (`.TWO` for
+    TPEx, `.TW` for the Taiwan Stock Exchange) through muffin-deployment's `market.exchange_label`.
+    """
+    text = (exch_code or "").strip()
+    if "(" not in text or not text.endswith(")"):
+        return None
+    return text[text.index("(") + 1 : -1].strip() or None
+
+
+def line_labels(body: bytes) -> dict[str, str]:
+    """figi → the label on that line's `exchCode`, for the lines of a `/v3/filter` page that carry
+    one.
+
+    BESIDE `parse_filter`, NOT IN IT: its rows are written as they are, and the label is not a
+    column. It only chooses the suffix a line's price symbol takes. Call it on a body
+    `parse_filter` has already accepted.
+    """
+    parsed = json.loads(body)
+    out: dict[str, str] = {}
+    for r in parsed.get("data") or []:
+        if isinstance(r, dict) and r.get("figi"):
+            label = exchange_label(r.get("exchCode"))
+            if label:
+                out[str(r["figi"])] = label
+    return out
+
+
 def as_composite(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
     """Lines of one LOCAL exchange → the COMPOSITE line each names, and how many named none.
 
