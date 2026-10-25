@@ -138,6 +138,26 @@ def test_series_id_is_read_out_of_the_filing_header() -> None:
     assert nport.series_id(_ewj()) == "S000004249"
 
 
+def test_the_fund_directory_is_asked_past_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lane asks this URL daily against a 30-day cache entry: without the bypass a fund SEC
+    listed in the last month could not resolve for up to a month."""
+    import httpx
+
+    from muffin_ingest.providers import sec_nport
+
+    sent: list[dict[str, str]] = []
+
+    def get(url: str, *, headers: dict[str, str], **kwargs: Any) -> httpx.Response:
+        sent.append(headers)
+        return httpx.Response(200, content=b"{}")
+
+    monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setenv("MUFFIN_USER_AGENT", "muffin-market/1.0 (ops@example.com)")
+    sec_nport.fund_directory()
+    assert sent and sent[0].get("X-Muffin-Cache-Bypass") == "1"
+    assert "User-Agent" in sent[0], "SEC's required identity must survive the merge"
+
+
 def test_the_fund_directory_is_an_object_with_parallel_columns() -> None:
     """THE SHAPE IS `{"fields": [...], "data": [[...]...]}`, not an array of objects. Read as an
     array of objects it yields nothing with no error."""
