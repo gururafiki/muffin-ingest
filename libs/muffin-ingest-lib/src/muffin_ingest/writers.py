@@ -224,6 +224,8 @@ def upsert(
     period SEC holds keeps SEC's row, and the offered row is simply not written. The key leaves
     the source out on purpose (one row per period, whoever stated it), so the guard has to live in
     the update rather than in the key. A row it declines is in `written` and not in `changed`.
+    A LIST names every source the writer may replace (`["yfinance", "tiingo"]`): a retired source
+    whose rows this writer supersedes, while any other source's rows stay untouched.
 
     `merge_json` NAMES jsonb COLUMNS AN UPDATE MERGES INTO RATHER THAN REPLACES: the stored object,
     with the offered one's NON-NULL values laid over it. For a provider whose window rolls per
@@ -279,9 +281,12 @@ def upsert(
         action = f"do update set {assignments} where ({stored}) is distinct from ({offered})"
         # The guard's VALUES are parameters like any other, appended after the rows' own: a
         # source code is data, never SQL text.
-        for column in only_replacing or {}:
-            action += f" and {_STORED}.{_ident(column)} = %s"
-    guard_params = list((only_replacing or {}).values())
+        for column, value in (only_replacing or {}).items():
+            many = isinstance(value, (list, tuple))
+            action += f" and {_STORED}.{_ident(column)} = {'any(%s)' if many else '%s'}"
+    guard_params = [
+        list(v) if isinstance(v, (list, tuple)) else v for v in (only_replacing or {}).values()
+    ]
 
     # CHUNKED, AND THE DEDUPE STAYS WHOLE-SET. Splitting first and deduping per chunk would let one
     # conflict key survive in two chunks — the second statement would then silently overwrite the

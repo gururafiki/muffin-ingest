@@ -36,6 +36,8 @@ from muffin_ingest.providers import yahoo_chart
 
 #: The source these rows are written under, the same as the edge's `security-dividends`.
 SOURCE = "yfinance"
+#: The source this lane replaces where both state a day (Phase 4 decision 9, retired 2026-10-25).
+RETIRED_SOURCE = "tiingo"
 
 #: The corporate action kinds this reads (`market.corporate_action_kind`).
 DIVIDEND = "dividend"

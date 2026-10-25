@@ -500,4 +500,4 @@ def test_the_night_files_dividends_from_its_own_documents_and_retracts_only_yaho
     (retraction,) = fakes.ACTION_RETRACTIONS
     assert retraction[0] == [TOYOTA[0]] and retraction[3] == "yfinance"
     spec = prices_core.yahoo_corporate_action.specs_by_key[dg.AssetKey("yahoo_corporate_action")]
-    assert spec.metadata["only_replacing"] == {"source_code": "yfinance"}
+    assert spec.metadata["only_replacing"] == {"source_code": ["yfinance", "tiingo"]}
