@@ -38,12 +38,23 @@ def search(isin: str, *, timeout_s: float = 15.0) -> Document:
 
     `quotesCount=10&newsCount=0` keeps the page to the quotes; the body is stored byte for byte and
     `parse_yahoo_search` reads it in stage 2.
+
+    PAST THE CACHE, ALWAYS. The URL is one ISIN's, and the rung asks it again only to re-ask a miss
+    after 30 days, which is the cache location's TTL. With `proxy_cache_background_update on`, the
+    first request after an entry expires is answered from the stale entry, so every re-ask got the
+    answer it was re-asking about (umbrella docs/deferred/2026-10-20-the-cache-serves-a-failing-
+    provider-s-last-answer-for-ever.md, decided 2026-10-25: bypass where an answer must be fresh).
+    The bypass still stores the fresh answer.
     """
     base = settings.provider_base("yahoo", REAL_ORIGIN)
     url = f"{base}/v1/finance/search?q={quote(isin)}&quotesCount=10&newsCount=0"
     return _get(
         url,
         provider=PROVIDER,
-        headers={"User-Agent": BROWSER_UA, "Accept": "application/json"},
+        headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "application/json",
+            "X-Muffin-Cache-Bypass": "1",
+        },
         timeout_s=timeout_s,
     )

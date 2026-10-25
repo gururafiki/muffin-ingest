@@ -147,6 +147,25 @@ def test_a_labelled_market_s_yahoo_line_is_a_home_listing() -> None:
     assert symbology.pick_home_listing("TW", hits, TAIWAN) == "6488.TWO"
 
 
+def test_a_yahoo_search_is_asked_past_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rung re-asks a miss after 30 days, the search location's TTL, and http-cache answers the
+    first request after expiry from the stale entry: without the bypass every re-ask is answered
+    with the miss it is re-asking about."""
+    import httpx
+
+    from muffin_ingest.providers import yahoo_search
+
+    sent: list[dict[str, str]] = []
+
+    def get(url: str, *, headers: dict[str, str], **kwargs: Any) -> httpx.Response:
+        sent.append(headers)
+        return httpx.Response(200, content=(FIX / "yahoo_search_nothing.json").read_bytes())
+
+    monkeypatch.setattr(httpx, "get", get)
+    yahoo_search.search("US0378331005")
+    assert sent and sent[0].get("X-Muffin-Cache-Bypass") == "1"
+
+
 def test_the_captured_yahoo_searches_parse_to_their_quotes() -> None:
     assert [
         q["symbol"]
