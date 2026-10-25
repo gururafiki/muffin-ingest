@@ -287,10 +287,11 @@ def company_facts(
     kinds={"postgres"},
     metadata={
         "table": "market.security_statement",
-        "conflict": ["security_id", "statement", "period_ending", "period_type"],
-        # A PERIOD SEC HOLDS KEEPS SEC'S ROW (decision 11): the key leaves the source out, so the
-        # guard lives in the update. SEC's 18 years of depth is the better half of the data.
-        "only_replacing": {"source_code": statements.SOURCE},
+        # THE PROVIDER IS IN THE KEY (Phase 5 decision 6, muffin-deployment migration
+        # 20261025140000). Yahoo's row for a period SEC also reports is kept beside SEC's, rather
+        # than refused by a guard on whose row it may replace, and the serving view and the
+        # derivation choose by source priority.
+        "conflict": ["security_id", "source_code", "statement", "period_ending", "period_type"],
         # YAHOO'S WINDOW ROLLS PER LINE, so a narrower answer must not erase a stored line.
         "merge_json": ["data"],
     },
