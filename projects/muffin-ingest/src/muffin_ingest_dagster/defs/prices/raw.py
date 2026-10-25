@@ -96,6 +96,14 @@ def _read_chart(document: Document) -> tuple[yahoo_chart.Series | None, str]:
     `absent` IS YAHOO SAYING SO — `chart.error`, a 404 reading "No data found, symbol may be
     delisted" for BDMS-F.BK and ICT.PS (measured 2026-10-10) — and `empty` is a symbol it knows with
     nothing in the window. Only the first can become a miss, and only with a healthy control.
+
+    `quote_only` IS A LISTING YAHOO ANSWERS WITH ITS LIVE QUOTE AND NO BAR. Picton (PCTN.L), JTC,
+    Orla, Kelun-Biotech and a TMBThanachart NVDR were answered this way on every visit, a full
+    history included (measured 2026-10-25: three documents of one point each, stamped at
+    `regularMarketTime`). Stage 2 never publishes a live quote, so they were counted as answered
+    while nothing changed, and kept their openbb bars' guessed labels. Decided by the user
+    2026-10-25: it is an absence, so it becomes a miss on the same terms, leaves the rotation for
+    `DEAD_FOR_DAYS`, and the symbology repair looks for a live line.
     """
     try:
         series = yahoo_chart.parse(document.body)
@@ -105,6 +113,8 @@ def _read_chart(document: Document) -> tuple[yahoo_chart.Series | None, str]:
         return series, "absent"
     if series.granularity not in (None, price_chart.INTERVAL):
         return series, "not_daily"
+    if series.points and all(point.is_live for point in series.points):
+        return series, "quote_only"
     return series, ("answered" if series.points else "empty")
 
 
@@ -150,10 +160,10 @@ def _collect_charts(
 ) -> tuple[list[dict[str, Any]], set[str], dict[str, int]]:
     """Ask each security once, in weight order, and return the documents and what the asking showed.
 
-    THE OUTCOMES PARTITION THE SUBJECTS: answered, empty, absent, not_daily, unreadable, transport
-    and unasked sum to the subjects asked about, and the asset adds `not_askable` to reach
-    `requested`. A gap in that sum is a branch that forgot to count, which is how half a night once
-    read as complete.
+    THE OUTCOMES PARTITION THE SUBJECTS: answered, empty, absent, quote_only, not_daily,
+    unreadable, transport and unasked sum to the subjects asked about, and the asset adds
+    `not_askable` to reach `requested`. A gap in that sum is a branch that forgot to count, which
+    is how half a night once read as complete.
     """
     deadline = time.monotonic() + budget_seconds
     pacer = _pacer()
@@ -166,6 +176,7 @@ def _collect_charts(
         "answered": 0,
         "empty": 0,
         "absent": 0,
+        "quote_only": 0,
         "not_daily": 0,
         "unreadable": 0,
         "transport": 0,
@@ -251,7 +262,7 @@ def _collect_charts(
             # them to record one bad answer.
             if chosen.start is None:
                 complete.add(subject.security_id)
-        elif outcome == "absent":
+        elif outcome in ("absent", "quote_only"):
             absent.append(subject)
 
     # A MISS NEEDS A HEALTHY PROVIDER IN THE SAME RUN. A security that answered is that proof; when

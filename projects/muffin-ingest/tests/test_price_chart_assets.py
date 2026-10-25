@@ -39,6 +39,7 @@ VOD = ("22222222-2222-2222-2222-222222222222", "VOD.L", 4.0)
 ALG = ("33333333-3333-3333-3333-333333333333", "ALG.KW", 3.0)
 TOYOTA = ("44444444-4444-4444-4444-444444444444", "7203.T", 2.0)
 DEAD = ("55555555-5555-5555-5555-555555555555", "BDMS-F.BK", 1.0)
+QUOTE_ONLY = ("66666666-6666-6666-6666-666666666666", "PCTN.L", 0.5)
 
 BODIES = {
     "AAPL": "aapl_ext",
@@ -46,6 +47,7 @@ BODIES = {
     "ALG.KW": "alg_kw_week",
     "7203.T": "7203_t_ext",
     "BDMS-F.BK": "bdms_f_bk_404",
+    "PCTN.L": "pctn_l_quote_only",
 }
 
 
@@ -182,6 +184,7 @@ def outcomes_sum(m: dict[str, Any]) -> int:
             "answered",
             "empty",
             "absent",
+            "quote_only",
             "not_daily",
             "unreadable",
             "transport",
@@ -349,6 +352,22 @@ def test_an_absence_alone_is_a_miss_only_once_the_control_answers(tmp_path: Path
     m = meta(result, "raw_price_chart")
     assert (m["dead"], m["control_calls"]) == (1, 1)
     assert [(p["asked_with"], p["outcome"]) for p in fakes.PROBES] == [("BDMS-F.BK", "miss")]
+
+
+def test_a_listing_answered_only_with_its_live_quote_is_a_miss(tmp_path: Path) -> None:
+    """Picton's document, as Yahoo returned it on 2026-10-22: one point, stamped at
+    `regularMarketTime`. Counted as answered, it stayed in the rotation for ever with nothing
+    published; it is an absence, a miss once the provider is shown healthy (here by AAPL)."""
+    with yahoo({"AAPL": body("aapl_ext"), "PCTN.L": body("pctn_l_quote_only")}):
+        result = night(tmp_path, [AAPL, QUOTE_ONLY])
+
+    m = meta(result, "raw_price_chart")
+    assert (m["answered"], m["quote_only"], m["dead"]) == (1, 1, 1)
+    assert sorted((p["asked_with"], p["outcome"]) for p in fakes.PROBES) == [
+        ("AAPL", "hit"),
+        ("PCTN.L", "miss"),
+    ]
+    assert outcomes_sum(m) == m["requested"]
 
 
 def test_an_absence_with_a_control_that_does_not_answer_marks_nothing(tmp_path: Path) -> None:
