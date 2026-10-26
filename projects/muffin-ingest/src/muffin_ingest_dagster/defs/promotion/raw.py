@@ -102,9 +102,11 @@ def raw_promotion_probe(
 ) -> list[dict[str, Any]]:
     """Asks Yahoo's chart for thirty days of daily bars for each candidate line; stores the bodies.
 
-    EACH LINE UNDER EACH SPELLING ITS COUNTRY USES, until Yahoo knows one
+    EACH LINE UNDER EACH SPELLING ITS COUNTRY USES, until one names the line
     (`muffin_ingest.facets.promotion.spellings`): a KOSDAQ line is `.KQ` under a `.KS` directory,
-    and a Hong Kong ticker has four digits (decided by the user 2026-10-26).
+    and a Hong Kong ticker has four digits (decided by the user 2026-10-26). A wrong spelling is
+    answered `absent` or with a non-equity shadow of the right line, so both move the walk on
+    (`asks_the_next_spelling`).
 
     THE CONTROL IS ASKED FIRST, so stage 2 can tell a line Yahoo does not price from a run Yahoo was
     not answering: an absence is recorded only when the control priced in the same run.
@@ -182,9 +184,9 @@ def raw_promotion_probe(
                 "budget of %ss spent; %s unasked", config.budget_seconds, stats["unasked"]
             )
             break
-        # EACH SPELLING IN TURN, UNTIL ONE IS KNOWN. Stage 1 reads only whether Yahoo said it does
-        # not know the name, which is what decides the next request; what the answer says about
-        # the line is stage 2's, from the same stored bodies.
+        # EACH SPELLING IN TURN, UNTIL ONE NAMES THE LINE. Stage 1 reads only whether the answer
+        # is about another name (unknown, or a non-equity shadow), which is what decides the next
+        # request; what the walk says about the line is stage 2's, from the same stored bodies.
         finished = False
         for rank, symbol in enumerate(spelt):
             stats["calls"] += 1

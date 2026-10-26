@@ -121,11 +121,47 @@ def spellings(
     return [provider_symbol] if provider_symbol else []
 
 
+#: WHAT A WRONG SPELLING IS ANSWERED WITH. `absent` is Yahoo saying it does not know the name.
+#: `not_equity` is the other shape, and was found by the first live wave (2026-10-26): Yahoo answers
+#: a Korean line under the wrong suffix with a SHADOW of the right one, the same company and
+#: exchange typed `MUTUALFUND`. Measured over 30 Korean candidates asked under both suffixes, the
+#: wrong one was `absent` 12 times and a `MUTUALFUND` shadow on KOE 18 times, in both directions
+#: (a KOSPI line asked `.KQ` too); the right one was `EQUITY` every time. The directory types every
+#: candidate as an equity, so a non-equity answer is about the name, never about the line.
+NOT_THIS_NAME = frozenset({"absent", "not_equity"})
+
+
 def asks_the_next_spelling(outcome: str) -> bool:
     """Whether a verdict sends the probe on to the line's next spelling.
 
-    Only `absent`, Yahoo saying it does not know the name. Any other answer means it knows the
-    symbol, and a stale or quote-only line is the company not trading, not a misspelling.
-    `unreadable` is no answer at all, so asking another spelling would learn nothing from it.
+    Only an answer that is not about the line (`NOT_THIS_NAME`). A stale, empty or quote-only
+    equity IS the line: the company not trading. Asking further would only find a copy elsewhere,
+    and Canada's NEO carries thin copies of TSX Venture lines (measured 2026-10-26: one bar in
+    thirty days), which would promote a halted company through its quietest venue. `unreadable` is
+    no answer at all, so another spelling would learn nothing from it.
     """
-    return outcome == "absent"
+    return outcome in NOT_THIS_NAME
+
+
+def conclude(verdicts: Sequence[str], spellings: int) -> tuple[int, str]:
+    """What one line's walk over its spellings says, and which answer says it: (index, outcome).
+
+    `priced` if any spelling priced. Otherwise the walk's last answer, when it is about the line
+    (`stale`, `quote_only`, `empty`, `not_daily`) or no answer (`unreadable`). A walk that stopped
+    on a wrong-name answer before asking every spelling is `unfinished`: a refusal or a failed
+    request cut it short, and it says nothing. A finished walk of wrong-name answers only is
+    `not_equity` if any spelling named a non-equity, else `absent`, so a fund the directory
+    miscalled an equity is recorded as one rather than as unknown.
+    """
+    for index, outcome in enumerate(verdicts):
+        if outcome == PRICED:
+            return index, PRICED
+    last = len(verdicts) - 1
+    if not asks_the_next_spelling(verdicts[last]):
+        return last, verdicts[last]
+    if len(verdicts) < spellings:
+        return last, "unfinished"
+    for index, outcome in enumerate(verdicts):
+        if outcome != "absent":
+            return index, outcome
+    return last, "absent"

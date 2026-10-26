@@ -43,10 +43,14 @@ LINES = [
     ("BBG-GATEWAY", "X5", "GATE.L", "ZZ"),
     ("BBG-KOSDAQ", "177900", "177900.KS", "KR"),
     ("BBG-KR-QUOTE", "000002", "000002.KS", "KR"),
+    ("BBG-KOSDAQ-SHADOW", "389140", "389140.KS", "KR"),
+    ("BBG-KR-FUND", "069500", "069500.KS", "KR"),
 ]
 SPELLINGS = [("KR", ".KS"), ("KR", ".KQ")]
 #: The captured body Yahoo answers each symbol with. The KOSDAQ line is unknown as `.KS` and priced
-#: as `.KQ`; the other Korean line is known as `.KS`, so its `.KQ` must never be asked.
+#: as `.KQ`; the quote-only Korean line is known as `.KS`, so its `.KQ` must never be asked. The
+#: shadow line is answered `.KS` with a `MUTUALFUND` shadow of itself (4by4, captured 2026-10-26)
+#: and priced as `.KQ`; the fund line gets the same shadow and then `absent`.
 BODIES = {
     "AAPL": "aapl_ext",
     "VOD.L": "vod_l_ext",
@@ -55,6 +59,10 @@ BODIES = {
     "177900.KS": "bdms_f_bk_404",
     "177900.KQ": "aapl_ext",
     "000002.KS": "pctn_l_quote_only",
+    "389140.KS": "389140_ks_shadow",
+    "389140.KQ": "aapl_ext",
+    "069500.KS": "389140_ks_shadow",
+    "069500.KQ": "bdms_f_bk_404",
 }
 #: Every symbol the probe asks over LINES with nothing refused: the control, then each line.
 ASKED = [
@@ -67,6 +75,10 @@ ASKED = [
     "177900.KS",
     "177900.KQ",
     "000002.KS",
+    "389140.KS",
+    "389140.KQ",
+    "069500.KS",
+    "069500.KQ",
 ]
 
 
@@ -269,16 +281,16 @@ def test_a_wave_has_as_many_places_as_the_sweep_can_take(
 
 
 def test_the_probe_asks_the_control_first_then_twice_the_places(tmp_path: Path) -> None:
-    """60 in the grid leaves 10 places, so up to 20 candidates; there are seven. The KOSDAQ line
-    is asked `.KS`, refused, then `.KQ`; the other Korean line answers as `.KS`, so its `.KQ` is
-    never asked."""
+    """60 in the grid leaves 10 places, so up to 20 candidates; there are nine. The KOSDAQ line
+    is asked `.KS`, refused, then `.KQ`; the quote-only Korean line answers as `.KS`, so its `.KQ`
+    is never asked; both shadow lines go on to `.KQ`."""
     with yahoo() as asked:
         result = _wave(tmp_path, stage_2=False)
     assert result.success
     assert asked == ASKED
     assert FakePostgres.candidate_limits == [20]
     meta = _meta(result, "raw_promotion_probe")
-    assert (meta["answered"], meta["calls"], meta["respelled"]) == (8, 9, 1)
+    assert (meta["answered"], meta["calls"], meta["respelled"]) == (10, 13, 3)
     assert meta["places"] == 10 and meta["reason"] == "none"
 
 
@@ -304,8 +316,8 @@ def test_a_throttle_stops_the_probe_and_counts_the_rest_unasked(tmp_path: Path) 
         result = _wave(tmp_path, stage_2=False)
     assert asked == ["AAPL", "AAPL", "BDMS-F.BK", "PCTN.L"]
     meta = _meta(result, "raw_promotion_probe")
-    assert (meta["answered"], meta["throttled"], meta["unasked"], meta["transport"]) == (3, 1, 4, 0)
-    assert meta["answered"] + meta["throttled"] + meta["unasked"] + meta["transport"] == 8
+    assert (meta["answered"], meta["throttled"], meta["unasked"], meta["transport"]) == (3, 1, 6, 0)
+    assert meta["answered"] + meta["throttled"] + meta["unasked"] + meta["transport"] == 10
 
 
 # ── stage 2 ───────────────────────────────────────────────────────────────────────────────────
@@ -316,12 +328,22 @@ def test_the_wave_hands_over_the_priced_lines_in_the_order_asked(tmp_path: Path)
         result = _wave(tmp_path)
     assert result.success
     assert FakePostgres.handed == [
-        (["BBG-PRICED-1", "BBG-PRICED-2", "BBG-KOSDAQ"], ["AAPL", "VOD.L", "177900.KQ"], 10)
+        (
+            ["BBG-PRICED-1", "BBG-PRICED-2", "BBG-KOSDAQ", "BBG-KOSDAQ-SHADOW"],
+            ["AAPL", "VOD.L", "177900.KQ", "389140.KQ"],
+            10,
+        )
     ]
     meta = _meta(result, "promotion_wave")
-    assert meta["outcomes"] == {"absent": 1, "priced": 3, "quote_only": 2, "unreadable": 1}
+    assert meta["outcomes"] == {
+        "absent": 1,
+        "not_equity": 1,
+        "priced": 4,
+        "quote_only": 2,
+        "unreadable": 1,
+    }
     assert meta["control_priced"] is True
-    assert meta["priced_respelled"] == 1
+    assert meta["priced_respelled"] == 2
 
 
 def test_an_absence_is_recorded_when_the_control_priced(tmp_path: Path) -> None:
@@ -337,6 +359,10 @@ def test_an_absence_is_recorded_when_the_control_priced(tmp_path: Path) -> None:
         # Recorded under the spelling Yahoo priced, never the refused `.KS`.
         "BBG-KOSDAQ": ("priced", "177900.KQ"),
         "BBG-KR-QUOTE": ("quote_only", "000002.KS"),
+        # A shadow under `.KS` is not the line: priced under `.KQ`.
+        "BBG-KOSDAQ-SHADOW": ("priced", "389140.KQ"),
+        # Shadow, then unknown: the line is not an equity, said under the spelling that said so.
+        "BBG-KR-FUND": ("not_equity", "069500.KS"),
     }
     assert {p["source_code"] for p in FakePostgres.probes} == {"yfinance"}
 
@@ -368,19 +394,28 @@ def test_no_absence_is_recorded_when_the_control_did_not_price(tmp_path: Path) -
             yahoo_chart.fetch = saved
     assert {p["outcome"] for p in FakePostgres.probes} == {"priced"}
     assert FakePostgres.handed == [
-        (["BBG-PRICED-1", "BBG-PRICED-2", "BBG-KOSDAQ"], ["AAPL", "VOD.L", "177900.KQ"], 10)
+        (
+            ["BBG-PRICED-1", "BBG-PRICED-2", "BBG-KOSDAQ", "BBG-KOSDAQ-SHADOW"],
+            ["AAPL", "VOD.L", "177900.KQ", "389140.KQ"],
+            10,
+        )
     ]
 
 
-def test_a_walk_cut_short_is_not_an_absence(tmp_path: Path) -> None:
-    """The KOSDAQ line's `.KS` is refused, then the provider throttles before `.KQ` is asked. Its
-    one stored answer says "unknown name", but the line has another spelling, so it is
+@pytest.mark.parametrize(
+    ("refused_at", "figi"),
+    [("177900.KQ", "BBG-KOSDAQ"), ("389140.KQ", "BBG-KOSDAQ-SHADOW")],
+    ids=["after-absent", "after-a-shadow"],
+)
+def test_a_walk_cut_short_is_not_an_absence(tmp_path: Path, refused_at: str, figi: str) -> None:
+    """The line's `.KS` is unknown or a shadow, then the provider throttles before `.KQ` is asked.
+    Its one stored answer is about another name, and the line has another spelling, so it is
     `unfinished` and recorded as nothing, though the control priced."""
     refused = yahoo_chart.YahooRefused("HTTP 429 Too Many Requests for chart")
-    with yahoo({"177900.KQ": refused}):
+    with yahoo({refused_at: refused}):
         result = _wave(tmp_path)
     assert result.success
-    assert "BBG-KOSDAQ" not in {p["figi"] for p in FakePostgres.probes}
+    assert figi not in {p["figi"] for p in FakePostgres.probes}
     assert _meta(result, "promotion_wave")["outcomes"]["unfinished"] == 1
 
 

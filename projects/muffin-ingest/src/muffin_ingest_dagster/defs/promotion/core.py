@@ -46,10 +46,11 @@ def promotion_wave(
     keep them out of waves for 90 days: the 1,369-security incident, in a new table. A `priced`
     verdict is positive evidence and is recorded whatever the control said.
 
-    A LINE IS ITS WALK OVER ITS SPELLINGS. It is priced under the first spelling Yahoo priced, and
-    promoted under that spelling (a KOSDAQ line as `.KQ`). It is absent only when every spelling
-    was asked and Yahoo knew none: a walk cut short by a failed request or a throttle says nothing,
-    and is counted `unfinished` and never recorded.
+    A LINE IS ITS WALK OVER ITS SPELLINGS (`muffin_ingest.facets.promotion.conclude`). It is priced
+    under the spelling Yahoo priced, and promoted under it (a KOSDAQ line as `.KQ`). It is recorded
+    absent, or not an equity, only when every spelling was asked and none named the line: Yahoo
+    answers a wrong Korean suffix with a `MUTUALFUND` shadow of the right line. A walk cut short by
+    a failed request or a throttle says nothing, and is counted `unfinished` and never recorded.
 
     THE PRICED LINES ARE HANDED OVER IN THE ORDER THEY WERE ASKED, which is the wave's order, and
     the function re-checks each against the candidates: a class promoted since stage 1 is skipped.
@@ -69,16 +70,13 @@ def promotion_wave(
     respelled = 0
     for figi, walk in walks.items():
         walk.sort(key=lambda r: int(r.get("spelling_rank") or 0))
-        verdicts = [(_verdict(r), r) for r in walk]
-        hit = next(((v, r) for v, r in verdicts if v == promotion.PRICED), None)
-        verdict, row = hit if hit is not None else verdicts[-1]
-        if hit is not None:
+        index, verdict = promotion.conclude(
+            [_verdict(r) for r in walk], int(walk[0].get("spellings") or 1)
+        )
+        row = walk[index]
+        if verdict == promotion.PRICED:
             priced.append((figi, str(row["asked_symbol"])))
             respelled += int(int(row.get("spelling_rank") or 0) > 0)
-        elif promotion.asks_the_next_spelling(verdict) and len(walk) < int(
-            row.get("spellings") or 1
-        ):
-            verdict = "unfinished"
         outcomes[verdict] += 1
         if verdict in STATEMENTS and (verdict == promotion.PRICED or control_priced):
             probes.append(
