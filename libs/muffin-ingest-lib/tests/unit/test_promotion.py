@@ -31,9 +31,10 @@ def _newest_bar(name: str) -> datetime:
         ("yahoo_chart_bdms_f_bk_404.body", "absent"),
         ("yahoo_chart_aapl_max.body", "not_daily"),
         ("yahoo_chart_eurusd_5d.body", "not_equity"),
+        ("yahoo_chart_389140_ks_shadow.body", "not_equity"),
         ("yahoo_chart_pctn_l_quote_only.body", "quote_only"),
     ],
-    ids=["yahoo-says-absent", "downsampled", "a-currency", "a-live-quote-only"],
+    ids=["yahoo-says-absent", "downsampled", "a-currency", "a-kosdaq-shadow", "a-live-quote-only"],
 )
 def test_a_line_yahoo_does_not_price_is_not_priced(fixture: str, want: str) -> None:
     assert promotion.verdict(_body(fixture), datetime(2026, 10, 26, tzinfo=UTC)) == want
@@ -109,11 +110,41 @@ def test_a_line_is_asked_under_each_spelling_its_country_uses(
 
 @pytest.mark.parametrize(
     ("outcome", "next_one"),
-    [("absent", True)] + [(o, False) for o in promotion.OUTCOMES if o != "absent"],
+    [(o, o in ("absent", "not_equity")) for o in promotion.OUTCOMES],
 )
-def test_only_an_unknown_name_sends_the_probe_to_the_next_spelling(
+def test_only_an_answer_about_another_name_sends_the_probe_to_the_next_spelling(
     outcome: str, next_one: bool
 ) -> None:
-    """A stale or quote-only line is the company not trading; another spelling would only find the
-    same company, or a different one."""
+    """Unknown, or a non-equity shadow (4by4's `389140.KS`, captured 2026-10-26): neither is the
+    line. A stale or quote-only equity is the company not trading; another spelling would only
+    find a copy of it on a thinner venue."""
     assert promotion.asks_the_next_spelling(outcome) is next_one
+
+
+@pytest.mark.parametrize(
+    ("verdicts", "spellings", "want"),
+    [
+        # The KOSDAQ shadow, then the right suffix: priced under `.KQ`.
+        (["not_equity", "priced"], 2, (1, "priced")),
+        (["absent", "priced"], 2, (1, "priced")),
+        # A Korean fund the directory called an equity: shadow, then unknown. The fund is recorded
+        # as one, under the spelling that said so, not as unknown.
+        (["not_equity", "absent"], 2, (0, "not_equity")),
+        (["absent", "not_equity"], 2, (1, "not_equity")),
+        (["absent", "absent"], 2, (1, "absent")),
+        # A walk cut short after a wrong-name answer says nothing.
+        (["not_equity"], 2, (0, "unfinished")),
+        (["absent"], 2, (0, "unfinished")),
+        # The line itself, not trading: the walk stopped there.
+        (["absent", "stale"], 2, (1, "stale")),
+        (["quote_only"], 2, (0, "quote_only")),
+        (["unreadable"], 2, (0, "unreadable")),
+        # One spelling: what it said.
+        (["not_equity"], 1, (0, "not_equity")),
+        (["absent"], 1, (0, "absent")),
+    ],
+)
+def test_a_walk_concludes_on_what_named_the_line(
+    verdicts: list[str], spellings: int, want: tuple[int, str]
+) -> None:
+    assert promotion.conclude(verdicts, spellings) == want
