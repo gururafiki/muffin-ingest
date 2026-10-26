@@ -31,3 +31,8 @@ PRICE_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 #: for stage 2 and a slow provider, and well short of the six-hour default that would let a hung
 #: run hold the `yfinance` pool through the price night.
 COMPANY_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
+
+#: ONE PROMOTION PROBE: ~1,000 chart requests at 1.4 s is ~24 minutes, and its own budget stops
+#: asking at 45. An hour is that budget and a slow provider, and short of the six-hour default that
+#: would let a hung probe hold the `yfinance` pool into the price night.
+PROMOTION_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "3600"}
