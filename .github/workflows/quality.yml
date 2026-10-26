@@ -32,8 +32,14 @@ jobs:
       - uses: actions/checkout@v5
       - name: Install uv
         run: curl -LsSf https://astral.sh/uv/${{ env.UV_VERSION }}/install.sh | sh
-      - name: Install (the library and its dev group; uv fetches the interpreter it needs)
-        run: uv sync --frozen
+      - name: Install (the library, its dev group and the `filings` extra; uv fetches the interpreter)
+        # `filings` is edgartools, without the hub. Its tests prove the SEC client is configured
+        # before its first import and that its cache is off, which only edgartools itself can show.
+        run: uv sync --frozen --extra filings
+      - name: The SEC client imports, so its tests run rather than skip
+        # AN IMPORT, NOT A `find_spec`: on 2026-10-27 edgartools was installed and could not import
+        # (`pytz` undeclared), and its tests skipped while a `find_spec` check passed.
+        run: uv run python -c "import edgar"
 
       # NO DAGSTER AND NO HUB, AND BOTH ABSENCES ARE THE POINT. The writers take a PROTOCOL
       # (`DbConn`) rather than a driver, the library imports no orchestrator, and `providers/openbb`

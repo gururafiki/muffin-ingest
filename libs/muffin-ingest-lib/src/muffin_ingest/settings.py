@@ -191,3 +191,25 @@ def user_agent() -> str:
             f"alone."
         )
     return value
+
+
+def sec_requests_per_second() -> int:
+    """How fast the SEC lanes ask: 5 a second, half of SEC's documented fair-access 10.
+
+    THE OTHER HALF IS NOT SPARE. The edge function's `security-segments` handler still reads filing
+    instances from the same node (~0.7 a second) until Phase 6 moves it, and the N-PORT lane asks
+    SEC too. SEC's limit is per client address, so every caller on this node shares one budget.
+    """
+    return int(_env("SEC_REQUESTS_PER_SECOND", "5"))
+
+
+def edgar_scratch_dir() -> str:
+    """Where edgartools may write: a scratch directory, never raw and never `DAGSTER_HOME`.
+
+    IMPORTING `edgar` WRITES. `edgar.httpclient` builds its HTTP manager with a file cache at import
+    time and creates `<EDGAR_LOCAL_DATA_DIR>/_tcache` while doing so (edgartools 4.35.1,
+    `httpclient.py`). The manager is replaced with an uncached one immediately after
+    (`providers.sec_edgar.edgar`), so the directory stays empty; it only has to be writable, and
+    the image's home directory is not guaranteed to be.
+    """
+    return _env("EDGAR_SCRATCH_DIR", "/tmp/muffin-edgar")
