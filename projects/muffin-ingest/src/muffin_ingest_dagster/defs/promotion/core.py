@@ -1,0 +1,125 @@
+"""Stage 2 of the promotion family: the verdicts, recorded, and the priced lines promoted."""
+
+from collections import Counter
+from datetime import datetime, timedelta
+from typing import Any
+
+import dagster as dg
+from dagster import AssetExecutionContext
+from muffin_ingest.facets import promotion
+from muffin_ingest.writers import upsert
+
+from muffin_ingest_dagster.defs.prices.partitions import PROVIDER, SECURITY_PARTITION
+from muffin_ingest_dagster.defs.promotion.partitions import wave_weeks
+from muffin_ingest_dagster.defs.promotion.raw import capacity, read_policy
+from muffin_ingest_dagster.lib import partitioned
+from muffin_ingest_dagster.lib.resources import Postgres
+
+#: A verdict that is a statement by Yahoo about the line. `unreadable` is not: a gateway page says
+#: nothing about the symbol, so it is counted and never recorded.
+STATEMENTS = frozenset(promotion.OUTCOMES) - {"unreadable"}
+
+
+@dg.asset(
+    partitions_def=wave_weeks,
+    # EAGER: it follows its probe, in a run of its own on the `sql` pool, so the probe's ~25
+    # minutes on the `yfinance` pool never hold the database pool too.
+    automation_condition=dg.AutomationCondition.eager(),
+    # A WAVE A WEEK, paused or not: a paused policy still materialises the week with its reason, so
+    # a stale wave means the schedule stopped, not that nothing was due.
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=8)),
+    pool="sql",
+    group_name="universe",
+    kinds={"postgres"},
+    description=(
+        "The week's promotion wave: records what Yahoo said about each line it was asked, and "
+        "promotes the share classes whose line Yahoo priced. No provider call."
+    ),
+)
+def promotion_wave(
+    context: AssetExecutionContext, postgres: Postgres, raw_promotion_probe: Any
+) -> "dg.MaterializeResult[None]":
+    """Bodies on disk to verdicts, then `market.promote_share_classes(priced lines, capacity)`.
+
+    AN ABSENCE IS RECORDED ONLY WHEN THE CONTROL PRICED IN THE SAME RUN. A run Yahoo was throttling
+    or answering with an error page would otherwise record a week's candidates as unpriceable and
+    keep them out of waves for 90 days: the 1,369-security incident, in a new table. A `priced`
+    verdict is positive evidence and is recorded whatever the control said.
+
+    THE PRICED LINES ARE HANDED OVER IN THE ORDER THEY WERE ASKED, which is the wave's order, and
+    the function re-checks each against the candidates: a class promoted since stage 1 is skipped.
+    """
+    rows = partitioned.loaded_rows(raw_promotion_probe)
+    control = [r for r in rows if r.get("role") == "control"]
+    candidates = [r for r in rows if r.get("role") == "candidate"]
+    control_priced = any(_verdict(r) == promotion.PRICED for r in control)
+
+    outcomes: Counter[str] = Counter()
+    probes: list[dict[str, Any]] = []
+    priced: list[str] = []
+    for row in candidates:
+        outcome = _verdict(row)
+        outcomes[outcome] += 1
+        if outcome == promotion.PRICED:
+            priced.append(str(row["figi"]))
+        if outcome in STATEMENTS and (outcome == promotion.PRICED or control_priced):
+            probes.append(
+                {
+                    "figi": row["figi"],
+                    "outcome": outcome,
+                    "symbol": row["asked_symbol"],
+                    "source_code": PROVIDER.code,
+                    "observed_at": row["fetched_at"],
+                }
+            )
+
+    keys = len(context.instance.get_dynamic_partitions(SECURITY_PARTITION))
+    with postgres.connect() as conn, conn.cursor() as cur:
+        if probes:
+            upsert(
+                cur,
+                "market.promotion_probe",
+                probes,
+                conflict=["figi"],
+                update=["outcome", "symbol", "source_code", "observed_at"],
+            )
+        policy = read_policy(cur)
+        limit = capacity(policy, keys) if policy is not None else 0
+        cur.execute("select market.promote_share_classes(%s::text[], %s)", (priced, limit))
+        reported = cur.fetchone()
+    report: dict[str, Any] = reported[0] if reported else {}
+    context.log.info(
+        "promotion wave: %s promoted of %s priced (%s asked; control priced: %s); outcomes %s; "
+        "by venue %s; %s candidates left; %s",
+        report.get("promoted"),
+        len(priced),
+        len(candidates),
+        control_priced,
+        dict(outcomes),
+        report.get("by_venue"),
+        report.get("candidates_left"),
+        report.get("reason") or "ok",
+    )
+    return dg.MaterializeResult(
+        metadata={
+            "promoted": report.get("promoted"),
+            "asked": len(candidates),
+            "priced": len(priced),
+            "control_priced": control_priced,
+            # NAMED, NOT JUST COUNTED: what the directory offered that Yahoo would not price.
+            "outcomes": dg.MetadataValue.json(dict(sorted(outcomes.items()))),
+            "probes_recorded": len(probes),
+            "capacity": limit,
+            "securities_in_sweep": keys,
+            "by_venue": dg.MetadataValue.json(report.get("by_venue") or {}),
+            "candidates_left": report.get("candidates_left"),
+            # A wave that promoted nothing says why: paused, no capacity, or nothing priced.
+            "reason": report.get("reason") or "none",
+        }
+    )
+
+
+def _verdict(row: dict[str, Any]) -> str:
+    fetched = row["fetched_at"]
+    fetched_at = fetched if isinstance(fetched, datetime) else datetime.fromisoformat(str(fetched))
+    return promotion.verdict(bytes(row["body"]), fetched_at)

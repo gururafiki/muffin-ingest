@@ -144,7 +144,9 @@ DAILY_FLOOR = "43 5 * * *"
 
 
 @dg.asset(
-    deps=[venue_listing, venue_listing_absence, security_symbology],
+    # `promotion_wave` by KEY, so the discovery family does not import the promotion family: a wave
+    # mints securities with their share class, and their listings follow the same morning.
+    deps=[venue_listing, venue_listing_absence, security_symbology, dg.AssetKey("promotion_wave")],
     # EAGER, MINUS THE GATE THAT WOULD KEEP IT FROM EVER FIRING. An unpartitioned asset depends on
     # every upstream partition, and both upstreams always have some unmaterialised: a venue added
     # to `market.exchange` waits for an operator's sweep, and a new symbology subject waits for

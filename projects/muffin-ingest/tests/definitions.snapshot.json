@@ -8,6 +8,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "promotion_wave:promotion_stays_within_the_sweep": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "raw_exchange_sweep:directory_query_within_the_cap": {
       "additional_deps": [],
       "blocking": false
@@ -268,6 +272,39 @@
       "partitions": {
         "kind": "dynamic",
         "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "promotion_wave": {
+      "automation_condition": "eager (e8e6b7c3b9df)",
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "raw_promotion_probe": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 691200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "17 6 * * 1",
+        "end": null,
+        "end_offset": 1,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-10-26T00:00:00+00:00",
+        "timezone": "UTC"
       },
       "pools": [
         "sql"
@@ -556,6 +593,38 @@
       ],
       "tags": {}
     },
+    "raw_promotion_probe": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 691200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "universe",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "17 6 * * 1",
+        "end": null,
+        "end_offset": 1,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-10-26T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
     "raw_sec_cik_map": {
       "automation_condition": null,
       "backfill_policy": null,
@@ -807,6 +876,7 @@
       "backfill_policy": null,
       "code_version": null,
       "deps": {
+        "promotion_wave": null,
         "security_symbology": null,
         "venue_listing": null,
         "venue_listing_absence": null
@@ -1334,6 +1404,21 @@
         "name": "security"
       }
     },
+    "promotion_probes": {
+      "assets": [
+        "raw_promotion_probe"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "17 6 * * 1",
+        "end": null,
+        "end_offset": 1,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-10-26T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
     "yahoo_companies": {
       "assets": [
         "raw_yahoo_statements",
@@ -1389,6 +1474,12 @@
       "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "nightly_prices"
+    },
+    "weekly_promotion_wave": {
+      "cron_schedule": "17 6 * * 1",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "promotion_probes"
     },
     "weekly_registries": {
       "cron_schedule": "0 4 * * 1",

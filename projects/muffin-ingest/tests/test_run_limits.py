@@ -16,6 +16,8 @@ from muffin_ingest_dagster.defs.companies.automation import COMPANY_SCHEDULE
 from muffin_ingest_dagster.defs.companies.raw import CompanyRun
 from muffin_ingest_dagster.defs.platform.heartbeat import heartbeat_schedule
 from muffin_ingest_dagster.defs.prices.automation import SWEEP_SCHEDULE
+from muffin_ingest_dagster.defs.promotion.automation import PROBE_SCHEDULE
+from muffin_ingest_dagster.defs.promotion.raw import ProbeRun
 from muffin_ingest_dagster.lib import runtime
 from tests import loaded_defs
 
@@ -47,16 +49,21 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
     The company rotation is the second long lane: up to three paced requests for each of 100
     companies, bounded by its own budget, then stage 2. Its limit must leave that budget room, or
     the monitor ends a run that is still writing.
+
+    The weekly promotion probe is the third: ~1,000 paced chart requests, bounded by its own budget.
     """
     limits = _limits()
     assert limits[SWEEP_SCHEDULE] == runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]
     assert limits[COMPANY_SCHEDULE] == runtime.COMPANY_RUN[MAX_RUNTIME_SECONDS_TAG]
-    long_lanes = {SWEEP_SCHEDULE, COMPANY_SCHEDULE}
+    assert limits[PROBE_SCHEDULE] == runtime.PROMOTION_RUN[MAX_RUNTIME_SECONDS_TAG]
+    long_lanes = {SWEEP_SCHEDULE, COMPANY_SCHEDULE, PROBE_SCHEDULE}
     others = {name: limit for name, limit in limits.items() if name not in long_lanes}
     assert set(others.values()) == {runtime.SHORT_RUN[MAX_RUNTIME_SECONDS_TAG]}, others
     assert float(runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 3 * 579, "below 3x the slowest run"
     budget = CompanyRun().budget_seconds
     assert float(runtime.COMPANY_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * budget, "below 2x the budget"
+    probe_budget = ProbeRun().budget_seconds
+    assert float(runtime.PROMOTION_RUN[MAX_RUNTIME_SECONDS_TAG]) > probe_budget, "below the budget"
 
 
 def test_a_plain_schedule_s_tags_reach_its_run_request() -> None:
