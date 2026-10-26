@@ -35,10 +35,14 @@ def fund_directory(timeout_s: float = 60.0) -> Document:
     CIK covers many funds.
     """
     base = settings.provider_base("sec", "https://www.sec.gov")
+    # PAST THE CACHE: the lane asks this one URL daily, and http-cache's `sec` location keeps it 30
+    # days, so a fund SEC listed in the last month could not resolve for up to a month. One request
+    # a day is nothing to SEC; the fresh copy is still stored (umbrella docs/deferred/2026-10-20-
+    # the-cache-serves-a-failing-provider-s-last-answer-for-ever.md, decided 2026-10-25).
     return _get(
         f"{base}/files/company_tickers_mf.json",
         provider="sec",
-        headers=_headers(),
+        headers={**_headers(), "X-Muffin-Cache-Bypass": "1"},
         timeout_s=timeout_s,
     )
 
