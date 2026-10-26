@@ -58,12 +58,17 @@ hub = [
 # provider on `etf/holdings`), ISIN resolution (`equity/search` returns zero hits for an ISIN),
 # quarterly SEC statements (`period=quarter` is 422), and DART (TLS 1.2 static-RSA).
 #
-# NOTHING IMPORTS THESE THREE YET (measured 2026-09-19): they are carried unchanged from the
-# single pyproject so the image keeps the same contents across the workspace move, because
-# dropping a declared dependency can remove something a provider reaches for implicitly —
-# pandas.read_html needs lxml, and openbb-finviz scrapes. Drop them in a change that measures it.
+# EDGARTOOLS IS PINNED EXACTLY: `providers/sec_edgar.py` replaces its module-level `HTTP_MGR` with an
+# uncached one built by `get_http_mgr`, so a release that moves either changes how every SEC request
+# is cached, and a test asserts the swap took. pdfplumber and lxml are still imported by nothing
+# (measured 2026-09-19); they stay so the image keeps the same contents, because dropping a declared
+# dependency can remove something a provider reaches for implicitly (pandas.read_html needs lxml).
 filings = [
-  "edgartools>=4.14,<5",
+  "edgartools==4.35.1",
+  # edgartools 4.35.1 imports pytz (`edgar/core.py`) without declaring it, and pandas 3 no longer
+  # brings it. The image had it only through yfinance in the hub, so this extra alone could not
+  # import edgar (measured 2026-10-27, `No module named 'pytz'`).
+  "pytz>=2024.1",
   "pdfplumber>=0.11,<0.12",
   # 6.1.0 is the first release without the iterparse/ETCompatXMLParser advisory (Dependabot,
   # high, 2026-10).
@@ -105,6 +110,11 @@ files = ["src", "tests"]
 # installed — which is precisely what it did.
 [[tool.mypy.overrides]]
 module = ["openbb", "openbb.*"]
+ignore_missing_imports = true
+
+# edgartools ships no type information (no `py.typed` in 4.35.1).
+[[tool.mypy.overrides]]
+module = ["edgar", "edgar.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
