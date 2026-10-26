@@ -32,20 +32,42 @@ from tests import FIXTURES
 
 WEEK = "2026-10-26"
 
-#: Candidate lines, in the wave's order, with the captured body Yahoo answers each with.
+#: Candidate lines, in the wave's order: (figi, ticker, provider symbol, country). Country `ZZ` has
+#: no spellings listed, so its lines are asked under the directory's own spelling; `KR` is asked
+#: `.KS` then `.KQ`, as KOSDAQ lines need.
 LINES = [
-    ("BBG-PRICED-1", "AAPL"),
-    ("BBG-ABSENT", "BDMS-F.BK"),
-    ("BBG-QUOTE-ONLY", "PCTN.L"),
-    ("BBG-PRICED-2", "VOD.L"),
-    ("BBG-GATEWAY", "GATE.L"),
+    ("BBG-PRICED-1", "X1", "AAPL", "ZZ"),
+    ("BBG-ABSENT", "X2", "BDMS-F.BK", "ZZ"),
+    ("BBG-QUOTE-ONLY", "X3", "PCTN.L", "ZZ"),
+    ("BBG-PRICED-2", "X4", "VOD.L", "ZZ"),
+    ("BBG-GATEWAY", "X5", "GATE.L", "ZZ"),
+    ("BBG-KOSDAQ", "177900", "177900.KS", "KR"),
+    ("BBG-KR-QUOTE", "000002", "000002.KS", "KR"),
 ]
+SPELLINGS = [("KR", ".KS"), ("KR", ".KQ")]
+#: The captured body Yahoo answers each symbol with. The KOSDAQ line is unknown as `.KS` and priced
+#: as `.KQ`; the other Korean line is known as `.KS`, so its `.KQ` must never be asked.
 BODIES = {
     "AAPL": "aapl_ext",
     "VOD.L": "vod_l_ext",
     "BDMS-F.BK": "bdms_f_bk_404",
     "PCTN.L": "pctn_l_quote_only",
+    "177900.KS": "bdms_f_bk_404",
+    "177900.KQ": "aapl_ext",
+    "000002.KS": "pctn_l_quote_only",
 }
+#: Every symbol the probe asks over LINES with nothing refused: the control, then each line.
+ASKED = [
+    "AAPL",
+    "AAPL",
+    "BDMS-F.BK",
+    "PCTN.L",
+    "VOD.L",
+    "GATE.L",
+    "177900.KS",
+    "177900.KQ",
+    "000002.KS",
+]
 
 
 def _body(symbol: str) -> bytes:
@@ -112,9 +134,13 @@ class _Cursor:
             "select paused, wave_size, max_pass_nights from market.promotion_policy"
         ):
             self._rows = [(self._db.paused, self._db.wave_size, self._db.nights)]
-        elif text.startswith("select figi, provider_symbol from market.promotion_candidate"):
+        elif text.startswith(
+            "select figi, ticker, provider_symbol, country_iso2 from market.promotion_candidate"
+        ):
             self._db.candidate_limits.append(int(params[0]))
             self._rows = list(self._db.lines[: int(params[0])])
+        elif text.startswith("select country_iso2, suffix from market.yahoo_spelling"):
+            self._rows = list(SPELLINGS)
         elif text.startswith("insert into market.promotion_probe"):
             found = re.search(r"\(([^)]*)\) values", text)
             assert found is not None
@@ -125,11 +151,12 @@ class _Cursor:
                     dict(zip(columns, values[i : i + len(columns)], strict=True))
                 )
             self.rowcount = len(values) // len(columns)
-        elif text == "select market.promote_share_classes(%s::text[], %s)":
-            handed, limit = list(params[0]), int(params[1])
-            self._db.handed.append((handed, limit))
+        elif text == "select market.promote_share_classes(%s::text[], %s::text[], %s)":
+            figis, symbols, limit = list(params[0]), list(params[1]), int(params[2])
+            assert len(figis) == len(symbols)
+            self._db.handed.append((figis, symbols, limit))
             self._rows = [
-                ({"promoted": min(len(handed), limit), "by_venue": {}, "candidates_left": 7},)
+                ({"promoted": min(len(figis), limit), "by_venue": {}, "candidates_left": 7},)
             ]
         else:
             raise AssertionError(f"unexpected query: {text[:140]}")
@@ -153,10 +180,10 @@ class FakePostgres(Postgres):
     paused: ClassVar[bool] = False
     wave_size: ClassVar[int] = 500
     nights: ClassVar[int] = 7
-    lines: ClassVar[list[tuple[str, str]]] = []
+    lines: ClassVar[list[tuple[str, str, str, str]]] = []
     candidate_limits: ClassVar[list[int]] = []
     probes: ClassVar[list[dict[str, Any]]] = []
-    handed: ClassVar[list[tuple[list[str], int]]] = []
+    handed: ClassVar[list[tuple[list[str], list[str], int]]] = []
 
     @contextmanager
     def connect(self) -> Iterator[Any]:
@@ -242,14 +269,17 @@ def test_a_wave_has_as_many_places_as_the_sweep_can_take(
 
 
 def test_the_probe_asks_the_control_first_then_twice_the_places(tmp_path: Path) -> None:
-    """60 in the grid leaves 10 places, so up to 20 candidates; there are five."""
+    """60 in the grid leaves 10 places, so up to 20 candidates; there are seven. The KOSDAQ line
+    is asked `.KS`, refused, then `.KQ`; the other Korean line answers as `.KS`, so its `.KQ` is
+    never asked."""
     with yahoo() as asked:
         result = _wave(tmp_path, stage_2=False)
     assert result.success
-    assert asked == ["AAPL"] + [symbol for _, symbol in LINES]
+    assert asked == ASKED
     assert FakePostgres.candidate_limits == [20]
     meta = _meta(result, "raw_promotion_probe")
-    assert meta["answered"] == 6 and meta["places"] == 10 and meta["reason"] == "none"
+    assert (meta["answered"], meta["calls"], meta["respelled"]) == (8, 9, 1)
+    assert meta["places"] == 10 and meta["reason"] == "none"
 
 
 def test_a_paused_policy_asks_yahoo_nothing(tmp_path: Path) -> None:
@@ -259,7 +289,7 @@ def test_a_paused_policy_asks_yahoo_nothing(tmp_path: Path) -> None:
     assert result.success
     assert asked == []
     assert _meta(result, "raw_promotion_probe")["reason"] == "paused"
-    assert FakePostgres.handed == [([], 10)]
+    assert FakePostgres.handed == [([], [], 10)]
 
 
 def test_a_live_subset_asks_about_fewer(tmp_path: Path) -> None:
@@ -274,8 +304,8 @@ def test_a_throttle_stops_the_probe_and_counts_the_rest_unasked(tmp_path: Path) 
         result = _wave(tmp_path, stage_2=False)
     assert asked == ["AAPL", "AAPL", "BDMS-F.BK", "PCTN.L"]
     meta = _meta(result, "raw_promotion_probe")
-    assert (meta["answered"], meta["throttled"], meta["unasked"], meta["transport"]) == (3, 1, 2, 0)
-    assert meta["answered"] + meta["throttled"] + meta["unasked"] + meta["transport"] == 6
+    assert (meta["answered"], meta["throttled"], meta["unasked"], meta["transport"]) == (3, 1, 4, 0)
+    assert meta["answered"] + meta["throttled"] + meta["unasked"] + meta["transport"] == 8
 
 
 # ── stage 2 ───────────────────────────────────────────────────────────────────────────────────
@@ -285,22 +315,28 @@ def test_the_wave_hands_over_the_priced_lines_in_the_order_asked(tmp_path: Path)
     with yahoo():
         result = _wave(tmp_path)
     assert result.success
-    assert FakePostgres.handed == [(["BBG-PRICED-1", "BBG-PRICED-2"], 10)]
+    assert FakePostgres.handed == [
+        (["BBG-PRICED-1", "BBG-PRICED-2", "BBG-KOSDAQ"], ["AAPL", "VOD.L", "177900.KQ"], 10)
+    ]
     meta = _meta(result, "promotion_wave")
-    assert meta["outcomes"] == {"absent": 1, "priced": 2, "quote_only": 1, "unreadable": 1}
+    assert meta["outcomes"] == {"absent": 1, "priced": 3, "quote_only": 2, "unreadable": 1}
     assert meta["control_priced"] is True
+    assert meta["priced_respelled"] == 1
 
 
 def test_an_absence_is_recorded_when_the_control_priced(tmp_path: Path) -> None:
     """A gateway page is not a statement about the line, so it is never recorded."""
     with yahoo():
         _wave(tmp_path)
-    recorded = {p["figi"]: p["outcome"] for p in FakePostgres.probes}
+    recorded = {p["figi"]: (p["outcome"], p["symbol"]) for p in FakePostgres.probes}
     assert recorded == {
-        "BBG-PRICED-1": "priced",
-        "BBG-ABSENT": "absent",
-        "BBG-QUOTE-ONLY": "quote_only",
-        "BBG-PRICED-2": "priced",
+        "BBG-PRICED-1": ("priced", "AAPL"),
+        "BBG-ABSENT": ("absent", "BDMS-F.BK"),
+        "BBG-QUOTE-ONLY": ("quote_only", "PCTN.L"),
+        "BBG-PRICED-2": ("priced", "VOD.L"),
+        # Recorded under the spelling Yahoo priced, never the refused `.KS`.
+        "BBG-KOSDAQ": ("priced", "177900.KQ"),
+        "BBG-KR-QUOTE": ("quote_only", "000002.KS"),
     }
     assert {p["source_code"] for p in FakePostgres.probes} == {"yfinance"}
 
@@ -331,7 +367,21 @@ def test_no_absence_is_recorded_when_the_control_did_not_price(tmp_path: Path) -
         finally:
             yahoo_chart.fetch = saved
     assert {p["outcome"] for p in FakePostgres.probes} == {"priced"}
-    assert FakePostgres.handed == [(["BBG-PRICED-1", "BBG-PRICED-2"], 10)]
+    assert FakePostgres.handed == [
+        (["BBG-PRICED-1", "BBG-PRICED-2", "BBG-KOSDAQ"], ["AAPL", "VOD.L", "177900.KQ"], 10)
+    ]
+
+
+def test_a_walk_cut_short_is_not_an_absence(tmp_path: Path) -> None:
+    """The KOSDAQ line's `.KS` is refused, then the provider throttles before `.KQ` is asked. Its
+    one stored answer says "unknown name", but the line has another spelling, so it is
+    `unfinished` and recorded as nothing, though the control priced."""
+    refused = yahoo_chart.YahooRefused("HTTP 429 Too Many Requests for chart")
+    with yahoo({"177900.KQ": refused}):
+        result = _wave(tmp_path)
+    assert result.success
+    assert "BBG-KOSDAQ" not in {p["figi"] for p in FakePostgres.probes}
+    assert _meta(result, "promotion_wave")["outcomes"]["unfinished"] == 1
 
 
 # ── the check ─────────────────────────────────────────────────────────────────────────────────

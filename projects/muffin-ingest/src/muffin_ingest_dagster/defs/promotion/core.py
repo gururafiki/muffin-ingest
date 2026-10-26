@@ -46,6 +46,11 @@ def promotion_wave(
     keep them out of waves for 90 days: the 1,369-security incident, in a new table. A `priced`
     verdict is positive evidence and is recorded whatever the control said.
 
+    A LINE IS ITS WALK OVER ITS SPELLINGS. It is priced under the first spelling Yahoo priced, and
+    promoted under that spelling (a KOSDAQ line as `.KQ`). It is absent only when every spelling
+    was asked and Yahoo knew none: a walk cut short by a failed request or a throttle says nothing,
+    and is counted `unfinished` and never recorded.
+
     THE PRICED LINES ARE HANDED OVER IN THE ORDER THEY WERE ASKED, which is the wave's order, and
     the function re-checks each against the candidates: a class promoted since stage 1 is skipped.
     """
@@ -54,19 +59,32 @@ def promotion_wave(
     candidates = [r for r in rows if r.get("role") == "candidate"]
     control_priced = any(_verdict(r) == promotion.PRICED for r in control)
 
+    walks: dict[str, list[dict[str, Any]]] = {}
+    for row in candidates:
+        walks.setdefault(str(row["figi"]), []).append(row)
+
     outcomes: Counter[str] = Counter()
     probes: list[dict[str, Any]] = []
-    priced: list[str] = []
-    for row in candidates:
-        outcome = _verdict(row)
-        outcomes[outcome] += 1
-        if outcome == promotion.PRICED:
-            priced.append(str(row["figi"]))
-        if outcome in STATEMENTS and (outcome == promotion.PRICED or control_priced):
+    priced: list[tuple[str, str]] = []
+    respelled = 0
+    for figi, walk in walks.items():
+        walk.sort(key=lambda r: int(r.get("spelling_rank") or 0))
+        verdicts = [(_verdict(r), r) for r in walk]
+        hit = next(((v, r) for v, r in verdicts if v == promotion.PRICED), None)
+        verdict, row = hit if hit is not None else verdicts[-1]
+        if hit is not None:
+            priced.append((figi, str(row["asked_symbol"])))
+            respelled += int(int(row.get("spelling_rank") or 0) > 0)
+        elif promotion.asks_the_next_spelling(verdict) and len(walk) < int(
+            row.get("spellings") or 1
+        ):
+            verdict = "unfinished"
+        outcomes[verdict] += 1
+        if verdict in STATEMENTS and (verdict == promotion.PRICED or control_priced):
             probes.append(
                 {
-                    "figi": row["figi"],
-                    "outcome": outcome,
+                    "figi": figi,
+                    "outcome": verdict,
                     "symbol": row["asked_symbol"],
                     "source_code": PROVIDER.code,
                     "observed_at": row["fetched_at"],
@@ -85,7 +103,10 @@ def promotion_wave(
             )
         policy = read_policy(cur)
         limit = capacity(policy, keys) if policy is not None else 0
-        cur.execute("select market.promote_share_classes(%s::text[], %s)", (priced, limit))
+        cur.execute(
+            "select market.promote_share_classes(%s::text[], %s::text[], %s)",
+            ([figi for figi, _ in priced], [symbol for _, symbol in priced], limit),
+        )
         reported = cur.fetchone()
     report: dict[str, Any] = reported[0] if reported else {}
     context.log.info(
@@ -93,7 +114,7 @@ def promotion_wave(
         "by venue %s; %s candidates left; %s",
         report.get("promoted"),
         len(priced),
-        len(candidates),
+        len(walks),
         control_priced,
         dict(outcomes),
         report.get("by_venue"),
@@ -103,8 +124,12 @@ def promotion_wave(
     return dg.MaterializeResult(
         metadata={
             "promoted": report.get("promoted"),
-            "asked": len(candidates),
+            "asked": len(walks),
             "priced": len(priced),
+            # Priced under a spelling other than the line's first: a KOSDAQ `.KQ`, a padded Hong
+            # Kong number, a Canadian Venture line.
+            "priced_respelled": respelled,
+            "symbol_held": report.get("symbol_held"),
             "control_priced": control_priced,
             # NAMED, NOT JUST COUNTED: what the directory offered that Yahoo would not price.
             "outcomes": dg.MetadataValue.json(dict(sorted(outcomes.items()))),
