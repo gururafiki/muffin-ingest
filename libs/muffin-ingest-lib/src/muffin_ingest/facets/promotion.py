@@ -11,6 +11,7 @@ completed bar is promoted.
 NO NETWORK. `fetch` is stage 1's; a corrected rule here costs a re-parse of the stored bodies.
 """
 
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 
 from muffin_ingest.facets import price_chart, prices
@@ -79,3 +80,52 @@ def verdict(body: bytes, fetched_at: datetime) -> str:
 def fresh(newest: date, fetched_at: datetime) -> bool:
     """Whether a bar dated `newest` is recent, seen from when the body was fetched."""
     return fetched_at.date() - newest <= FRESH_FOR
+
+
+#: TICKERS YAHOO WRITES WITH A FIXED NUMBER OF DIGITS. OpenFIGI's Hong Kong ticker `883` is Yahoo's
+#: `0883.HK`: measured 2026-10-26, 325 of the 1,584 Hong Kong candidates had 1-3 digits, and the
+#: tracked ones already hold `0016.HK`.
+PAD_NUMERIC = {"HK": 4}
+
+
+def yahoo_ticker(ticker: str, country: str | None) -> str:
+    """The directory's ticker as Yahoo writes it.
+
+    Bloomberg's share-class `/` is Yahoo's `-` (`BEK/B` is `BEK-B.TO`; measured, `BRK/B` 400s and
+    `BRK-B` answers). Over the 9,031 candidates of 2026-10-26, 293 Canadian and 6 Australian tickers
+    carried one. A Hong Kong number is padded to four digits.
+    """
+    spelt = ticker.replace("/", "-")
+    width = PAD_NUMERIC.get(country or "")
+    if width and spelt.isdigit():
+        spelt = spelt.zfill(width)
+    return spelt
+
+
+def spellings(
+    ticker: str | None,
+    provider_symbol: str | None,
+    country: str | None,
+    suffixes: Sequence[str],
+) -> list[str]:
+    """The symbols to ask Yahoo about one directory line, in the order asked, without repeats.
+
+    Each suffix the country uses (`market.yahoo_spelling`), on the ticker as Yahoo writes it: Korea
+    is `.KS` then `.KQ`, because the KS composite files KOSDAQ lines with KOSPI's and Yahoo spells
+    them `.KQ`. A country with no suffix listed is asked under the directory's own spelling only.
+    These are CANDIDATES: Yahoo verifies each, and nothing is adopted that it did not price.
+    """
+    if ticker and suffixes:
+        base = yahoo_ticker(ticker, country)
+        return list(dict.fromkeys(base + suffix for suffix in suffixes))
+    return [provider_symbol] if provider_symbol else []
+
+
+def asks_the_next_spelling(outcome: str) -> bool:
+    """Whether a verdict sends the probe on to the line's next spelling.
+
+    Only `absent`, Yahoo saying it does not know the name. Any other answer means it knows the
+    symbol, and a stale or quote-only line is the company not trading, not a misspelling.
+    `unreadable` is no answer at all, so asking another spelling would learn nothing from it.
+    """
+    return outcome == "absent"

@@ -82,3 +82,38 @@ def test_every_verdict_is_an_outcome_the_table_accepts() -> None:
         "not_daily",
         "unreadable",
     }
+
+
+@pytest.mark.parametrize(
+    ("ticker", "provider_symbol", "country", "suffixes", "want"),
+    [
+        # KOSDAQ: the KS composite's spelling first, then Yahoo's other Korean suffix.
+        ("177900", "177900.KS", "KR", [".KS", ".KQ"], ["177900.KS", "177900.KQ"]),
+        # Hong Kong: four digits, never the directory's `883.HK`.
+        ("883", "883.HK", "HK", [".HK"], ["0883.HK"]),
+        ("8495", "8495.HK", "HK", [".HK"], ["8495.HK"]),
+        # Canada: Bloomberg's share-class slash, then every Canadian suffix.
+        ("BEK/B", "BEK/B.TO", "CA", [".TO", ".V"], ["BEK-B.TO", "BEK-B.V"]),
+        # A country with no suffix listed: the directory's own spelling alone.
+        ("ABC", "ABC.ZZ", "ZZ", [], ["ABC.ZZ"]),
+        # Padding is Hong Kong's alone: a short Australian number keeps its digits.
+        ("360", "360.AX", "AU", [".AX"], ["360.AX"]),
+    ],
+    ids=["kosdaq", "hk-padded", "hk-four-digits", "ca-slash", "no-suffixes", "au-not-padded"],
+)
+def test_a_line_is_asked_under_each_spelling_its_country_uses(
+    ticker: str, provider_symbol: str, country: str, suffixes: list[str], want: list[str]
+) -> None:
+    assert promotion.spellings(ticker, provider_symbol, country, suffixes) == want
+
+
+@pytest.mark.parametrize(
+    ("outcome", "next_one"),
+    [("absent", True)] + [(o, False) for o in promotion.OUTCOMES if o != "absent"],
+)
+def test_only_an_unknown_name_sends_the_probe_to_the_next_spelling(
+    outcome: str, next_one: bool
+) -> None:
+    """A stale or quote-only line is the company not trading; another spelling would only find the
+    same company, or a different one."""
+    assert promotion.asks_the_next_spelling(outcome) is next_one
