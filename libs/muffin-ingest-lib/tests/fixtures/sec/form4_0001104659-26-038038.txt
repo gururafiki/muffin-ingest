@@ -1,0 +1,436 @@
+<SEC-DOCUMENT>0001104659-26-038038.txt : 20260331
+<SEC-HEADER>0001104659-26-038038.hdr.sgml : 20260331
+<ACCEPTANCE-DATETIME>20260331202433
+ACCESSION NUMBER:		0001104659-26-038038
+CONFORMED SUBMISSION TYPE:	4
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20260327
+FILED AS OF DATE:		20260331
+DATE AS OF CHANGE:		20260331
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			Magnetar Financial LLC
+		CENTRAL INDEX KEY:			0001352851
+		ORGANIZATION NAME:           	
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-35713
+		FILM NUMBER:		26824233
+
+	BUSINESS ADDRESS:	
+		STREET 1:		1603 ORRINGTON AVE.
+		STREET 2:		13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+		BUSINESS PHONE:		(847)905-4400
+
+	MAIL ADDRESS:	
+		STREET 1:		1603 ORRINGTON AVE.
+		STREET 2:		13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			Magnetar Capital Partners LP
+		CENTRAL INDEX KEY:			0001353085
+		ORGANIZATION NAME:           	
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-35713
+		FILM NUMBER:		26824232
+
+	BUSINESS ADDRESS:	
+		STREET 1:		1603 ORRINGTON AVE.
+		STREET 2:		13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+		BUSINESS PHONE:		(847)905-4400
+
+	MAIL ADDRESS:	
+		STREET 1:		1603 ORRINGTON AVE.
+		STREET 2:		13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+
+	FORMER NAME:	
+		FORMER CONFORMED NAME:	Magnetar Capital Partners LLC
+		DATE OF NAME CHANGE:	20060213
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			Snyderman David J.
+		CENTRAL INDEX KEY:			0001953511
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-35713
+		FILM NUMBER:		26824230
+
+	MAIL ADDRESS:	
+		STREET 1:		C/O MAGNETAR FINANCIAL LLC
+		STREET 2:		1603 ORRINGTON AVENUE, 13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			Supernova Management LLC
+		CENTRAL INDEX KEY:			0001368026
+		ORGANIZATION NAME:           	
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-35713
+		FILM NUMBER:		26824231
+
+	BUSINESS ADDRESS:	
+		STREET 1:		1603 ORRINGTON AVENUE, 13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+		BUSINESS PHONE:		(847) 905-4400
+
+	MAIL ADDRESS:	
+		STREET 1:		1603 ORRINGTON AVENUE, 13TH FLOOR
+		CITY:			EVANSTON
+		STATE:			IL
+		ZIP:			60201
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			Wheeler Real Estate Investment Trust, Inc.
+		CENTRAL INDEX KEY:			0001527541
+		STANDARD INDUSTRIAL CLASSIFICATION:	REAL ESTATE INVESTMENT TRUSTS [6798]
+		ORGANIZATION NAME:           	05 Real Estate & Construction
+		EIN:				452681082
+		STATE OF INCORPORATION:			MD
+		FISCAL YEAR END:			1231
+
+	BUSINESS ADDRESS:	
+		STREET 1:		RIVERSEDGE NORTH
+		STREET 2:		2529 VIRGINIA BEACH BLVD., SUITE 200
+		CITY:			VIRGINIA BEACH
+		STATE:			VA
+		ZIP:			23452
+		BUSINESS PHONE:		757-627-9088
+
+	MAIL ADDRESS:	
+		STREET 1:		RIVERSEDGE NORTH
+		STREET 2:		2529 VIRGINIA BEACH BLVD., SUITE 200
+		CITY:			VIRGINIA BEACH
+		STATE:			VA
+		ZIP:			23452
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4
+<SEQUENCE>1
+<FILENAME>tm2610808-1_4seq1.xml
+<DESCRIPTION>OWNERSHIP DOCUMENT
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-03-27</periodOfReport>
+
+    <notSubjectToSection16>0</notSubjectToSection16>
+
+    <issuer>
+        <issuerCik>0001527541</issuerCik>
+        <issuerName>Wheeler Real Estate Investment Trust, Inc.</issuerName>
+        <issuerTradingSymbol>WHLR</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001352851</rptOwnerCik>
+            <rptOwnerName>Magnetar Financial LLC</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>1603 ORRINGTON AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2>13TH FLOOR</rptOwnerStreet2>
+            <rptOwnerCity>EVANSTON</rptOwnerCity>
+            <rptOwnerState>IL</rptOwnerState>
+            <rptOwnerZipCode>60201</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001353085</rptOwnerCik>
+            <rptOwnerName>Magnetar Capital Partners LP</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>1603 ORRINGTON AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2>13TH FLOOR</rptOwnerStreet2>
+            <rptOwnerCity>EVANSTON</rptOwnerCity>
+            <rptOwnerState>IL</rptOwnerState>
+            <rptOwnerZipCode>60201</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001368026</rptOwnerCik>
+            <rptOwnerName>Supernova Management LLC</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>1603 ORRINGTON AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2>13TH FLOOR</rptOwnerStreet2>
+            <rptOwnerCity>EVANSTON</rptOwnerCity>
+            <rptOwnerState>IL</rptOwnerState>
+            <rptOwnerZipCode>60201</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001953511</rptOwnerCik>
+            <rptOwnerName>Snyderman David J.</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>1603 ORRINGTON AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2>13TH FLOOR</rptOwnerStreet2>
+            <rptOwnerCity>EVANSTON</rptOwnerCity>
+            <rptOwnerState>IL</rptOwnerState>
+            <rptOwnerZipCode>60201</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>0</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>3685</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>1.0374</value>
+                    <footnoteId id="F4"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>159550</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnotes</value>
+                    <footnoteId id="F1"/>
+                    <footnoteId id="F2"/>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-30</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>2103</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0.9723</value>
+                    <footnoteId id="F5"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>157447</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnotes</value>
+                    <footnoteId id="F1"/>
+                    <footnoteId id="F2"/>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-31</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>12378</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0.9304</value>
+                    <footnoteId id="F6"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>145069</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnotes</value>
+                    <footnoteId id="F1"/>
+                    <footnoteId id="F2"/>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">Magnetar Financial LLC serves as (i) the investment manager to Magnetar Longhorn Fund LP, a Delaware limited partnership, Purpose Alternative Credit Fund - F LLC, a Delaware limited liability company, and Purpose Alternative Credit Fund - T LLC, a Delaware limited liability company, (ii) general partner of Magnetar Structured Credit Fund, LP, a Delaware limited partnership, and (iii) manager of Magnetar Lake Credit Fund LLC, a Delaware limited liability company (together with all of the vehicles in the foregoing clauses (i) and (ii), the &quot;Magnetar Vehicles&quot;), each of which holds a portion of the indicated securities. In such capacities, Magnetar Financial LLC exercises voting and investment power over the Common Stock acquired upon exercise of the Warrants by the Magnetar Vehicles.</footnote>
+        <footnote id="F2">Magnetar Capital Partners LP (&quot;Magnetar Capital Partners&quot;), a Delaware limited partnership, is the sole member and parent holding company of Magnetar Financial LLC. Supernova Management LLC (&quot;Supernova Management&quot;), a Delaware limited liability company, is the general partner of Magnetar Capital Partners. The current administrative manager of Supernova Management is David J. Snyderman, a citizen of the United States of America.</footnote>
+        <footnote id="F3">Each of the Magnetar Vehicles, Magnetar Financial LLC, Magnetar Capital Partners, Supernova Management and David J. Snyderman disclaims beneficial ownership of these shares of Common Stock of the Issuer, except to the extent of its or his pecuniary interest therein.</footnote>
+        <footnote id="F4">The price reported in Column 4 is a weighted average price. These securities were sold in multiple transactions at prices ranging from $1.02 to $1.05, inclusive. The Reporting Persons undertake to provide to the Issuer, any security holder of the Issuer, or the staff of the Securities and Exchange Commission, upon request, full information regarding the number of shares sold at each separate price within the range set forth in this footnote.</footnote>
+        <footnote id="F5">The price reported in Column 4 is a weighted average price. These securities were sold in multiple transactions at prices ranging from $0.94 to $1.05, inclusive. The Reporting Persons undertake to provide to the Issuer, any security holder of the Issuer, or the staff of the Securities and Exchange Commission, upon request, full information regarding the number of shares sold at each separate price within the range set forth in this footnote.</footnote>
+        <footnote id="F6">The price reported in Column 4 is a weighted average price. These securities were sold in multiple transactions at prices ranging from $0.93 to $0.94, inclusive. The Reporting Persons undertake to provide to the Issuer, any security holder of the Issuer, or the staff of the Securities and Exchange Commission, upon request, full information regarding the number of shares sold at each separate price within the range set forth in this footnote.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>/s/ Hayley A. Stein, Attorney-in-Fact for David J. Snyderman, as Administrative Manager of Supernova Management LLC, which is the General Partner of Magnetar Capital Partners LP, which is in turn the Sole Member of Magnetar Financial LLC</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+
+    <ownerSignature>
+        <signatureName>/s/ Hayley A. Stein, Attorney-in-Fact for David J. Snyderman, as Administrative Manager of Supernova Management LLC, which is the General Partner of Magnetar Capital Partners LP</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+
+    <ownerSignature>
+        <signatureName>/s/ Hayley A. Stein, Attorney-in-Fact for David J. Snyderman, as Administrative Manager of Supernova Management LLC</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+
+    <ownerSignature>
+        <signatureName>/s/ Hayley A. Stein, Attorney-in-Fact for David J. Snyderman</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>
