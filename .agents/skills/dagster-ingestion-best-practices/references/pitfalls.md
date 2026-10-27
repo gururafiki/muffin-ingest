@@ -432,6 +432,26 @@ multiple times". Keep such a sequence a tuple.
 Dagster cannot resolve it: "Error defining config. Original value passed: 'CompanyRun'". The same
 applies to resource parameters. No family module uses it; library modules may.
 
+## Do not call a library's parser in stage 2 before checking it is only a parser
+
+edgartools' `Form4.parse_xml` was decision 9's Form 4 parser. Measured 2026-10-27 with every
+connection refused, it fetches `data.sec.gov/submissions/CIK<owner>.json` for each reporting owner
+(to decide whether to reverse the name), retries five times and raises. In stage 2 that is a provider
+request per owner, outside the pool's pacing and the request counters, and a parse that fails when
+SEC is slow. It also rewrote the values: "Ternus John" became "John Ternus", an empty date became the
+footnote marker "[F2]". Run a third-party parser once with `socket.socket.connect` and
+`socket.getaddrinfo` refusing, and compare its output with the provider's own fields, before it goes
+in stage 2. Keep that refusal as a test of the parser you ship.
+
+## Do not read a document order from a bulk file's row order
+
+SEC's insider data sets list a filing's lines in no particular order (about half of 2026q1's out of
+order) and its owners in no stable one. Each line carries a surrogate key (`NONDERIV_TRANS_SK`),
+and sorted by it the lines matched the filing's XML in ten tables of ten. Owners carry none, so no
+rule can recover "the first owner" from the file; both lanes take the lowest CIK. Check order
+against the source document for a few filings, and pick the columns that carry it, before a key or a
+"first" depends on it.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
