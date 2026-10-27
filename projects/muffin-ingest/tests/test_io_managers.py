@@ -8,6 +8,7 @@ assert on what the DOWNSTREAM asset was handed.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ import dagster as dg
 import pytest
 
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, PostgresIOManager, _updatable
-from muffin_ingest_dagster.lib.partitioned import Complete
+from muffin_ingest_dagster.lib.partitioned import Complete, Unchanged
 from muffin_ingest_dagster.lib.resources import Postgres
 
 DAY = dg.DailyPartitionsDefinition(start_date="2026-09-01")
@@ -382,3 +383,139 @@ def test_a_caller_can_ask_for_columns_without_reading_the_bodies(tmp_path: Path)
     assert len(store.stored_rows_for(key, "AU.common")[0]) == 3, "no columns named: every column"
     assert store.stored_rows_for(key, "LN.common", columns=["cursor_at"]) == []
     assert store.stored_rows_for(key, "US.common", columns=["cursor_at"]) == [], "no file: nothing"
+
+
+def visiting_seam(
+    tmp_path: Path, runs: list[Any], *, metadata: dict[str, Any] | None = None
+) -> tuple[list[Any], list[dict[str, Any]]]:
+    """Materialise one asset once per entry in `runs`; return each run's result and what the last
+    downstream read was handed."""
+    seen: list[dict[str, Any]] = []
+    answers = list(runs)
+
+    @dg.asset(
+        partitions_def=DAY, io_manager_key="parquet_io", name="raw_thing", metadata=metadata or {}
+    )
+    def raw_thing() -> list[dict[str, Any]]:
+        answer: list[dict[str, Any]] = answers.pop(0)
+        return answer
+
+    @dg.asset(partitions_def=DAY, name="downstream")
+    def downstream(raw_thing: list[dict[str, Any]]) -> None:
+        seen.clear()
+        seen.extend(raw_thing)
+
+    manager = ParquetIOManager(base_path=str(tmp_path))
+    results = [
+        dg.materialize(
+            [raw_thing, downstream],
+            partition_key="2026-09-02",
+            resources={"parquet_io": manager},
+            raise_on_error=False,
+        )
+        for _ in runs
+    ]
+    return results, seen
+
+
+def test_an_unchanged_partition_is_left_alone_and_counted(tmp_path: Path) -> None:
+    """A filer with nothing due must not have megabytes of company facts rewritten, nor replaced
+    by the "collected nothing" marker an empty list would write."""
+    stored = [{"cik": 320193, "body": b"{...}"}]
+    results, seen = visiting_seam(tmp_path, [stored, Unchanged()])
+    assert all(r.success for r in results)
+    assert seen == stored, "downstream reads the stored rows, not nothing"
+    meta = results[1].asset_materializations_for_node("raw_thing")[0].metadata
+    assert meta["partitions_unchanged"].value == 1
+
+
+def test_an_unchanged_partition_is_not_rewritten(tmp_path: Path) -> None:
+    stored = [{"cik": 320193, "body": b"{...}"}]
+    file = tmp_path / "raw_thing" / "2026-09-02.parquet"
+    visiting_seam(tmp_path, [stored])
+    before = (file.stat().st_mtime_ns, file.read_bytes())
+    os.utime(file, ns=(1, 1))
+    visiting_seam(tmp_path, [Unchanged()])
+    assert file.stat().st_mtime_ns == 1, "the file was rewritten"
+    assert file.read_bytes() == before[1]
+
+
+@pytest.mark.parametrize(
+    ("runs", "says"),
+    [
+        ([Unchanged()], "no file is stored"),
+        ([[{"cik": 1}], Unchanged([{"cik": 1}])], "with rows"),
+    ],
+    ids=["never-collected", "with-rows"],
+)
+def test_unchanged_is_refused_where_it_would_claim_something_false(
+    tmp_path: Path, runs: list[Any], says: str
+) -> None:
+    results, _ = visiting_seam(tmp_path, runs)
+    failed = results[-1]
+    assert not failed.success
+    [event] = [e for e in failed.all_events if e.event_type_value == "STEP_FAILURE"][:1]
+    assert says in str(event.event_specific_data)
+
+
+def test_a_range_run_counts_unchanged_partitions_apart_from_written_ones(tmp_path: Path) -> None:
+    manager = ParquetIOManager(base_path=str(tmp_path))
+    keys = ["2026-09-02", "2026-09-03", "2026-09-04"]
+    first = {"pass": True}
+
+    @dg.asset(
+        partitions_def=DAY,
+        io_manager_key="parquet_io",
+        name="raw_thing",
+        backfill_policy=dg.BackfillPolicy.single_run(),
+        # MERGING, as SEC's submissions asset is: a merged partition records its own tally, so
+        # this is the shape where the unchanged count must be added beside the merge counts.
+        metadata={"merge_on": ["cik", "day"]},
+    )
+    def raw_thing(context) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+        if first["pass"]:
+            return {k: [{"cik": 1, "day": k}] for k in context.partition_keys}
+        return {keys[0]: [{"cik": 1, "day": "new"}], keys[1]: Unchanged(), keys[2]: Unchanged()}
+
+    def run() -> Any:
+        return dg.materialize(
+            [raw_thing],
+            resources={"parquet_io": manager},
+            tags={
+                "dagster/asset_partition_range_start": keys[0],
+                "dagster/asset_partition_range_end": keys[-1],
+            },
+        )
+
+    assert run().success
+    first["pass"] = False
+    result = run()
+    assert result.success
+    meta = result.asset_materializations_for_node("raw_thing")[0].metadata
+    assert meta["partitions_written"].value == 1
+    assert meta["partitions_merged"].value == 1
+    assert meta["partitions_unchanged"].value == 2
+    store = manager.stored_rows_for(dg.AssetKey("raw_thing"), keys[1])
+    assert store == [{"cik": 1, "day": keys[1]}], "an unchanged partition keeps its rows"
+
+
+def test_an_asset_may_name_its_compression_and_the_default_is_unchanged(tmp_path: Path) -> None:
+    import pyarrow.parquet as pq
+
+    rows = [{"cik": 320193, "body": b"x" * 1000}]
+    visiting_seam(tmp_path / "zstd", [rows], metadata={"compression": "zstd"})
+    visiting_seam(tmp_path / "default", [rows])
+
+    def codec(root: Path) -> str:
+        meta = pq.ParquetFile(str(root / "raw_thing" / "2026-09-02.parquet")).metadata
+        return str(meta.row_group(0).column(0).compression)
+
+    assert codec(tmp_path / "zstd") == "ZSTD"
+    assert codec(tmp_path / "default") == "SNAPPY"
+    _, seen = visiting_seam(tmp_path / "zstd", [rows], metadata={"compression": "zstd"})
+    assert seen == rows
+
+
+def test_a_codec_pyarrow_does_not_write_is_refused(tmp_path: Path) -> None:
+    results, _ = visiting_seam(tmp_path, [[{"cik": 1}]], metadata={"compression": "zip"})
+    assert not results[0].success
