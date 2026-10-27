@@ -20,7 +20,8 @@ handler while three other handlers negative-cached thousands of securities witho
      for ever, looking freshly written. Securities served `1d = 0.00%` for four days that way,
      because the guard that stopped PRODUCING a number could never REMOVE the stale one. Anything
      whose source restates a whole scope — a filing's segments, a symbol's periods — writes with
-     `replace_scope`, which deletes that scope first.
+     `replace_scope`, which deletes that scope first, or upserts and then calls
+     `retract_unproduced`, which deletes only what the answer no longer produces.
 
   3. A NUMERIC-LOOKING STRING IS NOT A NUMBER. Promoting out of provider jsonb, `"1234"` casts
      cleanly and stores a wrong type in silence, while `"n/a"` RAISES — and inside a migration
@@ -351,6 +352,59 @@ def replace_scope(
 #: A SQL type named in a cast. Plain names only (`uuid`, `text`, `numeric`, `date`): this is
 #: interpolated, so it is held to the same rule as an identifier.
 _TYPE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def retract_unproduced(
+    cur: DbCursor,
+    table: str,
+    produced: Sequence[Mapping[str, Any]],
+    *,
+    scope: Mapping[str, Any],
+    key: Sequence[str],
+    types: Mapping[str, str],
+) -> WriteResult:
+    """Within a scope, delete the rows whose key the newest whole answer no longer produces.
+
+    `replace_scope`'s retraction without its rewrite. For a source re-read often and restated
+    rarely: SEC's company facts are a filer's whole history, re-read whenever it files, and
+    deleting and rewriting a few thousand statement rows to change three would cost the dead
+    tuples, the WAL and the derivation re-queue that rule 5 exists to avoid. The caller upserts
+    what the answer produces (changes only) and calls this for what it no longer does. Called only
+    after an answered and parsed document; never on a throw, which would retract the universe.
+
+    THE KEYS TRAVEL AS ONE TYPED ARRAY PER COLUMN (`unnest(%s::date[], …)`), so a filer with tens
+    of thousands of rows is still one statement of `len(key)` parameters. A `values` list would hit
+    the bind-parameter limit, and splitting a NOT EXISTS across statements would delete each
+    chunk's complement: everything.
+
+    An empty `produced` deletes the whole scope: the answer says there is nothing there.
+    `retracted` is the number of rows deleted, or 0 when the cursor cannot say.
+    """
+    if not scope:
+        raise WriterError("retract_unproduced needs a scope; with none it would empty the table")
+    if not key:
+        raise WriterError("retract_unproduced needs the key a produced row is matched on")
+    target = _qualified(table)
+    for c in [*scope, *key]:
+        _ident(c)
+    for c in key:
+        if c not in types or not _TYPE.match(types[c]):
+            raise WriterError(f"key column {c!r} needs a plain SQL type in `types`")
+    for row in produced:
+        missing = [c for c in key if row.get(c) is None]
+        if missing:
+            raise WriterError(f"a produced row lacks key column(s) {missing}: {dict(row)!r}")
+
+    where = " and ".join(f"{_STORED}.{c} = %s" for c in scope)
+    arrays = ", ".join(f"%s::{types[c]}[]" for c in key)
+    matched = " and ".join(f"{_STORED}.{c} = p.{c}" for c in key)
+    sql = (
+        f"delete from {target} as {_STORED} where {where} and not exists ("
+        f"select 1 from unnest({arrays}) as p ({', '.join(key)}) where {matched})"
+    )
+    cur.execute(sql, [*scope.values(), *([row[c] for row in produced] for c in key)])
+    count = getattr(cur, "rowcount", None)
+    return WriteResult(written=0, retracted=count if isinstance(count, int) and count > 0 else 0)
 
 
 def update_existing(
