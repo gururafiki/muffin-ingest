@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from types import ModuleType
@@ -195,6 +196,22 @@ def insider_dataset_url(year: int, quarter: int) -> str:
         f"{_www()}/files/structureddata/data/insider-transactions-data-sets/"
         f"{year}q{quarter}_form345.zip"
     )
+
+
+def filings_table(table: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """One filer's filings, read by edgartools' `extract_company_filings_table` (decision 9).
+
+    `table` is the parallel arrays SEC publishes: the main submissions document's
+    `filings.recent`, or an older page whole. One dict per filing comes back in SEC's order, with
+    `filing_date` a `date` and every other field as SEC sent it. It reads 13 of the 16 arrays
+    (not `core_type`, `isXBRLNumeric` or `filmNumber`); raw keeps all 16. NO NETWORK: this only
+    configures edgar, so stage 2 may call it.
+    """
+    edgar()
+    from edgar.entity.data import extract_company_filings_table
+
+    rows: list[dict[str, Any]] = extract_company_filings_table(dict(table)).to_pylist()
+    return rows
 
 
 def describe() -> dict[str, Any]:
