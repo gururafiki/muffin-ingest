@@ -1,0 +1,467 @@
+{
+ "categories": {
+  "buyback": "cash_flow",
+  "capital_expenditure": "cash_flow",
+  "cash_and_equivalents": "balance_sheet",
+  "cost_of_revenue": "income_statement",
+  "depreciation": "cash_flow",
+  "dividends_paid": "cash_flow",
+  "eps_basic": "income_statement",
+  "eps_diluted": "income_statement",
+  "goodwill": "balance_sheet",
+  "gross_profit": "income_statement",
+  "income_tax": "income_statement",
+  "long_lived_assets": "balance_sheet",
+  "long_term_debt": "balance_sheet",
+  "net_income": "income_statement",
+  "operating_cash_flow": "cash_flow",
+  "operating_income": "income_statement",
+  "pretax_income": "income_statement",
+  "rd_expense": "income_statement",
+  "revenue": "income_statement",
+  "sga_expense": "income_statement",
+  "shares_basic": "share",
+  "shares_diluted": "share",
+  "short_term_debt": "balance_sheet",
+  "stock_based_comp": "cash_flow",
+  "total_assets": "balance_sheet",
+  "total_equity": "balance_sheet",
+  "total_liabilities": "balance_sheet"
+ },
+ "concepts": [
+  {
+   "concept": "PaymentsForRepurchaseOfCommonStock",
+   "metric_code": "buyback",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+   "metric_code": "capital_expenditure",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "PaymentsToAcquirePropertyPlantAndEquipment",
+   "metric_code": "capital_expenditure",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "PropertyPlantAndEquipmentAdditions",
+   "metric_code": "capital_expenditure",
+   "priority": 70,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "SegmentExpenditureAdditionToLongLivedAssets",
+   "metric_code": "capital_expenditure",
+   "priority": 60,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "CashAndCashEquivalents",
+   "metric_code": "cash_and_equivalents",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "CashAndCashEquivalentsAtCarryingValue",
+   "metric_code": "cash_and_equivalents",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "CostOfSales",
+   "metric_code": "cost_of_revenue",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "CostOfGoodsAndServicesSold",
+   "metric_code": "cost_of_revenue",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "CostOfRevenue",
+   "metric_code": "cost_of_revenue",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "DepreciationAndAmortisationExpense",
+   "metric_code": "depreciation",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "Depreciation",
+   "metric_code": "depreciation",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "DepreciationDepletionAndAmortization",
+   "metric_code": "depreciation",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "DividendsPaid",
+   "metric_code": "dividends_paid",
+   "priority": 90,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "DividendsPaidClassifiedAsFinancingActivities",
+   "metric_code": "dividends_paid",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "PaymentsOfDividends",
+   "metric_code": "dividends_paid",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "PaymentsOfDividendsCommonStock",
+   "metric_code": "dividends_paid",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "BasicEarningsLossPerShare",
+   "metric_code": "eps_basic",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD/shares"
+  },
+  {
+   "concept": "EarningsPerShareBasic",
+   "metric_code": "eps_basic",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD/shares"
+  },
+  {
+   "concept": "DilutedEarningsLossPerShare",
+   "metric_code": "eps_diluted",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD/shares"
+  },
+  {
+   "concept": "EarningsPerShareDiluted",
+   "metric_code": "eps_diluted",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD/shares"
+  },
+  {
+   "concept": "Goodwill",
+   "metric_code": "goodwill",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "GrossProfit",
+   "metric_code": "gross_profit",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "IncomeTaxExpenseContinuingOperations",
+   "metric_code": "income_tax",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "IncomeTaxExpenseBenefit",
+   "metric_code": "income_tax",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "NoncurrentAssets",
+   "metric_code": "long_lived_assets",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "NoncurrentPortionOfNoncurrentBorrowings",
+   "metric_code": "long_term_debt",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "LongTermDebt",
+   "metric_code": "long_term_debt",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "LongTermDebtNoncurrent",
+   "metric_code": "long_term_debt",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "ProfitLoss",
+   "metric_code": "net_income",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "ProfitLossAttributableToOwnersOfParent",
+   "metric_code": "net_income",
+   "priority": 90,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "NetIncomeLoss",
+   "metric_code": "net_income",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "CashFlowsFromUsedInOperatingActivities",
+   "metric_code": "operating_cash_flow",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "NetCashProvidedByUsedInOperatingActivities",
+   "metric_code": "operating_cash_flow",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations",
+   "metric_code": "operating_cash_flow",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "ProfitLossFromOperatingActivities",
+   "metric_code": "operating_income",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "OperatingIncomeLoss",
+   "metric_code": "operating_income",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "SegmentProfitLossBeforeTaxAndFinanceCosts",
+   "metric_code": "operating_income",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "ProfitLossBeforeTax",
+   "metric_code": "pretax_income",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
+   "metric_code": "pretax_income",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments",
+   "metric_code": "pretax_income",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "ResearchAndDevelopmentExpense",
+   "metric_code": "rd_expense",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "Revenue",
+   "metric_code": "revenue",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "RevenueFromContractsWithCustomers",
+   "metric_code": "revenue",
+   "priority": 90,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "RevenueFromContractWithCustomerExcludingAssessedTax",
+   "metric_code": "revenue",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "RevenueFromContractWithCustomerIncludingAssessedTax",
+   "metric_code": "revenue",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "Revenues",
+   "metric_code": "revenue",
+   "priority": 80,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "SalesRevenueNet",
+   "metric_code": "revenue",
+   "priority": 70,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "SegmentRevenue",
+   "metric_code": "revenue",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "SellingGeneralAndAdministrativeExpense",
+   "metric_code": "sga_expense",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "WeightedAverageNumberOfSharesOutstandingBasic",
+   "metric_code": "shares_basic",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "shares"
+  },
+  {
+   "concept": "WeightedAverageNumberOfDilutedSharesOutstanding",
+   "metric_code": "shares_diluted",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "shares"
+  },
+  {
+   "concept": "CurrentPortionOfNoncurrentBorrowings",
+   "metric_code": "short_term_debt",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "LongTermDebtCurrent",
+   "metric_code": "short_term_debt",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "ShareBasedCompensation",
+   "metric_code": "stock_based_comp",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "Assets",
+   "metric_code": "total_assets",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "SegmentAssets",
+   "metric_code": "total_assets",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "Equity",
+   "metric_code": "total_equity",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "EquityAttributableToOwnersOfParent",
+   "metric_code": "total_equity",
+   "priority": 90,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  },
+  {
+   "concept": "StockholdersEquity",
+   "metric_code": "total_equity",
+   "priority": 100,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
+   "metric_code": "total_equity",
+   "priority": 90,
+   "taxonomy": "us-gaap",
+   "unit": "USD"
+  },
+  {
+   "concept": "Liabilities",
+   "metric_code": "total_liabilities",
+   "priority": 100,
+   "taxonomy": "ifrs-full",
+   "unit": "USD"
+  }
+ ]
+}
