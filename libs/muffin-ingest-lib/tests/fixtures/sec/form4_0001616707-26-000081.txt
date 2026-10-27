@@ -1,0 +1,235 @@
+<SEC-DOCUMENT>0001616707-26-000081.txt : 20260331
+<SEC-HEADER>0001616707-26-000081.hdr.sgml : 20260331
+<ACCEPTANCE-DATETIME>20260331174053
+ACCESSION NUMBER:		0001616707-26-000081
+CONFORMED SUBMISSION TYPE:	4/A
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20250627
+FILED AS OF DATE:		20260331
+DATE AS OF CHANGE:		20260331
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			JUNG ANDREA
+		CENTRAL INDEX KEY:			0001051401
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4/A
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-36666
+		FILM NUMBER:		26823825
+
+	MAIL ADDRESS:	
+		STREET 1:		C/O APPLE INC
+		STREET 2:		ONE APPLE PARK WAY
+		CITY:			CUPERTINO
+		STATE:			CA
+		ZIP:			95014
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			Wayfair Inc.
+		CENTRAL INDEX KEY:			0001616707
+		STANDARD INDUSTRIAL CLASSIFICATION:	RETAIL-CATALOG & MAIL-ORDER HOUSES [5961]
+		ORGANIZATION NAME:           	07 Trade & Services
+		EIN:				364791999
+		FISCAL YEAR END:			1231
+
+	BUSINESS ADDRESS:	
+		STREET 1:		4 COPLEY PLACE
+		CITY:			BOSTON
+		STATE:			MA
+		ZIP:			02116
+		BUSINESS PHONE:		617 532 6100
+
+	MAIL ADDRESS:	
+		STREET 1:		4 COPLEY PLACE
+		CITY:			BOSTON
+		STATE:			MA
+		ZIP:			02116
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4/A
+<SEQUENCE>1
+<FILENAME>wk-form4a_1774993250.xml
+<DESCRIPTION>FORM 4/A
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4/A</documentType>
+
+    <periodOfReport>2025-06-27</periodOfReport>
+
+    <dateOfOriginalSubmission>2025-08-15</dateOfOriginalSubmission>
+
+    <notSubjectToSection16>0</notSubjectToSection16>
+
+    <issuer>
+        <issuerCik>0001616707</issuerCik>
+        <issuerName>Wayfair Inc.</issuerName>
+        <issuerTradingSymbol>W</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001051401</rptOwnerCik>
+            <rptOwnerName>JUNG ANDREA</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>C/O WAYFAIR INC.</rptOwnerStreet1>
+            <rptOwnerStreet2>4 COPLEY PLACE</rptOwnerStreet2>
+            <rptOwnerCity>BOSTON</rptOwnerCity>
+            <rptOwnerState>MA</rptOwnerState>
+            <rptOwnerZipCode>02116</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>1</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>0</isTenPercentOwner>
+            <isOther>0</isOther>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>0</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2025-06-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>G</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>15703</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1555</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A  Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2025-06-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>G</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>15703</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>15703</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>By Revocable Trust</value>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2025-08-14</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>A</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>3177</value>
+                    <footnoteId id="F2"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>4732</value>
+                    <footnoteId id="F3"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <derivativeTable></derivativeTable>
+
+    <footnotes>
+        <footnote id="F1">The previous Form 4 filed in respect of the listed transaction is being amended to indicate that 15,703 shares were transferred from the reporting person in her individual capacity to a revocable trust. The reporting person is the sole trustee and beneficiary of that revocable trust.</footnote>
+        <footnote id="F2">These shares of Class A Common Stock are issuable upon vesting of restricted stock units (&quot;RSUs&quot;). These RSUs vest upon the satisfaction of a service condition. The service condition is satisfied as to 1/4th of the shares on November 1, 2025 and as to an additional 1/4th of the shares for each three-month period of continuous service thereafter.</footnote>
+        <footnote id="F3">The amount of securities beneficially owned by the reporting person in her individual capacity has been amended to reflect the beneficial ownership following the transfer to the revocable trust.</footnote>
+    </footnotes>
+
+    <remarks></remarks>
+
+    <ownerSignature>
+        <signatureName>/s/ Enrique Colbert, Attorney-in-Fact for Andrea Jung</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>

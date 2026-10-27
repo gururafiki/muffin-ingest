@@ -1,0 +1,186 @@
+<SEC-DOCUMENT>0000897069-26-000475.txt : 20260225
+<SEC-HEADER>0000897069-26-000475.hdr.sgml : 20260225
+<ACCEPTANCE-DATETIME>20260225174717
+ACCESSION NUMBER:		0000897069-26-000475
+CONFORMED SUBMISSION TYPE:	4
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20260223
+FILED AS OF DATE:		20260225
+DATE AS OF CHANGE:		20260225
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			Broyles Jennifer H.
+		CENTRAL INDEX KEY:			0002016005
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-38854
+		FILM NUMBER:		26680545
+
+	MAIL ADDRESS:	
+		STREET 1:		400 N. ELM STREET
+		CITY:			GREENSBORO
+		STATE:			NC
+		ZIP:			27401
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			Kontoor Brands, Inc.
+		CENTRAL INDEX KEY:			0001760965
+		STANDARD INDUSTRIAL CLASSIFICATION:	MEN'S & BOYS' FURNISHINGS, WORK CLOTHING, AND ALLIED GARMENTS [2320]
+		ORGANIZATION NAME:           	04 Manufacturing
+		EIN:				832680248
+		STATE OF INCORPORATION:			NC
+		FISCAL YEAR END:			1230
+
+	BUSINESS ADDRESS:	
+		STREET 1:		400 N. ELM STREET
+		CITY:			GREENSBORO
+		STATE:			NC
+		ZIP:			27401
+		BUSINESS PHONE:		(336) 332-3400
+
+	MAIL ADDRESS:	
+		STREET 1:		400 N. ELM STREET
+		CITY:			GREENSBORO
+		STATE:			NC
+		ZIP:			27401
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4
+<SEQUENCE>1
+<FILENAME>form4.xml
+<DESCRIPTION>FORM 4
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0508</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-02-23</periodOfReport>
+
+    <issuer>
+        <issuerCik>0001760965</issuerCik>
+        <issuerName>Kontoor Brands, Inc.</issuerName>
+        <issuerTradingSymbol>KTB</issuerTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0002016005</rptOwnerCik>
+            <rptOwnerName>Broyles Jennifer H.</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerStreet1>400 N. ELM STREET</rptOwnerStreet1>
+            <rptOwnerStreet2></rptOwnerStreet2>
+            <rptOwnerCity>GREENSBORO</rptOwnerCity>
+            <rptOwnerState>NC</rptOwnerState>
+            <rptOwnerZipCode>27401</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>false</isDirector>
+            <isOfficer>true</isOfficer>
+            <isTenPercentOwner>false</isTenPercentOwner>
+            <isOther>false</isOther>
+            <officerTitle>EVP, Global Brands President</officerTitle>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>false</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-02-23</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>A</transactionCode>
+                <equitySwapInvolved>false</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>3647.903</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>38766.428</value>
+                    <footnoteId id="F2"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-02-23</value>
+            </transactionDate>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>1061.559</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>0</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>6367.570</value>
+                    <footnoteId id="F2"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>by Spouse</value>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">Represents the settlement of performance share units for the performance period ending January 3, 2026.</footnote>
+        <footnote id="F2">Common stock includes restricted stock units.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>/s/ Thomas L. Doerr, Jr. for Jennifer H. Broyles (Pursuant to Signing Authority on File)</signatureName>
+        <signatureDate>2026-02-25</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>

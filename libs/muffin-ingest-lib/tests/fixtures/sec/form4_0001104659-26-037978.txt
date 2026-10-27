@@ -1,0 +1,374 @@
+<SEC-DOCUMENT>0001104659-26-037978.txt : 20260331
+<SEC-HEADER>0001104659-26-037978.hdr.sgml : 20260331
+<ACCEPTANCE-DATETIME>20260331184428
+ACCESSION NUMBER:		0001104659-26-037978
+CONFORMED SUBMISSION TYPE:	4
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20260330
+FILED AS OF DATE:		20260331
+DATE AS OF CHANGE:		20260331
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			BENDHEIM JACK
+		CENTRAL INDEX KEY:			0001241560
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-36410
+		FILM NUMBER:		26823987
+
+	MAIL ADDRESS:	
+		STREET 1:		C/O PHIBRO ANIMAL HEALTH CORP
+		STREET 2:		300 FRANK W. BURR BLVD., STE 21
+		CITY:			TEANECK
+		STATE:			NJ
+		ZIP:			07666
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			BFI Co., LLC
+		CENTRAL INDEX KEY:			0001601607
+		ORGANIZATION NAME:           	
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-36410
+		FILM NUMBER:		26823986
+
+	BUSINESS ADDRESS:	
+		STREET 1:		300 FRANK W. BURR BLVD., STE 21
+		CITY:			TEANECK
+		STATE:			NJ
+		ZIP:			07666
+		BUSINESS PHONE:		2013297300
+
+	MAIL ADDRESS:	
+		STREET 1:		300 FRANK W. BURR BLVD., STE 21
+		CITY:			TEANECK
+		STATE:			NJ
+		ZIP:			07666
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			PHIBRO ANIMAL HEALTH CORP
+		CENTRAL INDEX KEY:			0001069899
+		STANDARD INDUSTRIAL CLASSIFICATION:	PHARMACEUTICAL PREPARATIONS [2834]
+		ORGANIZATION NAME:           	03 Life Sciences
+		EIN:				131840497
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			0630
+
+	BUSINESS ADDRESS:	
+		STREET 1:		GLENPOINTE CENTRE EAST, 3RD FLOOR
+		STREET 2:		300 FRANK W. BURR BLVD., SUITE 21
+		CITY:			TEANECK
+		STATE:			NJ
+		ZIP:			07666
+		BUSINESS PHONE:		201-329-7300
+
+	MAIL ADDRESS:	
+		STREET 1:		GLENPOINTE CENTRE EAST, 3RD FLOOR
+		STREET 2:		300 FRANK W. BURR BLVD., SUITE 21
+		CITY:			TEANECK
+		STATE:			NJ
+		ZIP:			07666
+
+	FORMER COMPANY:	
+		FORMER CONFORMED NAME:	PHILIPP BROTHERS CHEMICALS INC
+		DATE OF NAME CHANGE:	19980908
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4
+<SEQUENCE>1
+<FILENAME>tm2610803-1_4seq1.xml
+<DESCRIPTION>OWNERSHIP DOCUMENT
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-03-30</periodOfReport>
+
+    <notSubjectToSection16>0</notSubjectToSection16>
+
+    <issuer>
+        <issuerCik>0001069899</issuerCik>
+        <issuerName>PHIBRO ANIMAL HEALTH CORP</issuerName>
+        <issuerTradingSymbol>PAHC</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001241560</rptOwnerCik>
+            <rptOwnerName>BENDHEIM JACK</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>300 FRANK W. BURR BLVD., STE 21</rptOwnerStreet1>
+            <rptOwnerStreet2></rptOwnerStreet2>
+            <rptOwnerCity>TEANECK</rptOwnerCity>
+            <rptOwnerState>NJ</rptOwnerState>
+            <rptOwnerZipCode>07666</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>1</isDirector>
+            <isOfficer>1</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle>President and CEO</officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001601607</rptOwnerCik>
+            <rptOwnerName>BFI Co., LLC</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>300 FRANK W. BURR BLVD., STE 21</rptOwnerStreet1>
+            <rptOwnerStreet2></rptOwnerStreet2>
+            <rptOwnerCity>TEANECK</rptOwnerCity>
+            <rptOwnerState>NJ</rptOwnerState>
+            <rptOwnerZipCode>07666</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>0</isDirector>
+            <isOfficer>0</isOfficer>
+            <isTenPercentOwner>1</isTenPercentOwner>
+            <isOther>0</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>1</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-30</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>6423</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>53.5415</value>
+                    <footnoteId id="F2"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>45777</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See</value>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-30</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>617</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>54.309</value>
+                    <footnoteId id="F4"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>45160</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See</value>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-31</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>6609</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>53.8662</value>
+                    <footnoteId id="F5"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>38551</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See</value>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-31</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+                <footnoteId id="F1"/>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>431</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>54.3533</value>
+                    <footnoteId id="F6"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>38120</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See</value>
+                    <footnoteId id="F3"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeHolding>
+            <securityTitle>
+                <value>Class A Common Stock</value>
+            </securityTitle>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>16840</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                    <footnoteId id="F7"/>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeHolding>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">The reported sales were effected pursuant to a Rule 10b5-1 trading plan adopted by BFI Co., LLC (&quot;BFI&quot;) on December 11, 2025.</footnote>
+        <footnote id="F2">The price reported is a weighted average price. These shares were sold in multiple transactions at prices ranging from $53.23 to $54.075. The Reporting Person undertakes to provide to Phibro Animal Health Corporation (the &quot;Issuer&quot;), any security holder of the Issuer, or the staff of the Securities and Exchange Commission, upon request, full information regarding the number of shares sold at each separate price within the range set forth in this footnote and in footnotes 4, 5 and 6.</footnote>
+        <footnote id="F3">The reported securities are directly held by BFI. Jack Bendheim, a reporting person, director and officer of the Issuer, exercises voting and dispositive power over BFI and may be deemed to have shared voting and investment power over the securities held by BFI. Mr. Bendheim disclaims beneficial ownership of these securities except to the extent of his pecuniary interest therein.</footnote>
+        <footnote id="F4">The price reported is a weighted average price. These shares were sold in multiple transactions at prices ranging from $54.23 to $54.385.</footnote>
+        <footnote id="F5">The price reported is a weighted average price. These shares were sold in multiple transactions at prices ranging from $53.27 to $54.26.</footnote>
+        <footnote id="F6">The price reported is a weighted average price. These shares were sold in multiple transactions at prices ranging from $54.28 to $54.51.</footnote>
+        <footnote id="F7">The reported securities are directly held by Jack Bendheim.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>/s/ Judith Weinstein, as Attorney-in-Fact for Jack Bendheim</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+
+    <ownerSignature>
+        <signatureName>/s/ Judith Weinstein, as Attorney-in-Fact for BFI Co., LLC</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>

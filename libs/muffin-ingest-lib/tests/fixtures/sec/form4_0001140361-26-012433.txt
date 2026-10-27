@@ -1,0 +1,510 @@
+<SEC-DOCUMENT>0001140361-26-012433.txt : 20260331
+<SEC-HEADER>0001140361-26-012433.hdr.sgml : 20260331
+<ACCEPTANCE-DATETIME>20260331210210
+ACCESSION NUMBER:		0001140361-26-012433
+CONFORMED SUBMISSION TYPE:	4
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20260327
+FILED AS OF DATE:		20260331
+DATE AS OF CHANGE:		20260331
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			Lawrence Bryan H.
+		CENTRAL INDEX KEY:			0001210010
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-38003
+		FILM NUMBER:		26824299
+
+	MAIL ADDRESS:	
+		STREET 1:		C/O YORKTOWN PARTNERS LLC
+		STREET 2:		410 PARK AVENUE, 20TH FLOOR
+		CITY:			NEW YORK
+		STATE:			NY
+		ZIP:			75201
+
+	FORMER NAME:	
+		FORMER CONFORMED NAME:	LAWRENCE BRYAN H
+		DATE OF NAME CHANGE:	20021212
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			Ramaco Resources, Inc.
+		CENTRAL INDEX KEY:			0001687187
+		STANDARD INDUSTRIAL CLASSIFICATION:	BITUMINOUS COAL & LIGNITE MINING [1220]
+		ORGANIZATION NAME:           	01 Energy & Transportation
+		EIN:				000000000
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	BUSINESS ADDRESS:	
+		STREET 1:		250 WEST MAIN STREET
+		STREET 2:		SUITE 1800
+		CITY:			LEXINGTON
+		STATE:			KY
+		ZIP:			40507
+		BUSINESS PHONE:		(859) 244-7455
+
+	MAIL ADDRESS:	
+		STREET 1:		250 WEST MAIN STREET
+		STREET 2:		SUITE 1800
+		CITY:			LEXINGTON
+		STATE:			KY
+		ZIP:			40507
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4
+<SEQUENCE>1
+<FILENAME>form4.xml
+<DESCRIPTION>FORM 4
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-03-27</periodOfReport>
+
+    <issuer>
+        <issuerCik>0001687187</issuerCik>
+        <issuerName>Ramaco Resources, Inc.</issuerName>
+        <issuerTradingSymbol>METC</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001210010</rptOwnerCik>
+            <rptOwnerName>Lawrence Bryan H.</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>410 PARK AVENUE</rptOwnerStreet1>
+            <rptOwnerStreet2>20TH FLOOR</rptOwnerStreet2>
+            <rptOwnerCity>NEW YORK</rptOwnerCity>
+            <rptOwnerState>NY</rptOwnerState>
+            <rptOwnerZipCode>10022</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>true</isDirector>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>false</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>59350</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>15.3076</value>
+                    <footnoteId id="F2"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>2437247</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F5"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>47968</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>15.3076</value>
+                    <footnoteId id="F2"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1969646</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F6"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class A Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>72567</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>15.3076</value>
+                    <footnoteId id="F2"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>2979968</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F7"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class B Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>8059</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>10.9327</value>
+                    <footnoteId id="F3"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1218583</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F5"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class B Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>5398</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>10.9327</value>
+                    <footnoteId id="F3"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>816311</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F6"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class B Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-27</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>8168</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>10.9327</value>
+                    <footnoteId id="F3"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1235029</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F7"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class B Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-30</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>2266</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>10.3381</value>
+                    <footnoteId id="F4"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1216317</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F5"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class B Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-30</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>1518</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>10.3381</value>
+                    <footnoteId id="F4"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>814793</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F6"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Class B Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-03-30</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>2297</value>
+                    <footnoteId id="F1"/>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>10.3381</value>
+                    <footnoteId id="F4"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>1232732</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>See Footnote</value>
+                    <footnoteId id="F7"/>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeHolding>
+            <securityTitle>
+                <value>Class A Common Stock, par value $0.01 per share</value>
+            </securityTitle>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>134877</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeHolding>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">The reporting person disclaims beneficial ownership of these securities except to the extent of its pecuniary interest therein, and this report shall not be deemed an admission that the reporting person is the beneficial owner of the securities for Section 16 or any other purpose.</footnote>
+        <footnote id="F2">The price reported in column 4 is a weighted average price. These shares were sold in multiple transactions at prices ranging from $13.97 to $15.7783, inclusive. The weighted-average sale price reflected has been rounded to 4 decimal points. The reporting person undertakes to Ramaco Resources, Inc. (the &quot;Issuer&quot;), any security holder of the Issuer, or the staff of the Securities and Exchange Commission, upon request, full information regarding the number of shares sold at each separate price within the range set forth in footnotes (2), (3), and (4)</footnote>
+        <footnote id="F3">The price reported in column 4 is a weighted average price. These shares were sold in multiple transactions at prices ranging from $10.55 to $11.285, inclusive. The weighted-average sale price reflected has been rounded to 4 decimal points.</footnote>
+        <footnote id="F4">The price reported in column 4 is a weighted average price. These shares were sold in multiple transactions at prices ranging from $10.06 to $10.6975, inclusive. The weighted-average sale price reflected has been rounded to 4 decimal points.</footnote>
+        <footnote id="F5">These securities are owned directly by Yorktown Energy Partners IX, L.P. (&quot;Yorktown IX&quot;). The reporting person is a member and manager of Yorktown IX Associates LLC, the general partner of Yorktown IX Company LP, the General Partner of Yorktown IX.</footnote>
+        <footnote id="F6">These securities are owned directly by Yorktown Energy Partners X, L.P. (&quot;Yorktown X&quot;). The reporting person is a member and manager of Yorktown X Associates LLC, the general partner of Yorktown X Company LP, the General Partner of Yorktown X.</footnote>
+        <footnote id="F7">These securities are owned directly by Yorktown Energy Partners XI, L.P. (&quot;Yorktown XI&quot;). The reporting person is a member and manager of Yorktown XI Associates LLC, the general partner of Yorktown XI Company LP, the General Partner of Yorktown XI.</footnote>
+    </footnotes>
+
+    <ownerSignature>
+        <signatureName>/s/ Bryan H Lawrence</signatureName>
+        <signatureDate>2026-03-31</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>
