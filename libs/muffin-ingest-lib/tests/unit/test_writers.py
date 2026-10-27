@@ -423,3 +423,110 @@ def test_update_existing_never_inserts_never_erases_and_casts_every_value() -> N
             key="security_id",
             types={"security_id": "uuid", "x": "text; drop table market.security"},
         )
+
+
+KEY_TYPES = {"statement": "text", "period_ending": "date", "period_type": "text"}
+
+
+def test_retract_unproduced_deletes_only_the_scope_s_rows_the_answer_no_longer_produces() -> None:
+    cur = FakeCursor()
+    produced = [
+        {"statement": "income", "period_ending": "2025-09-27", "period_type": "annual", "v": 1},
+        {"statement": "balance", "period_ending": "2025-09-27", "period_type": "quarter", "v": 2},
+    ]
+    writers.retract_unproduced(
+        cur,
+        "market.security_statement",
+        produced,
+        scope={"security_id": "s1", "source_code": "sec-xbrl"},
+        key=["statement", "period_ending", "period_type"],
+        types=KEY_TYPES,
+    )
+    [(sql, params)] = cur.calls
+    assert sql == (
+        "delete from market.security_statement as stored_row where stored_row.security_id = %s"
+        " and stored_row.source_code = %s and not exists (select 1 from unnest(%s::text[],"
+        " %s::date[], %s::text[]) as p (statement, period_ending, period_type) where"
+        " stored_row.statement = p.statement and stored_row.period_ending = p.period_ending"
+        " and stored_row.period_type = p.period_type)"
+    )
+    assert params == [
+        "s1",
+        "sec-xbrl",
+        ["income", "balance"],
+        ["2025-09-27", "2025-09-27"],
+        ["annual", "quarter"],
+    ]
+
+
+def test_retract_unproduced_is_one_statement_however_many_rows_are_produced() -> None:
+    """A NOT EXISTS split across statements would delete each chunk's complement: everything."""
+    cur = FakeCursor()
+    produced = [
+        {"statement": "income", "period_ending": f"d{i}", "period_type": "quarter"}
+        for i in range(writers.MAX_BIND_PARAMS)
+    ]
+    writers.retract_unproduced(
+        cur,
+        "market.security_statement",
+        produced,
+        scope={"security_id": "s1"},
+        key=["statement", "period_ending", "period_type"],
+        types=KEY_TYPES,
+    )
+    assert len(cur.calls) == 1
+    assert len(cur.calls[0][1]) == 4
+
+
+def test_retract_unproduced_with_nothing_produced_empties_the_scope_and_only_it() -> None:
+    cur = FakeCursor()
+    writers.retract_unproduced(
+        cur,
+        "market.security_statement",
+        [],
+        scope={"security_id": "s1"},
+        key=["statement"],
+        types=KEY_TYPES,
+    )
+    [(sql, params)] = cur.calls
+    assert "stored_row.security_id = %s" in sql
+    assert params == ["s1", []]
+
+
+def test_retract_unproduced_refuses_what_could_delete_more_than_it_means() -> None:
+    def retract(**kwargs: Any) -> None:
+        args: dict[str, Any] = {
+            "scope": {"security_id": "s1"},
+            "key": ["statement"],
+            "types": KEY_TYPES,
+        }
+        args.update(kwargs)
+        writers.retract_unproduced(
+            FakeCursor(), "market.security_statement", kwargs.pop("rows", []), **args
+        )
+
+    with pytest.raises(WriterError, match="scope"):
+        retract(scope={})
+    with pytest.raises(WriterError, match="key"):
+        retract(key=[])
+    with pytest.raises(WriterError, match="type"):
+        retract(key=["statement", "fiscal_year"])
+    # A produced row missing a key column would match nothing, so its stored row would be deleted.
+    with pytest.raises(WriterError, match="lacks key"):
+        writers.retract_unproduced(
+            FakeCursor(),
+            "market.security_statement",
+            [{"statement": None}],
+            scope={"security_id": "s1"},
+            key=["statement"],
+            types=KEY_TYPES,
+        )
+
+
+def test_retract_unproduced_reports_the_rows_the_driver_deleted() -> None:
+    cur = CountingCursor([3])
+    result = writers.retract_unproduced(
+        cur, "market.t", [], scope={"security_id": "s1"}, key=["statement"], types=KEY_TYPES
+    )
+    assert result.retracted == 3
+    assert result.written == 0
