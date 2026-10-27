@@ -27,7 +27,17 @@ A CODE `market.insider_transaction_code` LACKS IS WITHHELD AND COUNTED, never wr
 no foreign key from `insider_trade` on purpose (the TRL stall's shape), so this is the guard. A line
 with no code at all (3 in 2026q1) is withheld the same way.
 
-NO NETWORK. Stage 1 stores the zip whole.
+EACH DAY'S FORM 4s are read here too (`form4_rows`), by OUR reader of the filing's XML, not
+edgartools' `Form4.parse_xml` (decided 2026-10-27, amending decision 9). Measured that day: that
+parser fetches `data.sec.gov/submissions/CIK<owner>.json` for every reporting owner, to decide
+whether to reverse the name, and raises after five retries if SEC does not answer, so stage 2 would
+have made one request per owner outside the pool's pacing and the request counters. It also
+rewrote what the data set states: "Ternus John" became "John Ternus", an empty expiration date came
+back as the footnote marker "[F2]", and "See Remarks" titles were replaced by the remarks. Both
+lanes go through `_filing_rows`, so a line means the same thing whichever lane wrote it, and the
+nine captured 2026q1 filings reproduce the data set's rows (to its two decimals).
+
+NO NETWORK. Stage 1 stores the zip and each filing's complete submission text whole.
 """
 
 from __future__ import annotations
@@ -36,6 +46,8 @@ import csv
 import hashlib
 import io
 import math
+import re
+import xml.etree.ElementTree as ET
 import zipfile
 from collections import Counter, defaultdict
 from collections.abc import Iterator, Mapping, Sequence
@@ -107,6 +119,23 @@ class _Owner:
     cik: int
     name: str | None
     title: str | None
+
+
+@dataclass(frozen=True)
+class _Line:
+    """One transaction line, as either lane reads it, before it is checked against the tables."""
+
+    title: str | None
+    when: date | None
+    code: str
+    shares: float | None
+    price: float | None
+    acquired: str
+    after: float | None
+
+
+class Form4Unreadable(RuntimeError):
+    """The body is not a Form 3, 4 or 5 submission. Never read as a filing with no lines."""
 
 
 def quarter_bounds(year: int, quarter: int) -> tuple[date, date]:
@@ -181,6 +210,70 @@ def _number(text: str, stats: Counter[str]) -> float | None:
     return value
 
 
+def _filing_rows(
+    stats: Counter[str],
+    *,
+    filing: _Filing,
+    owners: Sequence[_Owner],
+    lines: Mapping[Table, Sequence[_Line]],
+    securities: Sequence[str],
+    codes: Mapping[str, str],
+    source: str,
+    as_of: datetime,
+) -> list[dict[str, Any]]:
+    """One filing's rows: each line, in document order, once per equity of the issuer."""
+    owner = min(owners, key=lambda o: o.cik) if owners else None
+    if owner is None:
+        stats["owner_missing"] += 1
+    if len(owners) > 1:
+        stats["several_owners"] += 1
+    if filing.form_type.endswith("/A"):
+        stats["amendments"] += 1
+    if len(securities) > 1:
+        stats["issuer_fanned_out"] += 1
+    rows: list[dict[str, Any]] = []
+    for table, found in lines.items():
+        for ordinal, line in enumerate(found, start=1):
+            stats[f"lines_{table}"] += 1
+            if line.code not in codes:
+                stats[f"code_unknown:{line.code or '<none>'}"] += 1
+                continue
+            direction = DIRECTION.get(line.acquired)
+            if direction is None:
+                stats["direction_unknown"] += 1
+            key = line_key(table, ordinal)
+            values = {
+                "accession_number": filing.accession,
+                "line_key": key,
+                "filing_date": filing.filing_date,
+                "transaction_date": line.when,
+                "owner_name": owner.name if owner else None,
+                "owner_title": owner.title if owner else None,
+                "owner_cik": owner.cik if owner else None,
+                "issuer_cik": filing.issuer_cik,
+                "form_type": filing.form_type,
+                "transaction_code": line.code,
+                "transaction_type": codes[line.code],
+                "direction": direction,
+                "security_type": line.title,
+                "shares": line.shares,
+                "price": line.price,
+                "shares_owned_after": line.after,
+                "is_derivative": table == "d",
+                "source_code": source,
+                "as_of": as_of,
+            }
+            for security_id in securities:
+                rows.append(
+                    {
+                        "trade_key": trade_key(security_id, filing.accession, key),
+                        "security_id": security_id,
+                        **values,
+                    }
+                )
+    return rows
+
+
 def dataset_rows(
     body: bytes,
     issuers: Mapping[int, Sequence[str]],
@@ -222,11 +315,24 @@ def dataset_rows(
             if accession in filings and cik.isdigit():
                 owners[accession].append(_Owner(int(cik), name or None, title or None))
 
-        lines: dict[tuple[str, Table], list[tuple[int, list[str]]]] = defaultdict(list)
+        found: dict[str, dict[Table, list[tuple[int, _Line]]]] = defaultdict(
+            lambda: {"nd": [], "d": []}
+        )
         for table, (name, sk) in _LINE_TABLES.items():
             for row in _rows(archive, name, (*_LINE, sk), malformed):
-                if row[0] in filings:
-                    lines[(row[0], table)].append((int(row[-1]), row[:-1]))
+                if row[0] not in filings:
+                    continue
+                _, title, when, code, shares, price, acquired, after, order = row
+                line = _Line(
+                    title=title or None,
+                    when=_date(when, stats, "transaction_date"),
+                    code=code,
+                    shares=_number(shares, stats),
+                    price=_number(price, stats),
+                    acquired=acquired,
+                    after=_number(after, stats),
+                )
+                found[row[0]][table].append((int(order), line))
 
     # A FILING WITH A MALFORMED ROW IS WITHHELD WHOLE, not the row alone: dropping one line would
     # renumber the filing's others (`nd:3` read as `nd:2`). It also leaves the retraction, so the
@@ -235,64 +341,150 @@ def dataset_rows(
         del filings[accession]
         stats["filings_malformed"] += 1
     rows: list[dict[str, Any]] = []
-    for (accession, table), found in lines.items():
-        if accession not in filings:
-            continue
-        filing = filings[accession]
-        securities = issuers[filing.issuer_cik]
-        named = sorted(owners.get(accession, ()), key=lambda o: o.cik)
-        owner = named[0] if named else None
-        if owner is None:
-            stats["owner_missing"] += 1
-        found.sort(key=lambda pair: pair[0])
-        for ordinal, (_, line) in enumerate(found, start=1):
-            _, title, when, code, shares, price, acquired, after = line
-            stats[f"lines_{table}"] += 1
-            if code not in codes:
-                stats[f"code_unknown:{code or '<none>'}"] += 1
-                continue
-            direction = DIRECTION.get(acquired)
-            if direction is None:
-                stats["direction_unknown"] += 1
-            key = line_key(table, ordinal)
-            values = {
-                "accession_number": accession,
-                "line_key": key,
-                "filing_date": filing.filing_date,
-                "transaction_date": _date(when, stats, "transaction_date"),
-                "owner_name": owner.name if owner else None,
-                "owner_title": owner.title if owner else None,
-                "owner_cik": owner.cik if owner else None,
-                "issuer_cik": filing.issuer_cik,
-                "form_type": filing.form_type,
-                "transaction_code": code,
-                "transaction_type": codes[code],
-                "direction": direction,
-                "security_type": title or None,
-                "shares": _number(shares, stats),
-                "price": _number(price, stats),
-                "shares_owned_after": _number(after, stats),
-                "is_derivative": table == "d",
-                "source_code": SOURCE_DATASET,
-                "as_of": as_of,
-            }
-            for security_id in securities:
-                rows.append(
-                    {
-                        "trade_key": trade_key(security_id, accession, key),
-                        "security_id": security_id,
-                        **values,
-                    }
-                )
-
     for accession, filing in filings.items():
-        if len(owners.get(accession, ())) > 1:
-            stats["several_owners"] += 1
-        if filing.form_type.endswith("/A"):
-            stats["amendments"] += 1
-        if len(issuers[filing.issuer_cik]) > 1:
-            stats["issuer_fanned_out"] += 1
+        tables = found.get(accession, {"nd": [], "d": []})
+        rows += _filing_rows(
+            stats,
+            filing=filing,
+            owners=owners.get(accession, ()),
+            # Document order is the surrogate key's; the file's own order is not.
+            lines={
+                t: [line for _, line in sorted(ls, key=lambda p: p[0])] for t, ls in tables.items()
+            },
+            securities=issuers[filing.issuer_cik],
+            codes=codes,
+            source=SOURCE_DATASET,
+            as_of=as_of,
+        )
     stats["malformed"] = len(malformed)
     stats["issuers_tracked"] = len({f.issuer_cik for f in filings.values()})
     stats["rows"] = len(rows)
     return Trades(rows=rows, accessions=set(filings), stats=stats)
+
+
+#: The complete submission's header: which filing, and the day SEC dates it.
+_ACCESSION = re.compile(rb"^ACCESSION NUMBER:\s*(\S+)", re.M)
+_FILED = re.compile(rb"^FILED AS OF DATE:\s*(\d{8})", re.M)
+_XML = re.compile(rb"<XML>\s*(.*?)\s*</XML>", re.S)
+
+#: Each lane's table of lines in an ownership document.
+_XML_TABLES: dict[Table, str] = {
+    "nd": "nonDerivativeTable/nonDerivativeTransaction",
+    "d": "derivativeTable/derivativeTransaction",
+}
+
+
+def _text(element: ET.Element | None, path: str) -> str | None:
+    """The stripped text at `path`, or None. A footnote reference is not a value: an element
+    holding only `<footnoteId>` reads as None, never as the marker."""
+    if element is None:
+        return None
+    found = element.find(path)
+    if found is None or found.text is None:
+        return None
+    text = found.text.strip()
+    return text or None
+
+
+def _iso_date(text: str | None, stats: Counter[str], what: str) -> date | None:
+    """An XML date, which may carry a zone offset after the day (`2026-03-27-05:00`)."""
+    if text is None:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        stats[f"{what}_unreadable"] += 1
+        return None
+
+
+def form4_rows(
+    body: bytes,
+    issuers: Mapping[int, Sequence[str]],
+    codes: Mapping[str, str],
+    *,
+    as_of: datetime,
+) -> Trades:
+    """Read one filing's complete submission text (`<accession>.txt`) into `insider_trade` rows.
+
+    The same rules as `dataset_rows`, through the same builder; only the reading differs. The
+    filing names its issuer, and an issuer we do not track (an owner that is itself a tracked
+    company files under its own CIK as well) yields nothing and is counted.
+
+    Values keep the filing's precision, where the data set rounds to two decimals; a quarter's data
+    set replaces these rows once it is published.
+    """
+    stats: Counter[str] = Counter()
+    accession_match = _ACCESSION.search(body)
+    xml_match = _XML.search(body)
+    if accession_match is None or xml_match is None:
+        raise Form4Unreadable(
+            f"not a complete submission with an ownership document ({body[:60]!r})"
+        )
+    try:
+        root = ET.fromstring(xml_match.group(1))
+    except ET.ParseError as exc:
+        raise Form4Unreadable(f"its ownership document is not XML: {exc}") from exc
+    if root.tag != "ownershipDocument":
+        raise Form4Unreadable(f"its XML is a {root.tag}, not an ownership document")
+
+    accession = accession_match.group(1).decode()
+    filed_match = _FILED.search(body)
+    filed = (
+        _iso_date(f"{m[:4]}-{m[4:6]}-{m[6:]}", stats, "filing_date")
+        if filed_match and (m := filed_match.group(1).decode())
+        else None
+    )
+    cik = _text(root, "issuer/issuerCik")
+    stats["filings"] = 1
+    if cik is None or not cik.isdigit() or int(cik) not in issuers:
+        stats["filings_untracked"] = 1
+        return Trades(rows=[], accessions=set(), stats=stats)
+    filing = _Filing(accession, filed, _text(root, "documentType") or "", int(cik))
+
+    owners = []
+    for node in root.findall("reportingOwner"):
+        owner_cik = _text(node, "reportingOwnerId/rptOwnerCik")
+        if owner_cik and owner_cik.isdigit():
+            owners.append(
+                _Owner(
+                    int(owner_cik),
+                    _text(node, "reportingOwnerId/rptOwnerName"),
+                    _text(node, "reportingOwnerRelationship/officerTitle"),
+                )
+            )
+    lines: dict[Table, list[_Line]] = {}
+    for table, path in _XML_TABLES.items():
+        lines[table] = [
+            _Line(
+                title=_text(node, "securityTitle/value"),
+                when=_iso_date(_text(node, "transactionDate/value"), stats, "transaction_date"),
+                code=_text(node, "transactionCoding/transactionCode") or "",
+                shares=_number(
+                    _text(node, "transactionAmounts/transactionShares/value") or "", stats
+                ),
+                price=_number(
+                    _text(node, "transactionAmounts/transactionPricePerShare/value") or "", stats
+                ),
+                acquired=_text(node, "transactionAmounts/transactionAcquiredDisposedCode/value")
+                or "",
+                after=_number(
+                    _text(node, "postTransactionAmounts/sharesOwnedFollowingTransaction/value")
+                    or "",
+                    stats,
+                ),
+            )
+            for node in root.findall(path)
+        ]
+    rows = _filing_rows(
+        stats,
+        filing=filing,
+        owners=owners,
+        lines=lines,
+        securities=issuers[filing.issuer_cik],
+        codes=codes,
+        source=SOURCE_FORM4,
+        as_of=as_of,
+    )
+    stats["issuers_tracked"] = 1
+    stats["rows"] = len(rows)
+    return Trades(rows=rows, accessions={accession}, stats=stats)

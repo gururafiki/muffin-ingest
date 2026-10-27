@@ -308,3 +308,127 @@ def test_a_trade_key_names_the_security_the_filing_and_the_line() -> None:
     assert key == insider.trade_key("goog", "0001193125-26-135334", "nd:1")
     assert len({key, insider.trade_key("googl", "0001193125-26-135334", "nd:1"),
                 insider.trade_key("goog", "0001193125-26-135334", "nd:2")}) == 3  # fmt: skip
+
+
+FORM4S = sorted(FIXTURES.glob("form4_*.txt"))
+
+
+def form4(name: str, edit: Callable[[bytes], bytes] = lambda b: b) -> insider.Trades:
+    return insider.form4_rows(edit((FIXTURES / name).read_bytes()), ISSUERS, CODES, as_of=AS_OF)
+
+
+@pytest.mark.parametrize("path", FORM4S, ids=[p.stem for p in FORM4S])
+def test_a_form_4_reproduces_the_data_set_s_rows_for_it(path: Path) -> None:
+    """Two lanes write one table, and a quarter's data set replaces the Form 4 lane's rows: a line
+    must mean the same thing whichever lane wrote it. Every field but the source, to the data set's
+    two decimals."""
+    accession = path.stem.removeprefix("form4_")
+    ours = insider.form4_rows(path.read_bytes(), ISSUERS, CODES, as_of=AS_OF)
+    theirs = {
+        (r["security_id"], r["line_key"]): r
+        for r in read().rows
+        if r["accession_number"] == accession
+    }
+    assert ours.rows and len(ours.rows) == len(theirs)
+    assert ours.accessions == {accession}
+    for row in ours.rows:
+        twin = theirs[(row["security_id"], row["line_key"])]
+        assert row["source_code"] == insider.SOURCE_FORM4
+        for column, value in row.items():
+            if column == "source_code":
+                continue
+            if isinstance(value, float):
+                value = round(value, 2)
+            assert value == twin[column], (column, row["line_key"])
+
+
+def test_a_form_4_keeps_the_filing_s_precision_where_the_data_set_rounds() -> None:
+    [line] = form4("form4_0000897069-26-000475.txt").rows
+    assert line["shares"] == 3647.903
+    assert line["shares_owned_after"] == 38766.428
+
+
+def test_a_footnote_in_place_of_a_value_reads_as_no_value() -> None:
+    """edgartools returned the marker itself ('[F2]') where a filing gives only a footnote."""
+
+    def footnote_the_price(body: bytes) -> bytes:
+        return body.replace(
+            b"<transactionPricePerShare>\n                    <value>0</value>",
+            b'<transactionPricePerShare>\n                    <footnoteId id="F9"/>',
+            1,
+        )
+
+    trades = form4("form4_0001016817-26-000004.txt", footnote_the_price)
+    assert trades.rows[0]["price"] is None
+    assert trades.rows[1]["price"] == 0.0
+    assert "number_unreadable" not in trades.stats
+
+
+def test_a_form_4_names_the_owner_as_sec_does_and_asks_nobody(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """edgartools reverses an individual's name ('Ternus John' to 'John Ternus') after asking SEC,
+    per owner, whether the owner is a company. The data set and every legacy row use SEC's form."""
+    import socket
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the Form 4 reader opened a connection")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+    trades = form4("form4_0001104659-26-038038.txt")
+    assert trades.rows[0]["owner_cik"] == 1352851
+    assert trades.rows[0]["owner_name"] == "Magnetar Financial LLC"
+
+
+def test_a_form_4_of_an_issuer_we_do_not_track_yields_nothing_and_says_so() -> None:
+    """The daily index lists a filing under each filer, so a tracked company that REPORTS an
+    ownership in another issuer names a Form 4 that is not about it."""
+    trades = insider.form4_rows(
+        (FIXTURES / FORM4S[0].name).read_bytes(), {1: ["x"]}, CODES, as_of=AS_OF
+    )
+    assert trades.rows == []
+    assert trades.accessions == set()
+    assert trades.stats["filings_untracked"] == 1
+
+
+def test_a_transaction_date_with_a_zone_reads_its_day() -> None:
+    def zone(body: bytes) -> bytes:
+        return body.replace(b"<value>2026-02-23</value>", b"<value>2026-02-23-05:00</value>", 1)
+
+    [line] = form4("form4_0000897069-26-000475.txt", zone).rows
+    assert line["transaction_date"] == date(2026, 2, 23)
+
+
+@pytest.mark.parametrize(
+    ("edit", "says"),
+    [
+        (lambda b: b'<?xml version="1.0"?><Error><Code>NoSuchKey</Code></Error>', "complete"),
+        (
+            lambda b: b.replace(b"<ownershipDocument>", b"<somethingElse>", 1).replace(
+                b"</ownershipDocument>", b"</somethingElse>", 1
+            ),
+            "not an ownership document",
+        ),
+        (lambda b: b.replace(b"</ownershipDocument>", b"", 1), "not XML"),
+    ],
+    ids=["s3-error", "another-document", "truncated-xml"],
+)
+def test_a_body_that_is_not_an_ownership_filing_raises(
+    edit: Callable[[bytes], bytes], says: str
+) -> None:
+    with pytest.raises(insider.Form4Unreadable, match=says):
+        form4(FORM4S[0].name, edit)
+
+
+def test_a_form_4_line_with_a_code_the_table_lacks_is_withheld_and_counted() -> None:
+    trades = insider.form4_rows(
+        (FIXTURES / "form4_0001193125-26-135334.txt").read_bytes(),
+        ISSUERS,
+        {c: n for c, n in CODES.items() if c != "G"},
+        as_of=AS_OF,
+    )
+    assert {r["transaction_code"] for r in trades.rows} == {"S"}
+    assert trades.stats["code_unknown:G"] == 2
+    # Withholding a line does not renumber the others: the sales keep their own positions.
+    assert sorted({r["line_key"] for r in trades.rows}) == ["nd:1", "nd:2", "nd:3", "nd:4", "nd:5"]
