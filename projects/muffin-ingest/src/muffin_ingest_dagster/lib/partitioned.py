@@ -51,6 +51,23 @@ class Complete(list[Row]):
     """
 
 
+class Unchanged(list[Row]):
+    """A partition the run visited and found nothing due in: the stored file stands, unwritten.
+
+    For a lane that visits a subject to ASK WHETHER anything is due, and usually finds nothing:
+    the SEC filer lane visits every filer it is handed, and most have filed nothing since their
+    documents were last fetched. Returning the stored rows instead would have the manager rewrite
+    the file, and a filer's company facts and submissions are megabytes each (JPM's submissions
+    alone carry 71 older pages). An empty list would write the "collected nothing" marker over
+    them. This says neither: the manager leaves the file alone and counts the partition as
+    `partitions_unchanged`.
+
+    ALWAYS EMPTY, and only for a partition that holds a file. A subject never collected is due by
+    definition; calling it unchanged would claim a collection that never happened, so the manager
+    refuses both shapes rather than guessing.
+    """
+
+
 def by_partition(
     context: AssetExecutionContext,
     rows: Rows,

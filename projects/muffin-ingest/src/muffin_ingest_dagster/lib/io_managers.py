@@ -25,11 +25,14 @@ from typing import TYPE_CHECKING, Any
 import dagster as dg
 from muffin_ingest.writers import WriteResult, replace_scope, upsert
 
-from muffin_ingest_dagster.lib.partitioned import Complete
+from muffin_ingest_dagster.lib.partitioned import Complete, Unchanged
 from muffin_ingest_dagster.lib.resources import Postgres
 
 if TYPE_CHECKING:
     from upath import UPath
+
+#: The codecs `pq.write_table` takes by name.
+_CODECS = frozenset({"snappy", "zstd", "gzip", "brotli", "lz4", "none"})
 
 #: Rows in, rows out. Deliberately not a pydantic model at this boundary: Parquet and the upsert
 #: both want plain mappings, and every rule a model would enforce here (a number that is really a
@@ -58,6 +61,10 @@ class ParquetIOManager(dg.UPathIOManager):
         @dg.asset(io_manager_key="parquet_io", metadata={"merge_on": ["symbol", "date"]})
 
     Without `merge_on` the behaviour is exactly as before, so no existing lane changes.
+
+    AN ASSET MAY ALSO NAME ITS COMPRESSION (`metadata={"compression": "zstd"}`); the default is
+    pyarrow's snappy, so no existing lane changes. Measured 2026-10-26 on one AAPL company facts
+    body: snappy 599 KB, zstd 308 KB. Reading needs nothing: Parquet records the codec per column.
     """
 
     extension: str | None = ".parquet"
@@ -99,8 +106,10 @@ class ParquetIOManager(dg.UPathIOManager):
         partition's — per-partition metadata is not expressible here, and a number that silently
         described only the last partition would be worse than a total.
         """
+        unchanged = sum(1 for t in tally if t.get("unchanged"))
+        tally = [t for t in tally if not t.get("unchanged")]
         if not tally:
-            return {}
+            return {"partitions_unchanged": unchanged} if unchanged else {}
         replaced = [t for t in tally if t.get("replaced")]
         out: dict[str, Any] = {
             "merged_on": tally[0]["merged_on"],
@@ -114,6 +123,8 @@ class ParquetIOManager(dg.UPathIOManager):
         }
         if replaced:
             out["replaced_because"] = "the run fetched these subjects' whole history"
+        if unchanged:
+            out["partitions_unchanged"] = unchanged
         return out
 
     def __init__(self, base_path: str) -> None:
@@ -179,8 +190,9 @@ class ParquetIOManager(dg.UPathIOManager):
                 # difference between "collected, and there was nothing" and "never collected", and
                 # it is the whole reason the cross-section is partitioned by date.
                 self.dump_to_path(context=context, obj=obj.get(key, []), path=path)
+            unchanged = sum(1 for t in tally if t.get("unchanged"))
             context.add_output_metadata(
-                {"partitions_written": len(paths), **self._summarise(tally)}
+                {"partitions_written": len(paths) - unchanged, **self._summarise(tally)}
             )
             return
 
@@ -196,8 +208,28 @@ class ParquetIOManager(dg.UPathIOManager):
         import pyarrow as pa
         import pyarrow.parquet as pq
 
+        if isinstance(obj, Unchanged):
+            # NOTHING WAS DUE, SO NOTHING IS WRITTEN (`partitioned.Unchanged`). Refused when it
+            # carries rows, which it never should, or when there is no file to stand: calling a
+            # subject never collected "unchanged" would claim a collection that never happened.
+            if obj or not path.exists():
+                raise dg.DagsterInvariantViolationError(
+                    f"{context.asset_key.to_user_string()} returned Unchanged for {path.name} "
+                    + ("with rows in it" if obj else "but no file is stored there")
+                    + "; it marks a stored partition the run left alone, and nothing else."
+                )
+            self._record({"unchanged": True})
+            return
+
         rows = list(obj)
-        merge_on = [str(c) for c in ((context.definition_metadata or {}).get("merge_on") or ())]
+        metadata = context.definition_metadata or {}
+        merge_on = [str(c) for c in (metadata.get("merge_on") or ())]
+        compression = str(metadata.get("compression") or "snappy")
+        if compression not in _CODECS:
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} names compression {compression!r}; "
+                f"pyarrow writes {sorted(_CODECS)}."
+            )
         # A COMPLETE ANSWER REPLACES; AN EXTENSION MERGES. The asset knows which it asked for and
         # says so per partition (`partitioned.Complete`), because one run holds both: the price
         # sweep loads a never-collected security in full and extends its neighbour, in the same run.
@@ -238,12 +270,15 @@ class ParquetIOManager(dg.UPathIOManager):
             pq.write_table(
                 pa.table({"collected_nothing": pa.array([], type=pa.bool_())}),
                 path.path if hasattr(path, "path") else str(path),
+                compression=compression,
             )
             return
 
         columns = sorted({key for row in rows for key in row})
         table = pa.table({column: [row.get(column) for row in rows] for column in columns})
-        pq.write_table(table, path.path if hasattr(path, "path") else str(path))
+        pq.write_table(
+            table, path.path if hasattr(path, "path") else str(path), compression=compression
+        )
 
     def _merge_with_stored(
         self, context: dg.OutputContext, rows: Rows, path: UPath, merge_on: list[str]
