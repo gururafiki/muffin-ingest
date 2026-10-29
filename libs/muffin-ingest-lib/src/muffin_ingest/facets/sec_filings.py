@@ -22,11 +22,12 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 
+from muffin_ingest.facets import fiscal
 from muffin_ingest.providers import sec_edgar
 from muffin_ingest.providers.documents import Document
 
@@ -40,6 +41,42 @@ Kind = Literal["submissions", "submissions_page"]
 #: BHP, BUD, NVO, SAP, TSM, VOD). The same shape as N-PORT's `<cusip>000000000</cusip>`, which once
 #: collapsed four companies into one security.
 _PLACEHOLDER = re.compile(r"^0+$")
+
+
+#: The source the filings writer writes under: the edge's filing-history resource used it too, so a
+#: row it wrote and one this lane writes are the same provenance.
+SOURCE = "sec-submissions"
+
+#: The regulator a filing is made with (`security_filing.disclosure_source_code`).
+REGULATOR = "sec"
+
+#: SEC's forms, from the control table (`market.filing_form`): which are kept, which refresh the
+#: company facts, and which period each reports.
+FORMS_SQL = """
+select form_code, kept, refreshes_facts, is_amendment, fiscal_role
+  from market.filing_form
+ where source_code = %s
+"""
+
+
+@dataclass(frozen=True)
+class Form:
+    code: str
+    kept: bool
+    refreshes_facts: bool
+    is_amendment: bool
+    #: `annual`, `transition` or `interim`; null for an amendment or a form reporting no period.
+    fiscal_role: fiscal.Role | None
+
+
+def forms(conn: Any) -> dict[str, Form]:
+    """Every SEC form in `market.filing_form`. A form with no row is not stored."""
+    with conn.cursor() as cur:
+        cur.execute(FORMS_SQL, (REGULATOR,))
+        return {
+            str(code): Form(str(code), bool(kept), bool(facts), bool(amend), role)
+            for code, kept, facts, amend, role in cur.fetchall()
+        }
 
 
 class SubmissionsUnreadable(RuntimeError):
@@ -250,3 +287,47 @@ def _day(value: Any) -> date | None:
     """SEC sends a full timestamp (`2007-01-10T00:00:00.000Z`); only the date means anything."""
     text = _text(value)
     return date.fromisoformat(text[:10]) if text else None
+
+
+def reports(found: Collection[Filing], forms_by_code: Mapping[str, Form]) -> list[fiscal.Report]:
+    """The registrant's own accounts reports, as the calendar reads them.
+
+    A form reports a period only if `filing_form.fiscal_role` says so, which leaves out every
+    amendment (a 10-K/A restates a year the 10-K already gave) and every 6-K (monthly revenue as
+    often as results). A report SEC names no period for cannot place one, and is left out too.
+    """
+    out: list[fiscal.Report] = []
+    for filing in found:
+        form = forms_by_code.get(filing.form)
+        if form is None or form.fiscal_role is None or filing.report_date is None:
+            continue
+        out.append(
+            fiscal.Report(filing.accession, filing.form, filing.report_date, form.fiscal_role)
+        )
+    return out
+
+
+def filing_rows(
+    found: Collection[Filing], *, cik: int, security_ids: Collection[str], as_of: str
+) -> list[dict[str, Any]]:
+    """`market.security_filing` rows, one per filing and security the CIK maps to.
+
+    NEVER `segments_parsed_at` OR `segments_parser_version`: the edge's segments handler owns both
+    until Phase 6, and a writer naming them would re-queue or hide every filing it touches.
+    """
+    rows: list[dict[str, Any]] = []
+    for filing in found:
+        common = {
+            "accession_number": filing.accession,
+            "filing_date": filing.filing_date.isoformat(),
+            "report_date": filing.report_date.isoformat() if filing.report_date else None,
+            "report_type": filing.form,
+            "report_url": filing.report_url(cik),
+            "filing_detail_url": filing.filing_detail_url(cik),
+            "is_xbrl": filing.is_xbrl,
+            "source_code": SOURCE,
+            "disclosure_source_code": REGULATOR,
+            "as_of": as_of,
+        }
+        rows += [{"security_id": sid, **common} for sid in security_ids]
+    return rows

@@ -268,6 +268,42 @@ def test_an_update_skips_a_row_whose_values_did_not_change() -> None:
     assert "stored_row.security_id" not in sql, "the conflict key is equal by construction"
 
 
+def test_compare_decides_the_update_and_every_setter_is_still_written() -> None:
+    """An `as_of` compared like a value rewrites every unchanged statement on each company facts
+    re-read, and the requeue trigger then re-derives them all. Left out of `compare`, an unchanged
+    row is untouched, and a changed one still takes the new `as_of`."""
+    cur = FakeCursor()
+    rows = [{"k": 1, "data": "{}", "currency": "USD", "as_of": "2026-10-29"}]
+    upsert(
+        cur,
+        "market.thing",
+        rows,
+        conflict=["k"],
+        update=["data", "currency", "as_of"],
+        compare=["data", "currency"],
+    )
+    assert cur.calls[0][0].endswith(
+        "do update set data = excluded.data, currency = excluded.currency, as_of = excluded.as_of "
+        "where (stored_row.data, stored_row.currency) is distinct from "
+        "(excluded.data, excluded.currency)"
+    ), cur.calls[0][0]
+
+
+@pytest.mark.parametrize("compare", [[], ["k"], ["missing"]])
+def test_compare_names_only_columns_being_updated(compare: list[str]) -> None:
+    """An empty list would compare nothing (always true), and a column not updated, the key
+    included, would decide an update by a value that cannot change."""
+    with pytest.raises(WriterError, match="compare"):
+        upsert(
+            FakeCursor(),
+            "market.thing",
+            [{"k": 1, "v": "a", "missing": 1}],
+            conflict=["k"],
+            update=["v"],
+            compare=compare,
+        )
+
+
 def test_do_nothing_carries_no_guard() -> None:
     """DO NOTHING has no update to guard; a `where` there is a syntax error."""
     cur = FakeCursor()

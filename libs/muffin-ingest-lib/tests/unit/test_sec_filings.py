@@ -206,3 +206,87 @@ def test_a_fault_of_the_run_is_not_counted_against_the_filer(
         sec_filings.filings(AAPL, KEPT)
     # `SubmissionsUnreadable` is a RuntimeError too, so the TYPE is the assertion.
     assert type(raised.value) is RuntimeError
+
+
+class _Conn:
+    def __init__(self, rows: list[tuple[object, ...]]) -> None:
+        self.rows = rows
+        self.params: object = None
+
+    def cursor(self) -> _Conn:
+        return self
+
+    def __enter__(self) -> _Conn:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: object = ()) -> None:
+        self.params = params
+
+    def fetchall(self) -> list[tuple[object, ...]]:
+        return self.rows
+
+
+FORMS = sec_filings.forms(
+    _Conn(
+        [
+            ("10-K", True, True, False, "annual"),
+            ("10-K/A", True, True, True, None),
+            ("10-Q", True, True, False, "interim"),
+            ("10-KT", True, True, False, "transition"),
+            ("8-K", True, False, False, None),
+            ("6-K", True, False, False, None),
+        ]
+    )
+)
+
+
+def _filing(accession: str, form: str, report: str | None) -> sec_filings.Filing:
+    return sec_filings.Filing(
+        accession=accession,
+        form=form,
+        filing_date=date(2026, 1, 30),
+        report_date=date.fromisoformat(report) if report else None,
+        is_xbrl=True,
+        primary_document="doc.htm",
+    )
+
+
+def test_a_report_is_a_form_with_a_fiscal_role_and_a_report_date() -> None:
+    """An amendment restates a year the original gave, a 6-K is as often monthly revenue as
+    results, and a filing SEC names no period for cannot place one."""
+    found = [
+        _filing("1", "10-K", "2025-12-31"),
+        _filing("2", "10-K/A", "2025-12-31"),
+        _filing("3", "10-Q", "2025-09-30"),
+        _filing("4", "10-KT", "2025-06-30"),
+        _filing("5", "8-K", "2026-01-29"),
+        _filing("6", "6-K", "2025-11-30"),
+        _filing("7", "10-K", None),
+        _filing("8", "S-1", "2025-12-31"),
+    ]
+    got = sec_filings.reports(found, FORMS)
+    assert [(r.accession, r.role) for r in got] == [
+        ("1", "annual"),
+        ("3", "interim"),
+        ("4", "transition"),
+    ]
+
+
+def test_filing_rows_name_the_regulator_and_never_the_segment_markers() -> None:
+    """The edge's segments handler owns `segments_parsed_at` and `segments_parser_version` until
+    Phase 6: a writer naming either would re-queue or hide every filing it touched."""
+    rows = sec_filings.filing_rows(
+        [_filing("0000320193-26-000001", "10-K", "2025-09-27")],
+        cik=320193,
+        security_ids=["a", "b"],
+        as_of="2026-10-29T00:00:00+00:00",
+    )
+    assert [r["security_id"] for r in rows] == ["a", "b"]
+    assert all(not k.startswith("segments_") for r in rows for k in r)
+    assert (
+        rows[0]["disclosure_source_code"] == "sec" and rows[0]["source_code"] == "sec-submissions"
+    )
+    assert rows[0]["report_url"].startswith("https://www.sec.gov/Archives/edgar/data/320193/")

@@ -209,6 +209,7 @@ def upsert(
     update: Sequence[str] | None = None,
     only_replacing: Mapping[str, Any] | None = None,
     merge_json: Sequence[str] = (),
+    compare: Sequence[str] | None = None,
 ) -> WriteResult:
     """Insert many rows, updating on conflict — and dedupe on the conflict key first, always.
 
@@ -233,6 +234,14 @@ def upsert(
     field, where a later answer covering the same row with fewer fields is narrower rather than a
     correction (Yahoo's statement lines, measured 2026-10-11: Samsung's 2025-03-31 quarter keeps
     ten of the ~180 lines the edge stored in August). A value the provider restates still wins.
+
+    `compare` NAMES THE COLUMNS WHOSE DIFFERENCE DECIDES WHETHER A STORED ROW IS UPDATED (default:
+    every updated column). For a column that records WHEN rather than WHAT. SEC's company facts are
+    a filer's whole history, re-read whenever it files, so an `as_of` compared like a value would
+    rewrite every unchanged statement on every re-read, and `security_statement`'s trigger re-queues
+    a row for the metric derivation whenever its `as_of` moves. Left out of `compare`, the row keeps
+    the `as_of` of the read that last changed it, and still takes the offered one when a compared
+    column changes.
     """
     if not rows:
         return WriteResult(written=0)
@@ -242,6 +251,8 @@ def upsert(
         raise WriterError("only_replacing guards an update; it needs `update` and a column")
     if merge_json and update is None:
         raise WriterError("merge_json merges on update; with DO NOTHING there is nothing to merge")
+    if compare is not None and update is None:
+        raise WriterError("compare guards an update; with DO NOTHING there is nothing to compare")
 
     target = _qualified(table)
     keys = [_ident(c) for c in conflict]
@@ -266,6 +277,11 @@ def upsert(
         unknown = merged - set(setters)
         if unknown:
             raise WriterError(f"merge_json column(s) {sorted(unknown)} are not being updated")
+        compared = list(setters) if compare is None else [_ident(c) for c in compare]
+        if not compared or set(compared) - set(setters):
+            raise WriterError(
+                f"compare must name at least one updated column, and only those: {compare!r}"
+            )
 
         def offered_value(c: str) -> str:
             if c in merged:
@@ -277,8 +293,8 @@ def upsert(
         # because a NULL on either side makes `<>` NULL, and NULL is not true: a value that became
         # null, or stopped being null, would never be written. The conflict key is left out; it
         # is equal by construction.
-        stored = ", ".join(f"{_STORED}.{_ident(c)}" for c in setters)
-        offered = ", ".join(offered_value(c) for c in setters)
+        stored = ", ".join(f"{_STORED}.{_ident(c)}" for c in compared)
+        offered = ", ".join(offered_value(c) for c in compared)
         action = f"do update set {assignments} where ({stored}) is distinct from ({offered})"
         # The guard's VALUES are parameters like any other, appended after the rows' own: a
         # source code is data, never SQL text.

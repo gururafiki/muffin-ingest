@@ -64,13 +64,22 @@ START_DAYS = 7
 
 PeriodType = Literal["annual", "quarter", "half"]
 
-#: `market.metric.category` to `security_statement.statement`. Share counts are read beside EPS.
-STATEMENT_OF_CATEGORY: dict[str, str] = {
-    "income_statement": "income",
-    "balance_sheet": "balance",
-    "cash_flow": "cash",
-    "share": "income",
-}
+#: EVERY CONCEPT THE READER READS: `market.xbrl_concept` (shared with the edge's readers) and
+#: `market.xbrl_fact_concept`, which only this reader reads (decision 14: xbrl_concept's key carries
+#: no taxonomy, so us-gaap `Assets` cannot sit beside ifrs-full `Assets` for one metric there).
+CONCEPTS_SQL = """
+select metric_code, taxonomy, concept, priority, unit from market.xbrl_concept
+union all
+select metric_code, taxonomy, concept, priority, unit from market.xbrl_fact_concept
+order by 1, 2, 3
+"""
+
+#: WHICH STATEMENT EACH METRIC IS A LINE OF: `market.metric_source_field` for this source, seeded
+#: by muffin-deployment#475 from `metric.category` (share counts beside EPS). The field IS the
+#: metric code, so the derivation reads these rows back with the same table.
+LINES_SQL = """
+select metric_code, statement from market.metric_source_field where source_code = %s
+"""
 
 _PERIOD_TYPE: dict[str, PeriodType] = {
     "FY": "annual",
@@ -135,6 +144,35 @@ class Normalised:
 
     rows: list[dict[str, Any]]
     stats: Counter[str] = field(default_factory=Counter)
+
+
+def concepts(conn: Any) -> list[Concept]:
+    """Every concept read, refusing one that two metrics name.
+
+    ONE METRIC PER CONCEPT is what `statement_rows` assumes when it ranks facts by concept: a
+    concept two metrics named would count for whichever was read last. None does (62 rows measured
+    2026-10-27), and a row that would must fail the run rather than be read for one of them.
+    """
+    with conn.cursor() as cur:
+        cur.execute(CONCEPTS_SQL)
+        found = [
+            Concept(str(m), str(t), str(c), int(p), str(u)) for m, t, c, p, u in cur.fetchall()
+        ]
+    named: dict[tuple[str, str], str] = {}
+    for spec in found:
+        held = named.setdefault((spec.taxonomy, spec.concept), spec.metric_code)
+        if held != spec.metric_code:
+            raise ValueError(
+                f"{spec.taxonomy}:{spec.concept} names both {held} and {spec.metric_code}"
+            )
+    return found
+
+
+def lines(conn: Any) -> dict[str, str]:
+    """Each metric this source writes, with the statement it is a line of."""
+    with conn.cursor() as cur:
+        cur.execute(LINES_SQL, (SOURCE,))
+        return {str(metric): str(statement) for metric, statement in cur.fetchall()}
 
 
 def raw_rows(document: Document, *, http_status: int, run_id: str) -> list[dict[str, Any]]:
@@ -290,7 +328,7 @@ def statement_rows(
 ) -> Normalised:
     """Statement rows for every security the CIK maps to.
 
-    `lines` maps a metric code to its statement (`STATEMENT_OF_CATEGORY` over `market.metric`). A
+    `lines` maps a metric code to its statement (`lines()`, from `metric_source_field`). A
     row's data holds `period_ending` and one key per metric code with a value; its currency is the
     most common one its lines are in (`mixed_currency` counted), withheld when `known_currencies`
     lacks it so a row can never carry a code the metrics cannot reference.
