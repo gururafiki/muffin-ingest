@@ -18,6 +18,8 @@ from muffin_ingest_dagster.defs.platform.heartbeat import heartbeat_schedule
 from muffin_ingest_dagster.defs.prices.automation import SWEEP_SCHEDULE
 from muffin_ingest_dagster.defs.promotion.automation import PROBE_SCHEDULE
 from muffin_ingest_dagster.defs.promotion.raw import ProbeRun
+from muffin_ingest_dagster.defs.sec.automation import DATASET_SCHEDULE, INDEX_SCHEDULE
+from muffin_ingest_dagster.defs.sec.raw import Form4Run
 from muffin_ingest_dagster.lib import runtime
 from tests import loaded_defs
 
@@ -51,12 +53,23 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
     the monitor ends a run that is still writing.
 
     The weekly promotion probe is the third: ~1,000 paced chart requests, bounded by its own budget.
+
+    The SEC lanes are the fourth and fifth: a day's Form 4s at 5 a second, bounded by their own
+    budget, and a quarter's data set of ~100,000 lines written in one transaction.
     """
     limits = _limits()
     assert limits[SWEEP_SCHEDULE] == runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]
     assert limits[COMPANY_SCHEDULE] == runtime.COMPANY_RUN[MAX_RUNTIME_SECONDS_TAG]
     assert limits[PROBE_SCHEDULE] == runtime.PROMOTION_RUN[MAX_RUNTIME_SECONDS_TAG]
-    long_lanes = {SWEEP_SCHEDULE, COMPANY_SCHEDULE, PROBE_SCHEDULE}
+    assert limits[INDEX_SCHEDULE] == runtime.SEC_RUN[MAX_RUNTIME_SECONDS_TAG]
+    assert limits[DATASET_SCHEDULE] == runtime.SEC_DATASET_RUN[MAX_RUNTIME_SECONDS_TAG]
+    long_lanes = {
+        SWEEP_SCHEDULE,
+        COMPANY_SCHEDULE,
+        PROBE_SCHEDULE,
+        INDEX_SCHEDULE,
+        DATASET_SCHEDULE,
+    }
     others = {name: limit for name, limit in limits.items() if name not in long_lanes}
     assert set(others.values()) == {runtime.SHORT_RUN[MAX_RUNTIME_SECONDS_TAG]}, others
     assert float(runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 3 * 579, "below 3x the slowest run"
@@ -64,6 +77,10 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
     assert float(runtime.COMPANY_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * budget, "below 2x the budget"
     probe_budget = ProbeRun().budget_seconds
     assert float(runtime.PROMOTION_RUN[MAX_RUNTIME_SECONDS_TAG]) > probe_budget, "below the budget"
+    form4_budget = Form4Run().budget_seconds
+    assert float(runtime.SEC_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * form4_budget, (
+        "below 2x the budget"
+    )
 
 
 def test_a_plain_schedule_s_tags_reach_its_run_request() -> None:

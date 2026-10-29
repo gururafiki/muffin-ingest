@@ -1,9 +1,10 @@
 """SEC EDGAR through edgartools: its identity, pacing and client, with its own cache switched off.
 
 DECIDED 2026-10-24 (Phase 5 decisions 2 and 9). edgartools is the transport for every SEC request
-of the SEC family, and its parsers read submissions (`extract_company_filings_table`) and Form 4
-(`Form4.parse_xml`). Company facts are read by our own reader, because its concept map carries no
-`ifrs-full` concept and its facts parser turns every exception into `None`, an empty answer.
+of the SEC family, and its parser reads submissions (`extract_company_filings_table`). Company facts
+are read by our own reader, because its concept map carries no `ifrs-full` concept and its facts
+parser turns every exception into `None`, an empty answer. Form 4 is read by our own reader too
+(amended 2026-10-27): `Form4.parse_xml` fetches each reporting owner from SEC while it parses.
 
 THIS IS THE ONLY MODULE THAT IMPORTS `edgar`, AND IT DOES SO LAZILY, for two reasons:
 
