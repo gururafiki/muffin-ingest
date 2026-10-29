@@ -1,17 +1,20 @@
 """Stage 2 of the companies family: Yahoo's documents read into the tables that serve them."""
 
+from collections import Counter
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
 from typing import Any
 
 import dagster as dg
 from dagster import AssetExecutionContext
-from muffin_ingest.facets import company, fx, statements
+from muffin_ingest.facets import company, fiscal, fx, statements
 from muffin_ingest.writers import WriteResult, update_existing, upsert
 
 from muffin_ingest_dagster.defs.companies.partitions import COMPANY_PARTITIONS_PER_RUN
 from muffin_ingest_dagster.defs.companies.raw import FRESH, STATEMENTS, SUMMARY
 from muffin_ingest_dagster.defs.prices.partitions import security_partitions
 from muffin_ingest_dagster.lib import partitioned
+from muffin_ingest_dagster.lib.fiscal_tables import replace_calendars
 from muffin_ingest_dagster.lib.resources import Postgres
 
 #: A RE-PARSE MAY COVER A COMPANY STAGE 1 NEVER REACHED, whose partition has no file yet. With this
@@ -322,3 +325,88 @@ def yahoo_statement(
         {**parsed.stats, "unknown_keys": len(parsed.unknown_keys)},
     )
     return parsed.rows
+
+
+#: The period ends Yahoo published for each security, by period type.
+YAHOO_PERIOD_ENDS = """
+select security_id::text, period_type, array_agg(distinct period_ending order by period_ending)
+  from market.security_statement
+ where security_id = any(%s::uuid[]) and source_code = 'yfinance'
+ group by 1, 2
+"""
+
+#: The securities a SEC calendar already covers. SEC states a filer's years in its own reports, so
+#: its calendar replaces Yahoo's and never the other way round.
+SEC_CALENDARS = """
+select distinct security_id::text from market.fiscal_calendar
+ where security_id = any(%s::uuid[]) and source_code <> 'yfinance'
+"""
+
+
+@dg.asset(
+    deps=[yahoo_statement],
+    partitions_def=security_partitions,
+    backfill_policy=dg.BackfillPolicy.multi_run(COMPANY_PARTITIONS_PER_RUN),
+    pool="sql",
+    group_name="companies",
+    kinds={"postgres"},
+    metadata={"table": "market.fiscal_calendar"},
+    freshness_policy=FRESH,
+    description=(
+        "A fiscal calendar observed from Yahoo's period ends, for companies SEC has none for; then "
+        "each company's statements are labelled with their fiscal period."
+    ),
+)
+def yahoo_fiscal_calendar(
+    context: AssetExecutionContext, postgres: Postgres
+) -> dg.MaterializeResult[None]:
+    """Each company's calendar from the periods Yahoo published (`fiscal.calendar_from_periods`).
+
+    OBSERVED, NOT STATED: no filing names a year here, so each is labelled by the calendar year of
+    its end. That is why SEC's calendar wins wherever it exists, and this never touches one.
+
+    THEN EVERY COMPANY IN THE RUN IS LABELLED, SEC's included: a Yahoo row for a period SEC also
+    reports takes its label from SEC's calendar, which is what lets the serving view show the period
+    once.
+
+    NOT IN THE `yahoo_companies` JOB YET. A label re-queues the statement for the metric
+    derivation, so joining the running rotation would re-derive ~180,000 statements a day before
+    the lane has run on a tiny subset. It is materialised by hand until then, and joins the job at
+    Phase 5 step 7.
+    """
+    sids = list(context.partition_keys)
+    stats: Counter[str] = Counter()
+    with postgres.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SEC_CALENDARS, (sids,))
+            by_sec = {str(r[0]) for r in cur.fetchall()}
+            cur.execute(YAHOO_PERIOD_ENDS, (sids,))
+            ends: dict[str, dict[str, list[date]]] = {}
+            for sid, period_type, days in cur.fetchall():
+                ends.setdefault(str(sid), {})[str(period_type)] = list(days)
+            as_of = datetime.now(UTC).isoformat()
+            wanted: dict[str, tuple[list[dict[str, object]], list[dict[str, object]]]] = {}
+            for sid in sids:
+                if sid in by_sec:
+                    stats["calendar_from_sec"] += 1
+                    continue
+                held = ends.get(sid, {})
+                if not held.get("annual"):
+                    stats["no_annual_periods"] += 1
+                    continue
+                calendar = fiscal.calendar_from_periods(
+                    held["annual"], held.get("quarter", ()), held.get("half", ())
+                )
+                stats.update({f"fiscal_{k}": v for k, v in calendar.stats.items()})
+                if not calendar.regimes:
+                    stats["no_calendar"] += 1
+                    continue
+                wanted[sid] = fiscal.rows(
+                    calendar, security_ids=[sid], source="yfinance", as_of=as_of
+                )
+            stats.update(replace_calendars(cur, wanted))
+            cur.execute("select market.label_fiscal_periods(%s::uuid[])", (sids,))
+            labelled = cur.fetchone()
+            stats["labelled"] = int(labelled[0]) if labelled and labelled[0] is not None else 0
+        conn.commit()
+    return dg.MaterializeResult(metadata={"securities": len(sids), **dict(sorted(stats.items()))})

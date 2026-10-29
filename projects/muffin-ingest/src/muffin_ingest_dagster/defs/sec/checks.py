@@ -1,4 +1,4 @@
-"""Asset checks of the SEC family's insider lanes.
+"""Asset checks of the SEC family: the insider lanes and the filer lane.
 
 A CHECK ON A PARTITIONED ASSET IS ONE RESULT FOR THE WHOLE GRID (Dagster 1.13), so each judges a
 window of partitions rather than the one a run wrote.
@@ -7,10 +7,10 @@ window of partitions rather than the one a run wrote.
 from datetime import UTC, date, datetime, timedelta
 
 import dagster as dg
-from muffin_ingest.facets import insider, sec_index
+from muffin_ingest.facets import insider, sec_filings, sec_index
 
 from muffin_ingest_dagster.defs.sec.partitions import INDEX_LOOKBACK_DAYS, quarter_key
-from muffin_ingest_dagster.defs.sec.raw import DATASET, FORM4, INDEX
+from muffin_ingest_dagster.defs.sec.raw import DATASET, FORM4, INDEX, SUBMISSIONS
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -120,5 +120,138 @@ def form4_days_are_complete(
             "days_read": len(days),
             "named": named_total,
             "short_days": "; ".join(short) or "none",
+        },
+    )
+
+
+# --- the filer lane ------------------------------------------------------------------------------
+
+STATEMENT = dg.AssetKey("sec_statement")
+
+#: How long after its index day a filing may be missing from `security_filing`: the due sensor reads
+#: a day once it is collected (11:00 UTC the next day), and the filer's run follows within the hour.
+FILING_DUE_DAYS = 2
+#: The index days `no_filer_is_behind_its_filings` reads, newest first.
+FILING_DAYS = 7
+
+UNKNOWN_CURRENCY = """
+select st.source_code, count(*) from market.security_statement st
+ where st.currency is not null
+   and not exists (select 1 from market.currency c where c.code = st.currency)
+ group by 1 order by 1
+"""
+
+#: Two statement rows of one source with one fiscal label: one fiscal period plotted twice.
+DUPLICATE_LABELS = """
+select source_code, count(*) from (
+  select source_code from market.security_statement
+   where fiscal_period is not null
+   group by security_id, source_code, statement, period_type, fiscal_year, fiscal_period
+  having count(*) > 1) d
+ group by 1 order by 1
+"""
+
+UNLABELLED = """
+select count(*) filter (where fiscal_period is null), count(*)
+  from market.security_statement where source_code = 'sec-xbrl'
+"""
+
+HELD_FILINGS = """
+select distinct accession_number from market.security_filing where accession_number = any(%s)
+"""
+
+
+def _by_source(postgres: Postgres, sql: str) -> dict[str, int]:
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        return {str(source): int(n) for source, n in cur.fetchall()}
+
+
+@dg.asset_check(asset=STATEMENT, blocking=False)
+def statements_carry_a_known_currency(postgres: Postgres) -> dg.AssetCheckResult:
+    """No statement row names a currency `market.currency` lacks, whichever lane wrote it.
+
+    ERROR: the metric derivation references `market.currency`, so one such row fails its page and
+    every page after it. A Turkish `TRL` did exactly that from 2026-10-21 to 10-24.
+    """
+    found = _by_source(postgres, UNKNOWN_CURRENCY)
+    return dg.AssetCheckResult(
+        passed=not found,
+        severity=dg.AssetCheckSeverity.ERROR,
+        metadata={"rows_by_source": ", ".join(f"{k} {v}" for k, v in found.items()) or "none"},
+    )
+
+
+@dg.asset_check(asset=STATEMENT, blocking=False)
+def one_fiscal_period_one_point(postgres: Postgres) -> dg.AssetCheckResult:
+    """No source holds two rows of one statement for one fiscal period.
+
+    ERROR FOR `sec-xbrl` ONLY: its rows are placed on a canonical period of the filer's own
+    calendar, so a second row with the same label is a defect in the lane. A Yahoo calendar is
+    observed from Yahoo's own period ends, and its duplicates are counted here until the labelling
+    drain is measured (step 8).
+    """
+    found = _by_source(postgres, DUPLICATE_LABELS)
+    return dg.AssetCheckResult(
+        passed=found.get("sec-xbrl", 0) == 0,
+        severity=dg.AssetCheckSeverity.ERROR,
+        metadata={
+            "sec_xbrl_duplicates": found.get("sec-xbrl", 0),
+            "by_source": ", ".join(f"{k} {v}" for k, v in found.items()) or "none",
+        },
+    )
+
+
+@dg.asset_check(asset=STATEMENT, blocking=False)
+def sec_statements_are_labelled(postgres: Postgres) -> dg.AssetCheckResult:
+    """Every SEC statement row carries its fiscal period. A row is written only for a canonical
+    period, so an unlabelled one is a labeller that did not run, or a calendar that changed under
+    it.
+    """
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute(UNLABELLED)
+        row = cur.fetchone()
+    unlabelled, total = (int(row[0]), int(row[1])) if row else (0, 0)
+    return dg.AssetCheckResult(
+        passed=unlabelled == 0,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={"unlabelled": unlabelled, "rows": total},
+    )
+
+
+@dg.asset_check(asset=SUBMISSIONS, blocking=False)
+def no_filer_is_behind_its_filings(
+    context: dg.AssetCheckExecutionContext, postgres: Postgres, raw_store: RawStore
+) -> dg.AssetCheckResult:
+    """Every kept form a tracked filer filed on a recent index day is in `security_filing`.
+
+    A gap is a stopped due sensor, a refused run, or a filer the lane cannot see. Days younger than
+    `FILING_DUE_DAYS` are not judged: the sensor reads a day the morning after.
+    """
+    held_days = context.instance.get_materialized_partitions(INDEX)
+    last = (_today() - timedelta(days=FILING_DUE_DAYS)).isoformat()
+    days = sorted((d for d in held_days if d <= last), reverse=True)[:FILING_DAYS]
+    with postgres.connect() as conn:
+        ciks = set(insider.tracked_issuers(conn))
+        kept = {code for code, form in sec_filings.forms(conn).items() if form.kept}
+        named: dict[str, str] = {}
+        for day in days:
+            for row in raw_store.stored_rows_for(INDEX, day, ("document", "body")):
+                if row.get("document") != "form_index":
+                    continue
+                for line in sec_index.named(sec_index.parse(bytes(row["body"])), ciks, kept):
+                    named[line.accession] = day
+        with conn.cursor() as cur:
+            cur.execute(HELD_FILINGS, (sorted(named),))
+            held = {str(r[0]) for r in cur.fetchall()}
+    missing = sorted(a for a in named if a not in held)
+    return dg.AssetCheckResult(
+        passed=not missing,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "days_read": len(days),
+            "filings_named": len(named),
+            "missing": len(missing),
+            "first_missing": ", ".join(f"{a} ({named[a]})" for a in missing[:5]) or "none",
         },
     )

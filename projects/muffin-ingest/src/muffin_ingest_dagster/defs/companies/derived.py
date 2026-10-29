@@ -76,10 +76,15 @@ def _drain(
     return out
 
 
+#: SEC's statements, written by the SEC family's filer lane. By key, so this family does not import
+#: that one.
+SEC_STATEMENT = dg.AssetKey("sec_statement")
+
+
 @dg.asset(
-    deps=[yahoo_statement],
+    deps=[yahoo_statement, SEC_STATEMENT],
     # EAGER, MINUS THE GATE THAT WOULD KEEP IT FROM EVER FIRING: an unpartitioned asset depends on
-    # every `security` partition, and the rotation always leaves some unmaterialised. Plus a
+    # every `security` and `sec_filer` partition, and neither lane ever holds them all. Plus a
     # half-hourly floor for the edge's writes, which no upstream materialisation announces.
     automation_condition=(
         dg.AutomationCondition.eager().without(~dg.AutomationCondition.any_deps_missing())

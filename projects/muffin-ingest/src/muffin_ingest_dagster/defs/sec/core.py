@@ -10,7 +10,6 @@ from dagster import AssetExecutionContext
 from muffin_ingest.facets import fiscal, fx, insider, sec_facts, sec_filings
 from muffin_ingest.writers import (
     WriteResult,
-    replace_scope,
     retract_unproduced,
     update_existing,
     upsert,
@@ -34,6 +33,7 @@ from muffin_ingest_dagster.defs.sec.raw import (
     SUBMISSIONS,
 )
 from muffin_ingest_dagster.lib import partitioned
+from muffin_ingest_dagster.lib.fiscal_tables import replace_calendars
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
@@ -511,23 +511,19 @@ def _parse_filer(
                 source=sec_facts.SOURCE,
                 as_of=str((facts or main or {}).get("fetched_at")),
             )
-            for sid in sids:
-                replace_scope(
+            # A SEC CALENDAR REPLACES A YAHOO ONE: the scope is the security, whatever wrote it.
+            stats.update(
+                replace_calendars(
                     cur,
-                    "market.fiscal_calendar",
-                    [c for c in calendars if c["security_id"] == sid],
-                    scope={"security_id": sid},
-                    conflict=["security_id", "regime"],
+                    {
+                        sid: (
+                            [c for c in calendars if c["security_id"] == sid],
+                            [p for p in periods if p["security_id"] == sid],
+                        )
+                        for sid in sids
+                    },
                 )
-            _tally(
-                stats,
-                upsert(
-                    cur, "market.fiscal_period", periods,
-                    conflict=["security_id", "regime", "fiscal_year", "fiscal_period"],
-                    update=[c for c in periods[0] if c not in ("security_id", "regime")],
-                ),
-                "calendar_period",
-            )  # fmt: skip
+            )
             stats["calendar_filers"] += 1
             stats["calendar_regimes"] += len(calendar.regimes)
             stats["calendar_52_53"] += any(r.is_52_53_week for r in calendar.regimes)
