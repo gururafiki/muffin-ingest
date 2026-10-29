@@ -29,7 +29,14 @@ INPUTS = json.loads((FIXTURES / "fiscal_inputs.json").read_bytes())
 XBRL = json.loads((FIXTURES / "xbrl_concept.json").read_bytes())
 
 CONCEPTS = [Concept(**c) for c in XBRL["concepts"]]
-LINES = {m: sec_facts.STATEMENT_OF_CATEGORY[c] for m, c in XBRL["categories"].items()}
+#: The mapping muffin-deployment#475 seeded into `metric_source_field` (`sec_facts.lines`).
+STATEMENT_OF_CATEGORY = {
+    "income_statement": "income",
+    "balance_sheet": "balance",
+    "cash_flow": "cash",
+    "share": "income",
+}
+LINES = {m: STATEMENT_OF_CATEGORY[c] for m, c in XBRL["categories"].items()}
 KNOWN = {"USD", "EUR", "DKK", "TWD"}
 
 
@@ -400,7 +407,7 @@ def test_a_metric_no_statement_is_mapped_for_is_counted() -> None:
 
 
 def test_every_category_production_holds_names_a_statement() -> None:
-    assert set(XBRL["categories"].values()) <= set(sec_facts.STATEMENT_OF_CATEGORY)
+    assert set(XBRL["categories"].values()) <= set(STATEMENT_OF_CATEGORY)
 
 
 def test_share_counts_are_read_beside_eps() -> None:
@@ -468,3 +475,49 @@ def test_stage_1_adds_only_its_context_columns() -> None:
     [stored] = sec_facts.raw_rows(document, http_status=404, run_id="r")
     assert set(stored) - set(document.as_row("r")) == sec_facts.CONTEXT_COLUMNS
     assert stored["http_status"] == 404
+
+
+class _Conn:
+    """A connection answering one query with fixed rows."""
+
+    def __init__(self, rows: list[tuple[Any, ...]]) -> None:
+        self.rows = rows
+        self.sql: list[tuple[str, Any]] = []
+
+    def cursor(self) -> _Conn:
+        return self
+
+    def __enter__(self) -> _Conn:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: Any = ()) -> None:
+        self.sql.append((sql, params))
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self.rows
+
+
+def test_concepts_read_both_tables_and_refuse_a_concept_two_metrics_name() -> None:
+    """`statement_rows` ranks facts by concept, so a concept two metrics named would be read for
+    whichever came last. The loader fails rather than choose."""
+    conn = _Conn([("total_assets", "us-gaap", "Assets", 100, "USD")])
+    [spec] = sec_facts.concepts(conn)
+    assert spec == Concept("total_assets", "us-gaap", "Assets", 100, "USD")
+    assert "xbrl_fact_concept" in conn.sql[0][0] and "xbrl_concept" in conn.sql[0][0]
+    clash = _Conn(
+        [
+            ("total_assets", "us-gaap", "Assets", 100, "USD"),
+            ("other", "us-gaap", "Assets", 90, "USD"),
+        ]
+    )
+    with pytest.raises(ValueError, match="us-gaap:Assets names both"):
+        sec_facts.concepts(clash)
+
+
+def test_lines_are_this_source_s_rows_of_metric_source_field() -> None:
+    conn = _Conn([("revenue", "income"), ("total_assets", "balance")])
+    assert sec_facts.lines(conn) == {"revenue": "income", "total_assets": "balance"}
+    assert conn.sql[0][1] == ("sec-xbrl",)

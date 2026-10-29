@@ -689,3 +689,51 @@ def calendar_from_periods(
         _regime(n, g, groups, observed_kind="observed") for n, g in enumerate(groups, start=1)
     ]
     return Calendar(regimes, _canonical(periods, stats), stats)
+
+
+# --- rows ----------------------------------------------------------------------------------------
+
+
+def rows(
+    calendar: Calendar, *, security_ids: Collection[str], source: str, as_of: str
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """`market.fiscal_calendar` and `market.fiscal_period` rows, for every security given.
+
+    One calendar per COMPANY, written under each of its securities: GOOG and GOOGL share Alphabet's
+    years, and `label_fiscal_periods` labels each security's statements from its own rows.
+    """
+    calendars: list[dict[str, object]] = [
+        {
+            "security_id": sid,
+            "regime": r.regime,
+            "source_code": source,
+            "year_end_month": r.year_end_month,
+            "year_end_day": r.year_end_day,
+            "is_52_53_week": r.is_52_53_week,
+            "week_end_isodow": r.week_end_isodow,
+            "first_year_end": r.first_year_end.isoformat(),
+            "last_year_end": r.last_year_end.isoformat() if r.last_year_end else None,
+            "change_kind": r.change_kind,
+            "as_of": as_of,
+        }
+        for sid in security_ids
+        for r in calendar.regimes
+    ]
+    periods: list[dict[str, object]] = [
+        {
+            "security_id": sid,
+            "regime": p.regime,
+            "fiscal_year": p.fiscal_year,
+            "fiscal_period": p.fiscal_period,
+            "period_start": p.period_start.isoformat(),
+            "period_end": p.period_end.isoformat(),
+            "is_canonical": p.is_canonical,
+            "is_observed": p.is_observed,
+            "is_recast": p.is_recast,
+            "source_code": source,
+            "as_of": as_of,
+        }
+        for sid in security_ids
+        for p in calendar.periods
+    ]
+    return calendars, periods

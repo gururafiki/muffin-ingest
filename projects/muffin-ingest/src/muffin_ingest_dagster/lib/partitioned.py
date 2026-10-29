@@ -74,6 +74,7 @@ def by_partition(
     *,
     key: Callable[[Row], str],
     complete: Collection[str] = (),
+    unchanged: Collection[str] = (),
 ) -> Rows | dict[str, Rows]:
     """One object per partition when a run covers several; the rows themselves when it covers one.
 
@@ -96,10 +97,16 @@ def by_partition(
     what is stored — see `Complete`. It is per partition because a single run holds both kinds: the
     price sweep loads a never-collected security in full and extends its neighbour from that
     security's own watermark, in the same 2,500-partition run.
+
+    `unchanged` names the partitions the run visited and found nothing due in: see `Unchanged`.
+    A partition named there that still received rows is written as usual; the rows win.
     """
     marked = frozenset(complete)
+    untouched = frozenset(unchanged)
 
     def wrap(partition_key: str, partition_rows: Rows) -> Rows:
+        if partition_key in untouched and not partition_rows:
+            return Unchanged()
         # AN EMPTY ANSWER NEVER REPLACES — see `Complete`. Marking it here rather than in the
         # manager would still be correct, and doing BOTH is deliberate: the caller says what it
         # asked for, the manager decides what may overwrite stored rows.

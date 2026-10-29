@@ -110,6 +110,37 @@
       ],
       "tags": {}
     },
+    "filer_profile": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_submissions": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "fund_holding": {
       "automation_condition": "eager (e8e6b7c3b9df)",
       "backfill_policy": {
@@ -661,6 +692,36 @@
       ],
       "tags": {}
     },
+    "raw_sec_companyfacts": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
     "raw_sec_daily_index": {
       "automation_condition": null,
       "backfill_policy": {
@@ -762,6 +823,36 @@
         "kind": "time_window",
         "start": "2006-01-01T00:00:00+00:00",
         "timezone": "UTC"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
+    "raw_sec_submissions": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
       },
       "pools": [
         "sec"
@@ -878,6 +969,69 @@
       ],
       "tags": {}
     },
+    "sec_filing": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_submissions": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "sec_fiscal_calendar": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_companyfacts": "IdentityPartitionMapping",
+        "raw_sec_submissions": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "sec_form4_trade": {
       "automation_condition": null,
       "backfill_policy": {
@@ -944,6 +1098,37 @@
         "kind": "time_window",
         "start": "2006-01-01T00:00:00+00:00",
         "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "sec_statement": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_companyfacts": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
       },
       "pools": [
         "sql"
@@ -1025,6 +1210,37 @@
       "partitions": {
         "kind": "dynamic",
         "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "security_former_name": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_submissions": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 2851200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
       },
       "pools": [
         "sql"
@@ -1627,6 +1843,22 @@
         "timezone": "UTC"
       }
     },
+    "sec_filers": {
+      "assets": [
+        "filer_profile",
+        "raw_sec_companyfacts",
+        "raw_sec_submissions",
+        "sec_filing",
+        "sec_fiscal_calendar",
+        "sec_statement",
+        "security_former_name"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      }
+    },
     "sec_insider_datasets": {
       "assets": [
         "raw_sec_insider_dataset",
@@ -1761,6 +1993,12 @@
       "minimum_interval_seconds": 21600,
       "type": "STANDARD"
     },
+    "new_sec_filers": {
+      "default_status": "RUNNING",
+      "jobs": [],
+      "minimum_interval_seconds": 21600,
+      "type": "STANDARD"
+    },
     "new_securities_need_history": {
       "default_status": "RUNNING",
       "jobs": [
@@ -1775,6 +2013,14 @@
         "__anonymous_asset_job_new_symbols_needed"
       ],
       "minimum_interval_seconds": 21600,
+      "type": "STANDARD"
+    },
+    "sec_filers_due": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "sec_filers"
+      ],
+      "minimum_interval_seconds": 900,
       "type": "STANDARD"
     },
     "symbology_rungs": {

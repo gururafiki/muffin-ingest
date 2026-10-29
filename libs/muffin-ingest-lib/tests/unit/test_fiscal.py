@@ -325,3 +325,21 @@ def test_two_ends_for_one_half_keep_one_row() -> None:
     [h1] = [p for p in c.periods if (p.fiscal_year, p.fiscal_period) == (2025, "H1")]
     assert h1.period_end == date(2025, 6, 30)
     assert c.stats["duplicate_label"] == 1
+
+
+def test_rows_write_one_calendar_per_security_and_hold_the_tables_keys() -> None:
+    """GOOG and GOOGL share one CIK, so the calendar is written under each; every row carries the
+    keys `fiscal_calendar` and `fiscal_period` are declared with, and a period's regime exists."""
+    cal = calendar("AAPL")
+    calendars, periods = fiscal.rows(cal, security_ids=["a", "b"], source="sec-xbrl", as_of="t")
+    assert len(calendars) == 2 * len(cal.regimes) and len(periods) == 2 * len(cal.periods)
+    regimes = {(c["security_id"], c["regime"]) for c in calendars}
+    assert len(regimes) == len(calendars)
+    assert {(p["security_id"], p["regime"]) for p in periods} <= regimes
+    keys = Counter(
+        (p["security_id"], p["regime"], p["fiscal_year"], p["fiscal_period"]) for p in periods
+    )
+    assert max(keys.values()) == 1
+    assert (
+        {c["source_code"] for c in calendars} == {"sec-xbrl"} == {p["source_code"] for p in periods}
+    )
