@@ -20,11 +20,12 @@ from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_START_TAG,
     MAX_RUNTIME_SECONDS_TAG,
 )
-from muffin_ingest.facets import fiscal, sec_filings
+from muffin_ingest.facets import fiscal, sec_filings, sec_index
 from muffin_ingest.providers import sec_edgar
 from muffin_ingest.providers.documents import Document
 
 from muffin_ingest_dagster.defs.sec import automation as sec_automation
+from muffin_ingest_dagster.defs.sec import checks as sec_checks
 from muffin_ingest_dagster.defs.sec import core as sec_core
 from muffin_ingest_dagster.defs.sec import raw as sec_raw
 from muffin_ingest_dagster.defs.sec.partitions import (
@@ -101,6 +102,8 @@ def sec(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sec]:
 FILERS: list[tuple[int, list[str]]] = []
 PROFILED: list[str] = []
 CALLS: list[tuple[str, list[Any]]] = []
+#: Answers for the checks' queries, by a fragment of their SQL.
+ANSWERS: dict[str, list[tuple[Any, ...]]] = {}
 FORMS = [
     ("10-K", True, True, False, "annual"),
     ("10-Q", True, True, False, "interim"),
@@ -128,7 +131,10 @@ class Cursor:
         text = " ".join(sql.split())
         CALLS.append((text, list(params)))
         self.rows, self.rowcount = [], 0
-        if "from market.security" in text and "group by cik" in text:
+        answered = [rows for marker, rows in ANSWERS.items() if marker in text]
+        if answered:
+            self.rows = list(answered[0])
+        elif "from market.security" in text and "group by cik" in text:
             self.rows = list(FILERS)
         elif "from market.filing_form" in text:
             self.rows = list(FORMS)
@@ -196,6 +202,7 @@ def _clean() -> Iterator[None]:
     FILERS[:] = [(AAPL, ["s-a1", "s-a2"]), (TSM, ["s-tsm"]), (ABSENT, ["s-x"])]
     PROFILED.clear()
     CALLS.clear()
+    ANSWERS.clear()
     yield
 
 
@@ -616,3 +623,66 @@ def test_the_due_sensor_requests_each_chunk_holding_a_due_filer_once(
 def test_a_filer_run_has_room_for_its_budget() -> None:
     budget = sec_raw.SecFilerRun().budget_seconds
     assert float(runtime.SEC_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * budget
+
+
+# --- the checks ----------------------------------------------------------------------------------
+
+
+def _result(value: Any) -> dg.AssetCheckResult:
+    assert isinstance(value, dg.AssetCheckResult)
+    return value
+
+
+def test_a_statement_currency_the_metrics_cannot_reference_fails_whoever_wrote_it() -> None:
+    ANSWERS["not exists (select 1 from market.currency"] = [("yfinance", 3)]
+    failed = _result(sec_checks.statements_carry_a_known_currency(FakePostgres()))
+    assert failed.passed is False and failed.severity == dg.AssetCheckSeverity.ERROR
+    assert failed.metadata["rows_by_source"].value == "yfinance 3"
+    ANSWERS["not exists (select 1 from market.currency"] = []
+    assert _result(sec_checks.statements_carry_a_known_currency(FakePostgres())).passed
+
+
+def test_a_fiscal_period_twice_fails_for_sec_and_is_counted_for_yahoo() -> None:
+    """SEC rows are placed on canonical periods, so a duplicate is the lane's defect; Yahoo's are
+    observed and counted until the labelling drain is measured."""
+    ANSWERS["having count(*) > 1"] = [("yfinance", 4)]
+    yahoo = _result(sec_checks.one_fiscal_period_one_point(FakePostgres()))
+    assert yahoo.passed and yahoo.metadata["by_source"].value == "yfinance 4"
+    ANSWERS["having count(*) > 1"] = [("sec-xbrl", 1), ("yfinance", 4)]
+    sec = _result(sec_checks.one_fiscal_period_one_point(FakePostgres()))
+    assert sec.passed is False and sec.metadata["sec_xbrl_duplicates"].value == 1
+
+
+def test_an_unlabelled_sec_statement_warns() -> None:
+    ANSWERS["filter (where fiscal_period is null)"] = [(2, 120)]
+    result = _result(sec_checks.sec_statements_are_labelled(FakePostgres()))
+    assert result.passed is False and result.severity == dg.AssetCheckSeverity.WARN
+    ANSWERS["filter (where fiscal_period is null)"] = [(0, 120)]
+    assert _result(sec_checks.sec_statements_are_labelled(FakePostgres())).passed
+
+
+def test_a_filing_the_index_named_and_the_lane_never_wrote_is_named(
+    tmp_path: Path, sec: Sec
+) -> None:
+    instance = dg.DagsterInstance.ephemeral()
+    sec.answers[sec_edgar.quarter_listing_url(date(2026, 10, 23))] = (200, LISTING)
+    sec.answers[sec_edgar.daily_index_url(date(2026, 10, 23))] = (200, INDEX_1023)
+    store = RawStore(base_path=str(tmp_path))
+    assert dg.materialize(
+        [sec_raw.raw_sec_daily_index], instance=instance, partition_key="2026-10-23",
+        resources={"parquet_io": ParquetIOManager(str(tmp_path)), "raw_store": store},
+    ).success  # fmt: skip
+    FILERS[:] = [(AMEX, ["s-amex"]), (FLOWERS, ["s-flowers"])]
+    lines = sec_index.parse(INDEX_1023)
+    [amex] = [x.accession for x in lines if x.cik == AMEX]
+    [flowers] = [x.accession for x in lines if x.cik == FLOWERS]
+    ANSWERS["select distinct accession_number from market.security_filing"] = [(amex,)]
+
+    result = _result(
+        sec_checks.no_filer_is_behind_its_filings(
+            dg.build_asset_check_context(instance=instance), FakePostgres(), store
+        )
+    )
+    assert result.passed is False
+    assert result.metadata["filings_named"].value == 2
+    assert result.metadata["first_missing"].value == f"{flowers} (2026-10-23)"

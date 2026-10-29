@@ -32,6 +32,22 @@
       "additional_deps": [],
       "blocking": false
     },
+    "raw_sec_submissions:no_filer_is_behind_its_filings": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "sec_statement:one_fiscal_period_one_point": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "sec_statement:sec_statements_are_labelled": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "sec_statement:statements_carry_a_known_currency": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "security_fundamentals:fundamental_units_are_conventional": {
       "additional_deps": [],
       "blocking": false
@@ -59,6 +75,7 @@
       "backfill_policy": null,
       "code_version": null,
       "deps": {
+        "sec_statement": null,
         "yahoo_statement": null
       },
       "execution_type": "MATERIALIZATION",
@@ -1636,6 +1653,37 @@
       },
       "group_name": "prices",
       "io_manager_key": "postgres_io",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "yahoo_fiscal_calendar": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "yahoo_statement": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
       "kinds": [
         "postgres"
       ],
