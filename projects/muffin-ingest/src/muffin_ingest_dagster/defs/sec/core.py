@@ -333,10 +333,15 @@ def sec_filer_facts(
         if not sids:
             stats["filers_not_mapped"] += 1
             continue
-        runs = raw_store.stored_rows_for(SUBMISSIONS, key, ("run_id",))
-        runs = [*runs, *raw_store.stored_rows_for(COMPANYFACTS, key, ("run_id",))]
+        runs = raw_store.stored_rows_for(SUBMISSIONS, key, ("run_id", "http_status"))
+        runs = [*runs, *raw_store.stored_rows_for(COMPANYFACTS, key, ("run_id", "http_status"))]
         fresh = any(r.get("run_id") == run_id for r in runs)
-        if not (fresh or config.reparse or any(s not in profiled for s in sids)):
+        # A FILER SEC DOES NOT KNOW has no profile and never will: without an answered document it
+        # is not a newly mapped share class, and re-reading its absences every visit says nothing.
+        new_class = any(r.get("http_status") == 200 for r in runs) and any(
+            s not in profiled for s in sids
+        )
+        if not (fresh or config.reparse or new_class):
             stats["filers_unchanged"] += 1
             continue
         stats["filers_parsed"] += 1

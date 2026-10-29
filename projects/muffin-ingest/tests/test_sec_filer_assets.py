@@ -419,6 +419,19 @@ def test_a_body_that_is_not_company_facts_never_replaces_the_stored_answer(
     assert bytes(facts["body"]) == AAPL_FACTS
 
 
+def test_a_filer_sec_does_not_know_is_parsed_once_not_every_visit(tmp_path: Path, sec: Sec) -> None:
+    """It has no profile and never will, so "a share class with no profile" must not re-read its
+    absences on every visit (step 5: the unknown CIK was parsed on each one)."""
+    sec.answers[sec_edgar.submissions_url(ABSENT)] = (404, b"")
+    sec.answers[sec_edgar.companyfacts_url(ABSENT)] = (404, b"")
+    sec.answers[sec_edgar.submissions_url(sec_edgar.CONTROL_CIK)] = (200, AAPL_SUB)
+    instance = instance_with(K_ABSENT)
+    first = run(tmp_path, instance, [K_ABSENT], stage2=True)
+    assert meta(first, "sec_statement")["filers_parsed"] == 1
+    again = run(tmp_path, instance, [K_ABSENT], stage2=True)
+    assert meta(again, "sec_statement")["filers_unchanged"] == 1
+
+
 def test_a_cik_no_equity_holds_is_not_askable(tmp_path: Path, sec: Sec) -> None:
     key = cik_key(12345)
     result = run(tmp_path, instance_with(key), [key])

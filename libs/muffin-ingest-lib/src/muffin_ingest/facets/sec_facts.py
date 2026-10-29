@@ -28,8 +28,9 @@ facts refused, 666 durations off the calendar (Google Inc's 2015 quarters, filed
 CIK; NVO's monthly 6-K facts; ESCO's off-cycle comparatives).
 
 AN INSTANT AT A FISCAL-YEAR END IS WRITTEN TWICE, as `annual` and as `quarter` (the fourth quarter's
-balance sheet). The ratio views take a stock metric from its latest `quarter` row, so an annual-only
-filer (20-F, 40-F) would otherwise have no balance sheet for them at all.
+balance sheet), where the calendar has a fourth quarter ending there. The ratio views take a stock
+metric from its latest `quarter` row, so an annual-only filer (20-F, 40-F) would otherwise have no
+balance sheet for them at all; its calendar computes the quarters, so it has one.
 
 THE LABEL IS NOT WRITTEN HERE. `market.label_fiscal_periods` is the one labeller (decision 7): two
 lanes writing labels would be two rules free to disagree.
@@ -286,7 +287,10 @@ def _targets(
     if fact.start is None:
         labels = {p.fiscal_period for p in canonical}
         if "FY" in labels:
-            return ["annual", "quarter"], "instant"
+            # THE FOURTH QUARTER'S BALANCE SHEET ONLY WHERE A FOURTH QUARTER ENDS: a successor's
+            # older years (Bristow's March years, stated under Era's CIK) host no quarters, and a
+            # quarter row there could never be labelled (measured in Phase 5 step 5).
+            return (["annual", "quarter"] if "Q4" in labels else ["annual"]), "instant"
         if quarterly and labels & {"Q1", "Q2", "Q3"}:
             return ["quarter"], "instant"
         if not quarterly and "H1" in labels:

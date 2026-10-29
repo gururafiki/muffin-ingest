@@ -321,6 +321,15 @@ def test_an_instant_is_written_for_the_periods_that_end_on_it() -> None:
     assert out.stats["instant_off_calendar"] == 1
 
 
+def test_a_year_with_no_fourth_quarter_gets_no_quarter_balance_sheet() -> None:
+    """Bristow's March years, stated under Era's CIK, are canonical years with no quarters. A
+    `quarter` row at their end could never be labelled (1 of 2,489 rows in step 5's run)."""
+    successor = Calendar(regimes=[], periods=[period("FY", "2018-04-01", "2019-03-31")])
+    raw = body({("ifrs-full", ASSETS.concept): {"USD": [fact("2019-03-31", 10)]}})
+    out = run(raw, successor)
+    assert {(r["period_type"], r["period_ending"]) for r in out.rows} == {("annual", "2019-03-31")}
+
+
 def test_a_quarterly_filer_has_no_half_years_and_a_semi_annual_filer_does() -> None:
     """The calendar computes H1/H2 for years before a filer's first 10-Q. For a quarterly filer
     those are predecessor years (Bristow's 2012 from Era's 10-Q), and a lone half row is noise."""
