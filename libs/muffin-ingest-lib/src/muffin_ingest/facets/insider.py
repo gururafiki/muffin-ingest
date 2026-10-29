@@ -55,8 +55,26 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal
 
+from muffin_ingest.providers.documents import Document
+
 #: What stage 1 adds to a stored data set: nothing. The quarter is the partition key.
 CONTEXT_COLUMNS: frozenset[str] = frozenset()
+
+#: What stage 1 adds to a stored Form 4: the accession it asked for, which is the request's
+#: parameter and the day file's merge key. The body names it too, but only once parsed.
+FORM4_CONTEXT_COLUMNS = frozenset({"accession"})
+
+#: The forms the Form 4 lane fetches from each day's index. A Form 5 arrives in the data set.
+FORM4_FORMS = frozenset({"4", "4/A"})
+
+#: Every equity of each issuer CIK: the edge's attribution rule (a filing names the issuer, and
+#: Alphabet's name only `GOOG`).
+TRACKED_ISSUERS = """
+select cik, array_agg(security_id::text order by security_id)
+  from market.security
+ where cik is not null and security_type_code = 'equity'
+ group by cik
+"""
 
 #: `market.data_source` codes. The edge wrote `sec-form4`, and the Form 4 lane keeps it.
 SOURCE_DATASET = "sec-form345"
@@ -136,6 +154,30 @@ class _Line:
 
 class Form4Unreadable(RuntimeError):
     """The body is not a Form 3, 4 or 5 submission. Never read as a filing with no lines."""
+
+
+def tracked_issuers(conn: Any) -> dict[int, list[str]]:
+    """Each issuer CIK we track, with the equities a filing of it is attributed to."""
+    with conn.cursor() as cur:
+        cur.execute(TRACKED_ISSUERS)
+        return {int(cik): [str(s) for s in ids] for cik, ids in cur.fetchall()}
+
+
+def transaction_codes(conn: Any) -> dict[str, str]:
+    """`market.insider_transaction_code`: SEC's code and the name a row is written with."""
+    with conn.cursor() as cur:
+        cur.execute("select code, name from market.insider_transaction_code")
+        return {str(code): str(name) for code, name in cur.fetchall()}
+
+
+def form4_raw_rows(document: Document, *, accession: str, run_id: str) -> list[dict[str, Any]]:
+    """The stored row of one Form 4: its complete submission text whole, and the accession asked."""
+    return [{**document.as_row(run_id), "accession": accession}]
+
+
+def dataset_raw_rows(document: Document, *, run_id: str) -> list[dict[str, Any]]:
+    """The stored row of one quarter's data set: the zip whole."""
+    return [document.as_row(run_id)]
 
 
 def quarter_bounds(year: int, quarter: int) -> tuple[date, date]:

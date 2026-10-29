@@ -20,6 +20,18 @@
       "additional_deps": [],
       "blocking": false
     },
+    "raw_sec_daily_index:every_business_day_has_an_index": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "raw_sec_form4:form4_days_are_complete": {
+      "additional_deps": [],
+      "blocking": false
+    },
+    "raw_sec_insider_dataset:insider_quarters_are_held": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "security_fundamentals:fundamental_units_are_conventional": {
       "additional_deps": [],
       "blocking": false
@@ -649,6 +661,113 @@
       ],
       "tags": {}
     },
+    "raw_sec_daily_index": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": null,
+        "type": "SINGLE_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 172800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-04-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
+    "raw_sec_form4": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 1,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_daily_index": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 172800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-04-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
+    "raw_sec_insider_dataset": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 1,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 10368000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 1 1,4,7,10 *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m",
+        "kind": "time_window",
+        "start": "2006-01-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
     "raw_sector_performance": {
       "automation_condition": null,
       "backfill_policy": null,
@@ -756,6 +875,78 @@
       },
       "pools": [
         "yahoo"
+      ],
+      "tags": {}
+    },
+    "sec_form4_trade": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 1,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_form4": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 172800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-04-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "sec_insider_trade": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 1,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_insider_dataset": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 10368000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "sec",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 1 1,4,7,10 *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m",
+        "kind": "time_window",
+        "start": "2006-01-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
       ],
       "tags": {}
     },
@@ -1419,6 +1610,39 @@
         "timezone": "UTC"
       }
     },
+    "sec_daily_index": {
+      "assets": [
+        "raw_sec_daily_index",
+        "raw_sec_form4",
+        "sec_form4_trade"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2026-04-01T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
+    "sec_insider_datasets": {
+      "assets": [
+        "raw_sec_insider_dataset",
+        "sec_insider_trade"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 1 1,4,7,10 *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m",
+        "kind": "time_window",
+        "start": "2006-01-01T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
     "yahoo_companies": {
       "assets": [
         "raw_yahoo_statements",
@@ -1474,6 +1698,18 @@
       "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "nightly_prices"
+    },
+    "sec_daily_index": {
+      "cron_schedule": "0 11 * * *",
+      "default_status": "STOPPED",
+      "execution_timezone": null,
+      "job": "sec_daily_index"
+    },
+    "sec_insider_datasets": {
+      "cron_schedule": "45 11 * * 1",
+      "default_status": "STOPPED",
+      "execution_timezone": null,
+      "job": "sec_insider_datasets"
     },
     "weekly_promotion_wave": {
       "cron_schedule": "17 6 * * 1",
