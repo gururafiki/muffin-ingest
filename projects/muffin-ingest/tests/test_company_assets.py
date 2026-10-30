@@ -39,7 +39,7 @@ from muffin_ingest_dagster.defs.companies import raw as company_raw
 from muffin_ingest_dagster.defs.prices import partitions as prices_partitions
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, PostgresIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
-from tests import FIXTURES
+from tests import FIXTURES, loaded_defs
 
 AAPL = ("11111111-1111-1111-1111-111111111111", "AAPL", 5.0)
 VOD = ("22222222-2222-2222-2222-222222222222", "VOD.L", 4.0)
@@ -673,3 +673,16 @@ def test_the_schedule_runs() -> None:
     """
     schedule = company_automation.yahoo_companies
     assert schedule.default_status == dg.DefaultScheduleStatus.RUNNING
+
+
+def test_the_calendar_runs_in_the_company_job_after_the_statements() -> None:
+    """Its labels must be on the statements before the derivation reads them (Phase 5 step 7a).
+
+    In the same run as `yahoo_statement` and downstream of it: a calendar from yesterday's period
+    ends would label a statement Yahoo published today with nothing, and leave it so for a week.
+    """
+    job = company_automation.yahoo_companies_job
+    selected = job.selection.resolve(loaded_defs().resolve_asset_graph())
+    assert dg.AssetKey("yahoo_fiscal_calendar") in selected
+    calendar = loaded_defs().resolve_assets_def("yahoo_fiscal_calendar")
+    assert dg.AssetKey("yahoo_statement") in calendar.dependency_keys

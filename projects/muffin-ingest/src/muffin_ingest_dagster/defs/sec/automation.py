@@ -1,7 +1,15 @@
 """The SEC family's jobs, schedules and sensors.
 
-Everything that asks SEC ships STOPPED until the lanes have run live on a tiny subset (step 7).
-`new_sec_filers` asks nothing, so it runs: it only makes the filer grid match the CIKs we hold.
+Everything that asks SEC shipped STOPPED until the lanes had run live on a tiny subset (Phase 5
+step 6, 2026-10-29). What runs now, and why the rest does not:
+- `new_sec_filers` asks nothing; it only makes the filer grid match the CIKs we hold.
+- `sec_daily_index` runs (step 7a, 2026-10-30): one small index and a day's Form 4s at 11:00.
+- `sec_filers_due` waits for the CIK grid's backfill (step 8). On its first tick every filer never
+  collected is due, which is the whole grid in ~75 runs holding `sql` for ~5 hours from whenever it
+  starts; started by a roll in the evening, that runs into the 00:00 price night.
+- `sec_insider_datasets` waits for a fix: it fails a run on every unpublished quarter, which fires
+  "A Dagster run failed" each Monday for months, and it asks only the newest quarter
+  (`docs/deferred/2026-10-30-the-insider-data-set-schedule-fails-until-sec-publishes.md`).
 """
 
 from collections.abc import Sequence
@@ -79,7 +87,9 @@ sec_insider_datasets_job = dg.define_asset_job(
     # 11:00 UTC: SEC publishes a day's index at ~02:01 UTC, and the price night (00:00), the
     # symbology re-ask (03:00) and the company lane (03:30-~06:00) are done.
     cron_schedule="0 11 * * *",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING SINCE 2026-10-30 (Phase 5 step 7a), declared here so a reset of Dagster's state
+    # cannot stop it. Live on 10-26..10-28: one listing and one day per run, every Form 4 answered.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="Yesterday's index and Form 4s, and any day of the last ten not collected.",
 )
 def sec_daily_index(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunRequest]:
