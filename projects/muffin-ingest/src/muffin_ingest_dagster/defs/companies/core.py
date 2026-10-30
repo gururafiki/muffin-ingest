@@ -369,10 +369,9 @@ def yahoo_fiscal_calendar(
     reports takes its label from SEC's calendar, which is what lets the serving view show the period
     once.
 
-    NOT IN THE `yahoo_companies` JOB YET. A label re-queues the statement for the metric
-    derivation, so joining the running rotation would re-derive ~180,000 statements a day before
-    the lane has run on a tiny subset. It is materialised by hand until then, and joins the job at
-    Phase 5 step 7.
+    IN THE `yahoo_companies` JOB SINCE 2026-10-30 (Phase 5 step 7a), after a live run on five
+    companies plus Apple. A label re-queues the statement for the metric derivation, so the first
+    rotation re-derives ~180,000 statements a day; one derivation run drained 161,001 in 460 s.
     """
     sids = list(context.partition_keys)
     stats: Counter[str] = Counter()
