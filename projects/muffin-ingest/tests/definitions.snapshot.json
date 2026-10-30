@@ -1982,7 +1982,7 @@
     },
     "sec_daily_index": {
       "cron_schedule": "0 11 * * *",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "sec_daily_index"
     },

@@ -3,10 +3,9 @@
 Everything that asks SEC shipped STOPPED until the lanes had run live on a tiny subset (Phase 5
 step 6, 2026-10-29). What runs now, and why the rest does not:
 - `new_sec_filers` asks nothing; it only makes the filer grid match the CIKs we hold.
-- `sec_daily_index` waits for the insider summary to pick between writers. Its Form 4 rows land in
-  `insider_trade` beside the edge's, and `security_insider_summary` counts every row, so a trade
-  both record is counted twice (213 edge rows in the days it would collect first; 34,811 in the
-  90-day window the Form 4 backfill covers). Turned on in step 7a and off again the same evening.
+- `sec_daily_index` runs (since 2026-10-30, step 7a). Its Form 4 rows land in `insider_trade` beside
+  the edge's, and `security_insider_summary` counts an edge row only on a day the lane has not
+  collected (muffin-deployment#478); before that it counted both, so this waited for it.
 - `sec_filers_due` waits for the CIK grid's backfill (step 8). On its first tick every filer never
   collected is due, which is the whole grid in ~75 runs holding `sql` for ~5 hours from whenever it
   starts; started by a roll in the evening, that runs into the 00:00 price night.
@@ -90,10 +89,10 @@ sec_insider_datasets_job = dg.define_asset_job(
     # 11:00 UTC: SEC publishes a day's index at ~02:01 UTC, and the price night (00:00), the
     # symbology re-ask (03:00) and the company lane (03:30-~06:00) are done.
     cron_schedule="0 11 * * *",
-    # STOPPED until `security_insider_summary` picks between the edge's rows and this lane's
-    # (module docstring). Live on 10-26..10-28: one listing and one day per run, every Form 4
-    # answered.
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING SINCE 2026-10-30 (Phase 5 step 7a), declared here so a reset of Dagster's state
+    # cannot stop it, once `security_insider_summary` picked between writers (module docstring).
+    # Live on 10-26..10-28: one listing and one day per run, every Form 4 answered.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="Yesterday's index and Form 4s, and any day of the last ten not collected.",
 )
 def sec_daily_index(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunRequest]:
