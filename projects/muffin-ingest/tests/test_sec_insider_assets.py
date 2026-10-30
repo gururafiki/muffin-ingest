@@ -23,6 +23,7 @@ from dagster._core.storage.tags import (
 from muffin_ingest.providers import sec_edgar
 from muffin_ingest.providers.documents import Document
 
+from muffin_ingest_dagster.defs.sec import automation as sec_automation
 from muffin_ingest_dagster.defs.sec import core as sec_core
 from muffin_ingest_dagster.defs.sec import raw as sec_raw
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
@@ -364,11 +365,61 @@ def test_a_quarter_s_data_set_retracts_both_lanes_then_writes(tmp_path: Path, se
     assert m["filings"] == 2 and m["retracted"] == 7
 
 
-def test_a_quarter_not_published_fails_and_writes_nothing(tmp_path: Path, sec: Sec) -> None:
+def test_a_quarter_not_published_ends_the_run_and_claims_nothing(tmp_path: Path, sec: Sec) -> None:
+    """A 404 is SEC saying "not yet", which is correct behaviour and must not fail the run: a failed
+    run fires "A Dagster run failed" for six hours, and SEC was four months late with 2026q2.
+
+    Nothing is materialised, so the quarter still reads as not held; stage 2 is skipped in the same
+    run; and an observation records that it was asked.
+    """
     sec.answers[sec_edgar.insider_dataset_url(2026, 2)] = (404, b"<Error/>")
-    result = run(tmp_path, [sec_raw.raw_sec_insider_dataset], ["2026-04"])
-    assert not result.success
+    result = run(
+        tmp_path, [sec_raw.raw_sec_insider_dataset, sec_core.sec_insider_trade], ["2026-04"]
+    )
+    assert result.success
+    assert not result.get_asset_materialization_events()
     assert not list(tmp_path.rglob("*.parquet"))
+    observed = [
+        e.asset_observation_data.asset_observation
+        for e in result.all_events
+        if e.event_type_value == "ASSET_OBSERVATION"
+    ]
+    assert [(o.partition, o.metadata["published"].value) for o in observed] == [("2026-04", False)]
+    skipped = [e.step_key for e in result.all_events if e.event_type_value == "STEP_SKIPPED"]
+    assert skipped == ["sec_insider_trade"]
+    assert not [sql for sql, _ in CALLS if sql.startswith(("insert", "delete"))]
+
+
+# --- the data-set schedule -----------------------------------------------------------------------
+
+
+def _requests(instance: dg.DagsterInstance, when: datetime) -> list[dg.RunRequest]:
+    with dg.build_schedule_context(instance=instance, scheduled_execution_time=when) as context:
+        requests = sec_automation.sec_insider_datasets(context)
+    assert isinstance(requests, list)
+    return requests
+
+
+def test_the_schedule_asks_every_unheld_quarter_from_the_form_4_grid_s_start() -> None:
+    """2026q2 and 2026q3 on 2026-11-02, oldest first; never 2026q1 or earlier, which is history."""
+    monday = datetime(2026, 11, 2, 11, 45, tzinfo=UTC)
+    with dg.instance_for_test() as instance:
+        asked = [r.partition_key for r in _requests(instance, monday)]
+        assert asked == ["2026-04", "2026-07"], "every quarter, not just the newest"
+
+        instance.report_runless_asset_event(
+            dg.AssetMaterialization(asset_key=sec_raw.DATASET, partition="2026-04")
+        )
+        assert [r.partition_key for r in _requests(instance, monday)] == ["2026-07"]
+
+
+def test_an_unpublished_quarter_is_asked_again_the_next_week() -> None:
+    """Dagster launches a run key once per schedule, so the key must change with the tick."""
+    with dg.instance_for_test() as instance:
+        first = _requests(instance, datetime(2026, 11, 2, 11, 45, tzinfo=UTC))
+        second = _requests(instance, datetime(2026, 11, 9, 11, 45, tzinfo=UTC))
+    assert [r.partition_key for r in first] == [r.partition_key for r in second]
+    assert not {r.run_key for r in first} & {r.run_key for r in second}
 
 
 def test_the_fixture_zip_is_a_data_set() -> None:

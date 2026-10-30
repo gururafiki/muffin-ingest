@@ -8,7 +8,7 @@ is partitioned by CIK and visited when the filer files, or on its floor day.
 import json
 import time
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -287,19 +287,37 @@ def _quarter(day: date) -> tuple[int, int]:
     group_name="sec",
     kinds={"sec", "parquet"},
     freshness_policy=FRESH_QUARTER,
+    # NOT PUBLISHED YET ENDS THE RUN CLAIMING NOTHING, and does not fail it: SEC was four months
+    # late with 2026q2, and a failed run fires "A Dagster run failed" for six hours, every week,
+    # on correct behaviour.
+    output_required=False,
     description="SEC's Insider Transactions Data Set for one quarter, the zip kept whole.",
 )
-def raw_sec_insider_dataset(context: AssetExecutionContext) -> Any:
-    """One quarter's `<yyyy>q<n>_form345.zip`. A 404 is a quarter not published yet: the run
-    fails and claims nothing, rather than filing a quarter with no trades."""
+def raw_sec_insider_dataset(context: AssetExecutionContext) -> Iterator[dg.Output[Any]]:
+    """One quarter's `<yyyy>q<n>_form345.zip`.
+
+    A 404 is a quarter SEC has not published yet. Nothing is materialised, so the partition still
+    reads as not held and stage 2 is skipped in the same run; an `AssetObservation` records that it
+    was asked, so "not published" stays distinguishable from "never asked".
+    """
     year, quarter = quarter_of(context.partition_key)
     answer = sec_edgar.fetch(
         sec_edgar.insider_dataset_url(year, quarter), provider="sec", timeout_s=180
     )
     if answer.status == 404:
-        raise dg.Failure(f"SEC has not published {year}q{quarter}'s insider data set yet")
-    context.add_output_metadata({"bytes": len(answer.document.body), "calls": 1})
-    return insider.dataset_raw_rows(answer.document, run_id=context.run.run_id)
+        context.log.info("SEC has not published %sq%s's insider data set yet", year, quarter)
+        context.log_event(
+            dg.AssetObservation(
+                asset_key=context.asset_key,
+                partition=context.partition_key,
+                metadata={"published": False, "calls": 1},
+            )
+        )
+        return
+    yield dg.Output(
+        insider.dataset_raw_rows(answer.document, run_id=context.run.run_id),
+        metadata={"bytes": len(answer.document.body), "calls": 1},
+    )
 
 
 # --- the filer lane ------------------------------------------------------------------------------

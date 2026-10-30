@@ -9,9 +9,10 @@ step 6, 2026-10-29). What runs now, and why the rest does not:
 - `sec_filers_due` waits for the CIK grid's backfill (step 8). On its first tick every filer never
   collected is due, which is the whole grid in ~75 runs holding `sql` for ~5 hours from whenever it
   starts; started by a roll in the evening, that runs into the 00:00 price night.
-- `sec_insider_datasets` waits for a fix: it fails a run on every unpublished quarter, which fires
-  "A Dagster run failed" each Monday for months, and it asks only the newest quarter
-  (`docs/deferred/2026-10-30-the-insider-data-set-schedule-fails-until-sec-publishes.md`).
+- `sec_insider_datasets` runs (since 2026-10-30): weekly, every quarter from the Form 4 grid's start
+  that is not held. A quarter SEC has not published ends its run claiming nothing rather than
+  failing it (umbrella note
+  `docs/deferred/2026-10-30-the-insider-data-set-schedule-fails-until-sec-publishes.md`).
 """
 
 from collections.abc import Sequence
@@ -37,6 +38,7 @@ from muffin_ingest_dagster.defs.sec.partitions import (
     cik_key,
     insider_quarters,
     on_floor,
+    quarter_key,
     sec_days,
     sec_filers,
 )
@@ -109,27 +111,41 @@ def sec_daily_index(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunReq
     ]
 
 
+#: THE FIRST QUARTER THE SCHEDULE OWNS: the one the Form 4 grid starts in. Its data set replaces
+#: the Form 4 rows for its days. Earlier quarters are history, an operator backfill (step 8), so a
+#: schedule turned on can never launch eighty quarters and ~5 GB by itself.
+FIRST_SCHEDULED_QUARTER = quarter_key(sec_days.start.year, (sec_days.start.month - 1) // 3 + 1)
+
+
 @dg.schedule(
     name=DATASET_SCHEDULE,
     job=sec_insider_datasets_job,
     # WEEKLY, NOT DAILY: a quarter's set came ~7 days after the quarter until 2026q2, which SEC had
-    # not published four months on. A 404 fails the run claiming nothing, so a daily ask would leave
-    # a failed run a day for months; a quarterly product is checked weekly.
+    # not published four months on. A quarterly product is checked weekly.
     cron_schedule="45 11 * * 1",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
-    description="The newest completed quarter's insider data set, until SEC publishes it.",
+    # RUNNING SINCE 2026-10-30, declared here so a reset of Dagster's state cannot stop it.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+    description="Each completed quarter's insider data set from 2026q2 on, until SEC publishes it.",
 )
 def sec_insider_datasets(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunRequest]:
-    """The newest completed quarter, while it is not held. History is an operator backfill."""
+    """Every completed quarter from `FIRST_SCHEDULED_QUARTER` that is not held, oldest first.
+
+    EVERY QUARTER, NOT THE NEWEST: SEC can publish an older quarter after a newer one has ended, and
+    asking only the newest would never ask for it again.
+
+    THE RUN KEY CARRIES THE TICK'S DAY. Dagster launches a run key once per schedule, so a key of
+    the quarter alone would ask an unpublished quarter on its first Monday and never again.
+    """
     keys = insider_quarters.get_partition_keys(
         current_time=context.scheduled_execution_time, dynamic_partitions_store=context.instance
     )
-    if not keys:
-        return []
-    newest = keys[-1]
-    if newest in context.instance.get_materialized_partitions(DATASET):
-        return []
-    return [dg.RunRequest(run_key=f"{DATASET_SCHEDULE}:{newest}", partition_key=newest)]
+    held = context.instance.get_materialized_partitions(DATASET)
+    tick = context.scheduled_execution_time.date().isoformat()
+    return [
+        dg.RunRequest(run_key=f"{DATASET_SCHEDULE}:{tick}:{key}", partition_key=key)
+        for key in keys
+        if key >= FIRST_SCHEDULED_QUARTER and key not in held
+    ]
 
 
 @dg.sensor(
