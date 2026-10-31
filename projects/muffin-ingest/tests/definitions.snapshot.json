@@ -1988,7 +1988,7 @@
     },
     "sec_insider_datasets": {
       "cron_schedule": "45 11 * * 1",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "sec_insider_datasets"
     },
