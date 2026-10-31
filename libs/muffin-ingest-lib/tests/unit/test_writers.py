@@ -566,3 +566,15 @@ def test_retract_unproduced_reports_the_rows_the_driver_deleted() -> None:
     )
     assert result.retracted == 3
     assert result.written == 0
+
+
+def test_nothing_sent_is_nothing_changed() -> None:
+    """An empty upsert executes no statement, so the count is a known zero, not unknown.
+
+    Unknown made an empty Form 4 day read `inserted=-1`, and the I/O manager, which sums `changed`
+    across a run's partitions, turned a whole run's count unknown for one empty partition.
+    """
+    cur = CountingCursor([])
+    result = upsert(cur, "market.thing", [], conflict=["k"], update=["v"])
+    assert (result.written, result.changed) == (0, 0)
+    assert cur.calls == [], "nothing is sent"

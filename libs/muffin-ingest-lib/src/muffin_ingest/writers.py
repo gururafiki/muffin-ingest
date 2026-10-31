@@ -244,7 +244,9 @@ def upsert(
     column changes.
     """
     if not rows:
-        return WriteResult(written=0)
+        # NOTHING SENT IS A KNOWN ZERO, not an unknown: None here made every empty partition
+        # read `-1` and, summed across a run, made the whole run's count unknown.
+        return WriteResult(written=0, changed=0)
     if not conflict:
         raise WriterError("an upsert needs a conflict target; without one this is a plain insert")
     if only_replacing is not None and (update is None or not only_replacing):
