@@ -15,7 +15,7 @@ step 6, 2026-10-29). What runs now, and why the rest does not:
   `docs/deferred/2026-10-30-the-insider-data-set-schedule-fails-until-sec-publishes.md`).
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import date, timedelta
 
 import dagster as dg
@@ -45,6 +45,7 @@ from muffin_ingest_dagster.defs.sec.partitions import (
 from muffin_ingest_dagster.defs.sec.raw import (
     COMPANYFACTS,
     DATASET,
+    FORM4,
     INDEX,
     raw_sec_daily_index,
     raw_sec_filer,
@@ -98,17 +99,57 @@ sec_insider_datasets_job = dg.define_asset_job(
     description="Yesterday's index and Form 4s, and any day of the last ten not collected.",
 )
 def sec_daily_index(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunRequest]:
-    """One run per day: yesterday, plus each day of the last `INDEX_LOOKBACK_DAYS` the index lane
-    has not collected. One run per day, because the Form 4 lane is asked one day at a time."""
+    """One run per day: yesterday, plus each day of the last `INDEX_LOOKBACK_DAYS` not wholly
+    collected. One run per day, because the Form 4 lane is asked one day at a time.
+
+    NOT WHOLLY COLLECTED: the index or the trades never materialised (the trades follow the Form 4s
+    in the same run, so a day without Form 4s has no trades), or the Form 4 run left some of the
+    day's filings unanswered (`short_form4_days`). A run stops on SEC's first 403, 429 or 5xx, and
+    a re-run asks only for what the day's file lacks.
+
+    THE RUN KEY CARRIES THE TICK'S DAY. Dagster launches a run key once per schedule, so a key of
+    the partition alone would never ask a day twice, however short it was left.
+    """
     today = context.scheduled_execution_time.date()
-    held = context.instance.get_materialized_partitions(INDEX)
+    instance = context.instance
     first = max(sec_days.start.date(), today - timedelta(days=INDEX_LOOKBACK_DAYS))
-    days = [first + timedelta(days=n) for n in range((today - first).days)]
+    days = [(first + timedelta(days=n)).isoformat() for n in range((today - first).days)]
+    held = [instance.get_materialized_partitions(k) for k in (INDEX, sec_form4_trade.key)]
+    short = short_form4_days(instance, days)
+    yesterday = (today - timedelta(days=1)).isoformat()
     return [
-        dg.RunRequest(run_key=f"{INDEX_SCHEDULE}:{day.isoformat()}", partition_key=day.isoformat())
+        dg.RunRequest(run_key=f"{INDEX_SCHEDULE}:{today.isoformat()}:{day}", partition_key=day)
         for day in days
-        if day == today - timedelta(days=1) or day.isoformat() not in held
+        if day == yesterday or day in short or any(day not in h for h in held)
     ]
+
+
+def short_form4_days(instance: dg.DagsterInstance, days: Sequence[str]) -> set[str]:
+    """The days whose newest Form 4 run left some of the day's filings unanswered.
+
+    READ FROM THE RUN'S OWN COUNTERS: its outcomes sum to `named`, so anything beside `answered`
+    and `held_already` is a filing the day's file does not hold. Measured 2026-10-30, SEC answered
+    7 of 23,033 backfill requests with a 503 or 504, each stopping its day with 30-642 Form 4s
+    unasked, and all seven answered 200 when asked again.
+    """
+    short: set[str] = set()
+    for day in days:
+        records = instance.fetch_materializations(
+            dg.AssetRecordsFilter(asset_key=FORM4, asset_partitions=[day]), limit=1
+        ).records
+        newest = records[0].asset_materialization if records else None
+        if newest is None:
+            continue
+        count = {k: v.value for k, v in newest.metadata.items()}
+        answered = _count(count, "form4_answered") + _count(count, "form4_held_already")
+        if _count(count, "named") > answered:
+            short.add(day)
+    return short
+
+
+def _count(metadata: Mapping[str, object], name: str) -> int:
+    value = metadata.get(name)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 #: THE FIRST QUARTER THE SCHEDULE OWNS: the one the Form 4 grid starts in. Its data set replaces
