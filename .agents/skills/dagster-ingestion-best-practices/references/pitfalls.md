@@ -452,6 +452,24 @@ rule can recover "the first owner" from the file; both lanes take the lowest CIK
 against the source document for a few filings, and pick the columns that carry it, before a key or a
 "first" depends on it.
 
+## Do not key a re-asking schedule's runs on the partition alone
+
+Dagster launches a run key once per schedule. `sec_daily_index` keyed its runs `<schedule>:<day>`
+and `sec_insider_datasets` `<schedule>:<quarter>`, so neither could ever ask a partition a second
+time, whatever the first run left. A quarter SEC had not yet published would have been asked once;
+a day a 503 stopped, never again. A schedule that re-asks puts the tick's date in the key
+(`<schedule>:<tick day>:<partition>`), so a retried tick stays idempotent and the next tick can ask
+again. A sensor advances its key with its cursor and does not have this problem.
+
+## Do not let a materialised partition stand for a complete one
+
+A run that stops on a refusal still materialises the partitions it covers, and a schedule that asks
+only for a missing partition never returns to it. The Form 4 backfill of 2026-10-30 succeeded on all
+89 runs and left seven days short, 1,443 filings unasked behind SEC 503s, which answered 200 when
+asked again. Read the partition's own counters (`fetch_materializations` with
+`asset_partitions=[key], limit=1`) and re-ask when they do not account for everything named. A check
+that reads only the newest days sees such a gap for a week and then loses it.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
