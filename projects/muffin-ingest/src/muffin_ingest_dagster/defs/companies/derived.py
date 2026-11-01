@@ -26,8 +26,12 @@ class DeriveRun(dg.Config):
     #: Statements per `derive_security_metrics` call. The edge ran 2,000-4,000 under PostgREST's
     #: 8 s ceiling in ~12 s a call; the worker's ceiling is fifteen times that.
     metrics_page: int = 2000
-    #: Securities per `derive_ttm` call: measured on production 2026-10-10, 1,000 took about 5 s.
-    ttm_page: int = 1000
+    #: Securities per `derive_ttm` call. ITS COST IS THE ROWS IT WRITES, NOT THE SECURITIES: 1,000
+    #: took about 5 s on 2026-10-10, when most held Yahoo's five quarters. A SEC filer from the CIK
+    #: grid brings decades of quarters, about 480 TTM rows each, and one call took a whole batch's
+    #: re-queue in one statement: 128,812 rows in 58 s, 237,035 in 222 s, and twice past the 120 s
+    #: timeout (2026-11-01). A hundred is ~50,000 rows; the budget below absorbs the extra pages.
+    ttm_page: int = 100
     #: Wall-clock budget for the whole run. A backlog left over is the next run's.
     budget_seconds: int = 900
 

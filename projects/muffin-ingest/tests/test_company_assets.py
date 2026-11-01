@@ -599,6 +599,11 @@ def test_the_derivation_pages_until_each_backlog_drains_one_transaction_a_page()
     calls = [sql for sql, _ in CALLS if sql.startswith("select market.derive")]
     assert calls[:3] == ["select market.derive_security_metrics(%s)"] * 3
     assert calls[3:] == ["select market.derive_ttm(null::uuid, %s)"] * 2
+    # A HUNDRED SECURITIES A CALL, because a call's cost is the rows it writes: a page of 1,000 SEC
+    # filers wrote 237,035 TTM rows in one statement and twice ran past the 120 s timeout.
+    assert [params for sql, params in CALLS if sql.startswith("select market.derive_ttm")] == [
+        [100]
+    ] * 2
     # EACH CALL COMMITS BEFORE THE NEXT: the functions' temporary tables drop on commit.
     derive_positions = [i for i, (sql, _) in enumerate(CALLS, 1) if sql.startswith("select market")]
     for here, after in itertools.pairwise(derive_positions):
