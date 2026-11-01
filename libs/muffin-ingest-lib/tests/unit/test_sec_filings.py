@@ -273,6 +273,8 @@ def test_a_report_is_a_form_with_a_fiscal_role_and_a_report_date() -> None:
         ("3", "interim"),
         ("4", "transition"),
     ]
+    # The calendar refuses a report dated on the day it was filed, so it must be told that day.
+    assert {r.filed for r in got} == {date(2026, 1, 30)}
 
 
 def test_filing_rows_name_the_regulator_and_never_the_segment_markers() -> None:

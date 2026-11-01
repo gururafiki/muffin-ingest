@@ -302,7 +302,13 @@ def reports(found: Collection[Filing], forms_by_code: Mapping[str, Form]) -> lis
         if form is None or form.fiscal_role is None or filing.report_date is None:
             continue
         out.append(
-            fiscal.Report(filing.accession, filing.form, filing.report_date, form.fiscal_role)
+            fiscal.Report(
+                filing.accession,
+                filing.form,
+                filing.report_date,
+                form.fiscal_role,
+                filed=filing.filing_date,
+            )
         )
     return out
 

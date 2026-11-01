@@ -40,11 +40,19 @@ LINES = {m: STATEMENT_OF_CATEGORY[c] for m, c in XBRL["categories"].items()}
 KNOWN = {"USD", "EUR", "DKK", "TWD"}
 
 
+def _filed(rest: list[str]) -> date | None:
+    """A report's filing date, held only for the filers captured with it (EQNR)."""
+    return date.fromisoformat(rest[0]) if rest else None
+
+
 @cache
 def calendar(filer: str) -> Calendar:
     x = INPUTS[filer]
     return fiscal.calendar_from_sec(
-        [fiscal.Report(a, f, date.fromisoformat(r), role) for a, f, r, role in x["reports"]],
+        [
+            fiscal.Report(a, f, date.fromisoformat(r), role, _filed(rest))
+            for a, f, r, role, *rest in x["reports"]
+        ],
         {a: fiscal.FilingLabel(fy, fp) for a, (fy, fp) in x["labels"].items()},
         [
             fiscal.Span(a, f, date.fromisoformat(s), date.fromisoformat(e), n)

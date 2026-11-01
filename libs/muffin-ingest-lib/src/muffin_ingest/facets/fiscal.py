@@ -65,12 +65,16 @@ class Report:
 
     `interim` is a QUARTERLY report (10-Q, 10-QT). A 6-K is not one: it carries monthly revenue as
     often as results, and no quarterly XBRL.
+
+    `filed` is the day SEC received it. A `report_date` equal to it is not a period end: no company
+    closes its year on the day it files the audited accounts. See `calendar_from_sec`.
     """
 
     accession: str
     form: str
     report_date: date
     role: Role
+    filed: date | None = None
 
 
 @dataclass(frozen=True)
@@ -351,6 +355,23 @@ def calendar_from_sec(
     for span in spans:
         by_accession.setdefault(span.accession, []).append(span)
 
+    # 0. A REPORT DATED ON THE DAY IT WAS FILED STATES NO PERIOD. SEC fills `reportDate` with the
+    # filing date where the filer gave none, mostly before XBRL. Measured 2026-11-01 over the
+    # submissions held: 233 annual reports in about 100 securities, filed 1995-2020. Seventeen of
+    # Equinor's 20-Fs of 2003-2018 carry one, so they formed a March calendar of their own beside
+    # its December one. Two of them, 25 days apart in 2016, became a 25-day year whose computed
+    # second half started after it ended, which `fiscal_period_check` refused, failing the whole
+    # 50-filer run. The stray rule below catches a LONE such date (Walmart's 2009 10-K) and not a
+    # run of them. Dropping the report loses no year a statement needs: statements come from facts,
+    # and step 2 derives the years facts state.
+    dated: list[Report] = []
+    for report in reports:
+        if report.filed is not None and report.filed == report.report_date:
+            stats["report_dated_on_filing"] += 1
+            continue
+        dated.append(report)
+    reports = dated
+
     # 1. Years from the registrant's own annual and transition reports.
     own: list[_Year] = []
     for report in sorted(reports, key=lambda r: r.report_date):
@@ -528,10 +549,14 @@ def _overlap(a: Period, b: Period) -> int:
 
 def _canonical(periods: list[Period], stats: Counter[str]) -> list[Period]:
     """One row per (regime, year, period), then the newest calendar wins (decision 11)."""
+    # A PERIOD THAT ENDS BEFORE IT STARTS IS NOT A PERIOD, and `fiscal_period_check` refuses it,
+    # failing every filer in the run. A period this module built wrongly is counted, never written.
+    sane = [p for p in periods if p.period_start <= p.period_end]
+    stats["inverted_period"] += len(periods) - len(sane)
     # The table's key is (regime, fiscal year, fiscal period): of two rows sharing it, the later end
     # is kept and the other is not stored at all.
     by_key: dict[tuple[int, int, str], Period] = {}
-    for period in periods:
+    for period in sane:
         key = (period.regime, period.fiscal_year, period.fiscal_period)
         held = by_key.get(key)
         if held is not None:
