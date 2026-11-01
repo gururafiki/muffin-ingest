@@ -26,11 +26,19 @@ INPUTS = json.loads(
 FILERS = sorted(INPUTS)
 
 
+def _filed(rest: list[str]) -> date | None:
+    """A report's filing date, held only for the filers captured with it (EQNR)."""
+    return date.fromisoformat(rest[0]) if rest else None
+
+
 @cache
 def calendar(filer: str) -> fiscal.Calendar:
     x = INPUTS[filer]
     return fiscal.calendar_from_sec(
-        [fiscal.Report(a, f, date.fromisoformat(r), role) for a, f, r, role in x["reports"]],
+        [
+            fiscal.Report(a, f, date.fromisoformat(r), role, _filed(rest))
+            for a, f, r, role, *rest in x["reports"]
+        ],
         {a: fiscal.FilingLabel(fy, fp) for a, (fy, fp) in x["labels"].items()},
         [
             fiscal.Span(a, f, date.fromisoformat(s), date.fromisoformat(e), n)
@@ -106,6 +114,32 @@ def test_a_lone_report_date_off_its_neighbours_anchor_is_dropped() -> None:
     assert len(calendar("WMT").regimes) == 1
     assert calendar("WMT").stats["report_off_anchor"] == 1
     assert canonical("WMT", 2009, "FY").period_end == date(2009, 1, 31)
+
+
+def test_a_report_dated_on_its_filing_day_states_no_period() -> None:
+    """Equinor's 20-Fs of 2003-2018 carry their filing dates as report dates. Read as year ends they
+    made a March calendar beside its December one, and two 25 days apart in 2016 made a 25-day year
+    whose computed second half ended before it started (production, 2026-11-01)."""
+    eqnr = calendar("EQNR")
+    assert [(r.year_end_month, r.year_end_day) for r in eqnr.regimes] == [(12, 31)]
+    assert eqnr.stats["report_dated_on_filing"] == 17
+    assert canonical("EQNR", 2016, "FY").period_end == date(2016, 12, 31)
+    assert canonical("EQNR", 2016, "H2").period_start == date(2016, 7, 1)
+
+
+def test_a_period_ending_before_it_starts_is_counted_and_never_kept() -> None:
+    """The same 25-day year with no filing dates to tell: `fiscal_period_check` refuses such a row
+    and fails every filer in the run, so the calendar drops it and says so."""
+    built = fiscal.calendar_from_sec(
+        [
+            fiscal.Report(str(n), "20-F", date.fromisoformat(end), "annual")
+            for n, end in enumerate(["2015-03-19", "2016-03-18", "2016-04-12", "2017-03-17"])
+        ],
+        {},
+        [],
+    )
+    assert all(p.period_start <= p.period_end for p in built.periods)
+    assert built.stats["inverted_period"] == 2
 
 
 # --- years only facts state ----------------------------------------------------------------------
