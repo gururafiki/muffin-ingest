@@ -32,7 +32,7 @@ psql_() { docker exec -i -e PGPASSWORD=$PASS $NAME psql -U postgres -d muffin "$
 
 case "${1:-}" in
 up)
-  docker rm -f $NAME >/dev/null 2>&1 || true
+  docker rm -fv $NAME >/dev/null 2>&1 || true
   docker run -d --name $NAME -e POSTGRES_PASSWORD=$PASS -e POSTGRES_DB=muffin \
     -p $PORT:5432 postgres:17-alpine >/dev/null
   # WAIT ON A REAL QUERY. postgres runs a TEMPORARY server on the same socket during init, so
@@ -68,6 +68,6 @@ apply)
     else echo "FAILED"; echo "$out" | grep -E 'ERROR|LINE' | head -3; exit 1; fi
   done
   echo "every committed migration applied" ;;
-down) docker rm -f $NAME >/dev/null 2>&1 && echo "removed $NAME" ;;
+down) docker rm -fv $NAME >/dev/null 2>&1 && echo "removed $NAME" ;;
 *) echo "usage: $0 up|roles|apply|fix|down"; exit 2 ;;
 esac

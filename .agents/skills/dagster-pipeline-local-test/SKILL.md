@@ -154,7 +154,7 @@ until docker logs t-pg 2>&1 | grep -q "PostgreSQL init process complete"; do sle
 docker exec -i t-pg psql -U postgres -v ON_ERROR_STOP=1 --single-transaction < ddl.sql
 docker run --rm -i --network container:t-pg --entrypoint python \
   ghcr.io/gururafiki/muffin-ingest:latest - < test.py
-docker rm -f t-pg; docker image rm postgres:17-alpine
+docker rm -fv t-pg; docker image rm postgres:17-alpine
 ```
 
 - **`ddl.sql`** holds the table's own `create table` and partition block, cut from its migration by
@@ -163,6 +163,9 @@ docker rm -f t-pg; docker image rm postgres:17-alpine
   (`types.ModuleType` plus `sys.modules`; `@dataclass` under postponed annotations looks the module
   up). The code under test is the branch's, and psycopg is production's. That is what exercises the
   real binding, such as `%s::uuid[]` from a Python list, which no fake reaches.
+- **Remove the container with `-v`.** `postgres:17-alpine` declares `VOLUME`, so `docker rm -f` alone
+  leaves its data directory behind as an anonymous volume. 84 of them (6 GB) had piled up on the
+  node's `/mnt/data` by 2026-11-01; `maintenance.yml prune-volumes` reclaims any that remain.
 - **Mutate by rebinding the SQL constant** (`mod.SQL = mutated`), since the function reads it from its
   module globals. Assert that each mutation changed the string, and run each variant in a transaction
   you roll back.
