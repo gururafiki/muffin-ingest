@@ -12,7 +12,7 @@ from __future__ import annotations
 import itertools
 import json
 from collections import Counter
-from datetime import date
+from datetime import date, timedelta
 from functools import cache
 from pathlib import Path
 
@@ -27,7 +27,7 @@ FILERS = sorted(INPUTS)
 
 
 def _filed(rest: list[str]) -> date | None:
-    """A report's filing date, held only for the filers captured with it (EQNR)."""
+    """A report's filing date, held only for the filers captured with it (EQNR, FWRD)."""
     return date.fromisoformat(rest[0]) if rest else None
 
 
@@ -122,9 +122,42 @@ def test_a_report_dated_on_its_filing_day_states_no_period() -> None:
     whose computed second half ended before it started (production, 2026-11-01)."""
     eqnr = calendar("EQNR")
     assert [(r.year_end_month, r.year_end_day) for r in eqnr.regimes] == [(12, 31)]
-    assert eqnr.stats["report_dated_on_filing"] == 17
+    # Seventeen dated on the filing day, and the 2010 20-F dated eight days before it, which the
+    # stray rule caught before the window did.
+    assert eqnr.stats["report_dated_near_filing"] == 18
+    assert eqnr.stats["report_off_anchor"] == 0
     assert canonical("EQNR", 2016, "FY").period_end == date(2016, 12, 31)
     assert canonical("EQNR", 2016, "H2").period_start == date(2016, 7, 1)
+
+
+def test_a_year_end_is_never_filed_within_two_weeks() -> None:
+    """Forward Air's 10-Ks for 2007 and 2008 are dated 2008-02-19 and 2009-02-24, filed 8 and 2
+    days later. Read as year ends they made a February calendar between two December ones."""
+    fwrd = calendar("FWRD")
+    assert [(r.year_end_month, r.year_end_day) for r in fwrd.regimes] == [(12, 31)]
+    assert canonical("FWRD", 2008, "FY").period_end == date(2008, 12, 31)
+
+
+def _filed_after(days: int, role: fiscal.Role) -> fiscal.Report:
+    end = date(2024, 12, 31)
+    return fiscal.Report(f"{role}-{days}", "10-K", end, role, filed=end + timedelta(days=days))
+
+
+def test_the_filing_window_is_two_weeks_for_a_year_and_the_day_for_a_quarter() -> None:
+    """At 15 days a year end is real (8 of the 15 annual reports measured there end a month); a 10-Q
+    filed 8 to 14 days after its quarter is real too (91 month ends measured)."""
+    cases: list[tuple[int, fiscal.Role, int]] = [
+        (0, "annual", 1),
+        (14, "annual", 1),
+        (15, "annual", 0),
+        (-3, "annual", 1),
+        (14, "transition", 1),
+        (0, "interim", 1),
+        (8, "interim", 0),
+    ]
+    for days, role, dropped in cases:
+        built = fiscal.calendar_from_sec([_filed_after(days, role)], {}, [])
+        assert built.stats["report_dated_near_filing"] == dropped, (days, role)
 
 
 def test_a_period_ending_before_it_starts_is_counted_and_never_kept() -> None:

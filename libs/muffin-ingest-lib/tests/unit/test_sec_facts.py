@@ -41,7 +41,7 @@ KNOWN = {"USD", "EUR", "DKK", "TWD"}
 
 
 def _filed(rest: list[str]) -> date | None:
-    """A report's filing date, held only for the filers captured with it (EQNR)."""
+    """A report's filing date, held only for the filers captured with it (EQNR, FWRD)."""
     return date.fromisoformat(rest[0]) if rest else None
 
 
