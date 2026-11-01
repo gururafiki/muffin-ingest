@@ -53,6 +53,13 @@ QUARTER_DAYS = (75, 125)
 SAME_END = timedelta(days=20)
 #: The shortest span read as a period at all; shorter facts are months or weeks.
 MIN_SPAN_DAYS = 60
+#: An annual or transition report dated this close to its filing (or after it) names no year end:
+#: no company files audited annual accounts within two weeks of closing its year. Measured
+#: 2026-11-01 over 55,000 annual reports, by days from report date to filing: 0 days, 233 (30
+#: month ends); 1-14, 126 (6); 15-21, 15 (8); 22-28, 162 (120). Fifteen to 21 is where real month
+#: ends begin, so 14 is the last clean cut. NOT applied to a 10-Q: quarterly reports are filed
+#: fast, and 91 month-end quarter ends sit at 8-14 days, so a 10-Q keeps the same-day rule only.
+ANNUAL_FILING_WINDOW = timedelta(days=14)
 
 
 class FactsUnreadable(RuntimeError):
@@ -355,20 +362,24 @@ def calendar_from_sec(
     for span in spans:
         by_accession.setdefault(span.accession, []).append(span)
 
-    # 0. A REPORT DATED ON THE DAY IT WAS FILED STATES NO PERIOD. SEC fills `reportDate` with the
-    # filing date where the filer gave none, mostly before XBRL. Measured 2026-11-01 over the
-    # submissions held: 233 annual reports in about 100 securities, filed 1995-2020. Seventeen of
-    # Equinor's 20-Fs of 2003-2018 carry one, so they formed a March calendar of their own beside
-    # its December one. Two of them, 25 days apart in 2016, became a 25-day year whose computed
-    # second half started after it ended, which `fiscal_period_check` refused, failing the whole
-    # 50-filer run. The stray rule below catches a LONE such date (Walmart's 2009 10-K) and not a
-    # run of them. Dropping the report loses no year a statement needs: statements come from facts,
-    # and step 2 derives the years facts state.
+    # 0. A REPORT DATED AT ITS FILING STATES NO PERIOD. SEC fills `reportDate` with the filing date
+    # where the filer gave none, mostly before XBRL, and some filings carry a date days before it (a
+    # signing date). Seventeen of Equinor's 20-Fs of 2003-2018 carry their filing dates, so they
+    # formed a March calendar of their own beside its December one. Two of them, 25 days apart in
+    # 2016, became a 25-day year whose computed second half started after it ended, which
+    # `fiscal_period_check` refused, failing the whole 50-filer run. Forward Air's 10-Ks for 2007
+    # and 2008 carry dates 8 and 2 days before filing, and made a February calendar. The stray rule
+    # below catches a LONE such date (Walmart's 2009 10-K) and not a run of them. Dropping the
+    # report loses no year a statement needs: statements come from facts, and step 2 derives the
+    # years facts state. The window is `ANNUAL_FILING_WINDOW` for a year, and the day itself for a
+    # 10-Q.
     dated: list[Report] = []
     for report in reports:
-        if report.filed is not None and report.filed == report.report_date:
-            stats["report_dated_on_filing"] += 1
-            continue
+        if report.filed is not None:
+            window = ANNUAL_FILING_WINDOW if report.role != "interim" else timedelta(0)
+            if report.filed - report.report_date <= window:
+                stats["report_dated_near_filing"] += 1
+                continue
         dated.append(report)
     reports = dated
 
