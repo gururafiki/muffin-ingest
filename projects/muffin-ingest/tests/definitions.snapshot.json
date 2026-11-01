@@ -2065,7 +2065,7 @@
       "type": "STANDARD"
     },
     "sec_filers_due": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "sec_filers"
       ],

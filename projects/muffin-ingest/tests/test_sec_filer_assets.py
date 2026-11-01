@@ -701,16 +701,16 @@ def test_a_filing_the_index_named_and_the_lane_never_wrote_is_named(
     assert result.metadata["first_missing"].value == f"{flowers} (2026-10-23)"
 
 
-def test_what_asks_sec_runs_and_what_waits() -> None:
-    """2026-10-30: both schedules run; the filer sensor waits for the CIK grid's backfill.
+def test_everything_that_asks_sec_runs() -> None:
+    """2026-11-01: both schedules and the filer sensor run.
 
     Declared in code, so a reset of Dagster's state cannot start or stop them:
     - the index lane runs once the insider summary picks between the edge's rows and its own;
     - the data-set schedule runs once an unpublished quarter ends its run without failing it;
-    - the filer sensor waits for the CIK grid's backfill (its first tick would make every
-      never-collected filer due at once).
+    - the filer sensor runs once the CIK grid's backfill has collected every filer (before it, the
+      first tick would have made every never-collected filer due at once).
     """
     assert sec_automation.sec_daily_index.default_status == dg.DefaultScheduleStatus.RUNNING
     assert sec_automation.new_sec_filers.default_status == dg.DefaultSensorStatus.RUNNING
-    assert sec_automation.sec_filers_due.default_status == dg.DefaultSensorStatus.STOPPED
+    assert sec_automation.sec_filers_due.default_status == dg.DefaultSensorStatus.RUNNING
     assert sec_automation.sec_insider_datasets.default_status == dg.DefaultScheduleStatus.RUNNING
