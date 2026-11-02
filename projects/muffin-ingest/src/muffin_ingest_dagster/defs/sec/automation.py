@@ -6,10 +6,12 @@ step 6, 2026-10-29). What runs now, and why the rest does not:
 - `sec_daily_index` runs (since 2026-10-30, step 7a). Its Form 4 rows land in `insider_trade` beside
   the edge's, and `security_insider_summary` counts an edge row only on a day the lane has not
   collected (muffin-deployment#478); before that it counted both, so this waited for it.
-- `sec_filers_due` runs (since step 7b, 2026-11-01), after the CIK grid's backfill (step 8) collected
-  every filer by hand inside the day's window. Before that, its first tick would have made every
-  never-collected filer due at once: the whole grid in ~75 runs holding `sql` for ~5 hours from
-  whenever it started, which a roll in the evening would have run into the 00:00 price night.
+- `sec_filers_due` runs (since step 7b, 2026-11-02), after the CIK grid's backfill (step 8)
+  collected all 3,726 filers by hand inside the day's window. Before that, its first tick would
+  have made every never-collected filer due at once: the whole grid in ~75 runs holding `sql` for
+  ~5 hours from whenever it started, which a roll in the evening would have run into the 00:00
+  price night. Measured once the grid was done, the first tick asks 61 runs for 115 filers, all on
+  their floor day.
 - `sec_insider_datasets` runs (since 2026-10-30): weekly, every quarter from the Form 4 grid's start
   that is not held. A quarter SEC has not published ends its run claiming nothing rather than
   failing it (umbrella note
