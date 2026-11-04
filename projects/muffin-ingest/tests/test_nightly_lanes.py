@@ -417,3 +417,20 @@ def test_the_short_daily_lanes_are_first_in_line_for_the_sql_pool() -> None:
     assert lowest_short > 0 and not outranking, (
         f"priorities {priority}: the short lanes must outrank everything else, {outranking} do not"
     )
+
+
+def test_the_company_lane_goes_before_the_symbology_reask() -> None:
+    """At 03:30 the company lane is queued behind 170-205 one-subject re-ask runs, each needing the
+    `sql` pool. Those are automation runs with no tag (0), so the lane must rank above 0 — and below
+    the short lanes, which must outrank everything. Measured without it: the lane ran ~04:50-06:19
+    instead of ~03:30-04:45."""
+    repository = loaded_defs().get_repository_def()
+    rank = int(repository.get_job("yahoo_companies").run_tags.get(PRIORITY_TAG, "0"))
+    shortest = min(
+        int(repository.get_job(name).run_tags.get(PRIORITY_TAG, "0"))
+        for name in ("daily_fx", "daily_indices")
+    )
+    assert 0 < rank < shortest, (
+        f"yahoo_companies has priority {rank}: it must be above an untagged run (0) and below the "
+        f"short lanes ({shortest})"
+    )
