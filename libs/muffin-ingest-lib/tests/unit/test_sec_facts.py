@@ -538,3 +538,158 @@ def test_lines_are_this_source_s_rows_of_metric_source_field() -> None:
     conn = _Conn([("revenue", "income"), ("total_assets", "balance")])
     assert sec_facts.lines(conn) == {"revenue": "income", "total_assets": "balance"}
     assert conn.sql[0][1] == ("sec-xbrl",)
+
+
+# --- quarters computed from year-to-date facts (decided by the user 2026-11-04) ------------------
+
+OCF = Concept(
+    "operating_cash_flow", "us-gaap", "NetCashProvidedByUsedInOperatingActivities", 100, "USD"
+)
+OCF_CONTINUING = Concept(
+    "operating_cash_flow", "us-gaap",
+    "NetCashProvidedByUsedInOperatingActivitiesContinuingOperations", 80, "USD",
+)  # fmt: skip
+DA = Concept("depreciation", "us-gaap", "DepreciationDepletionAndAmortization", 100, "USD")
+CASH = [OCF, OCF_CONTINUING, DA, EPS, SHARES]
+CASH_LINES = {"operating_cash_flow": "cash", "depreciation": "cash", "eps_diluted": "income",
+              "shares_diluted": "income"}  # fmt: skip
+
+
+def ytd(end: str, val: float, *, filed: str = "2024-11-01", **kw: Any) -> dict[str, Any]:
+    """A figure from the fiscal year's start (2024-01-01) to `end`, in a 10-Q."""
+    return fact(end, val, start="2024-01-01", filed=filed, form="10-Q", **kw)
+
+
+def cash_rows(
+    spec: dict[tuple[str, str], dict[str, list[dict[str, Any]]]], cal: Calendar = QUARTERLY
+) -> sec_facts.Normalised:
+    return run(body(spec), cal, concepts=CASH, lines=CASH_LINES)
+
+
+def stated(out: sec_facts.Normalised, end: str) -> dict[str, Any]:
+    """The stated cash quarter's data at `end`."""
+    [found] = [
+        r for r in out.rows
+        if (r["source_code"], r["statement"], r["period_type"], r["period_ending"])
+        == (sec_facts.SOURCE, "cash", "quarter", end)
+    ]  # fmt: skip
+    data: dict[str, Any] = json.loads(found["data"])
+    return data
+
+
+def computed(out: sec_facts.Normalised) -> dict[str, dict[str, Any]]:
+    """The computed rows' data, by period end."""
+    return {
+        r["period_ending"]: json.loads(r["data"])
+        for r in out.rows
+        if r["source_code"] == sec_facts.SOURCE_YTD
+    }
+
+
+def test_q2_is_the_half_year_less_q1_and_q3_the_nine_months_less_the_half_year() -> None:
+    """Operating cash flow is stated only year to date: 100, 250, 420. The quarters are 150 and 170
+    (9M - Q1 would be 320, and the year-to-date figures themselves 250 and 420). Depreciation's Q2
+    is stated, so it is not computed: the stated line wins, and the two are compared."""
+    out = cash_rows({
+        ("us-gaap", OCF.concept): {"USD": [
+            ytd("2024-03-31", 100), ytd("2024-06-30", 250), ytd("2024-09-30", 420),
+            fact("2024-12-31", 600, start="2024-01-01"),
+        ]},
+        ("us-gaap", DA.concept): {"USD": [
+            ytd("2024-03-31", 25), ytd("2024-06-30", 55),
+            fact("2024-06-30", 30, start="2024-04-01", form="10-Q"),
+        ]},
+    })  # fmt: skip
+    assert computed(out) == {
+        "2024-06-30": {"period_ending": "2024-06-30", "operating_cash_flow": 150},
+        "2024-09-30": {"period_ending": "2024-09-30", "operating_cash_flow": 170},
+    }
+    assert stated(out, "2024-06-30") == {"period_ending": "2024-06-30", "depreciation": 30}
+    assert (out.stats["ytd_computed"], out.stats["ytd_agrees"], out.stats["ytd_disagrees"]) == (
+        2, 1, 0,
+    )  # fmt: skip
+    ytd_row = next(r for r in out.rows if r["source_code"] == sec_facts.SOURCE_YTD)
+    assert (ytd_row["statement"], ytd_row["period_type"], ytd_row["currency"]) == (
+        "cash", "quarter", "USD",
+    )  # fmt: skip
+
+
+def test_both_terms_come_from_one_concept() -> None:
+    """The high-priority concept states only the half year (250) and the continuing-operations one
+    states both terms (240, 100). The quarter is 140, from one concept; mixing the best figure of
+    each date would give 250 - 100 = 150."""
+    out = cash_rows({
+        ("us-gaap", OCF.concept): {"USD": [ytd("2024-06-30", 250)]},
+        ("us-gaap", OCF_CONTINUING.concept): {
+            "USD": [ytd("2024-03-31", 100), ytd("2024-06-30", 240)]
+        },
+    })  # fmt: skip
+    assert computed(out)["2024-06-30"]["operating_cash_flow"] == 140
+
+
+def test_each_term_is_its_latest_filing() -> None:
+    """The half year is restated from 250 to 260 by the next year's 10-Q: the quarter is 160."""
+    out = cash_rows({
+        ("us-gaap", OCF.concept): {"USD": [
+            ytd("2024-03-31", 100),
+            ytd("2024-06-30", 250, filed="2024-08-01", accn="0000000000-24-000002"),
+            ytd("2024-06-30", 260, filed="2025-08-01", accn="0000000000-25-000002"),
+        ]},
+    })  # fmt: skip
+    assert computed(out)["2024-06-30"]["operating_cash_flow"] == 160
+
+
+def test_the_subtrahend_is_the_figure_as_it_stood_when_the_minuend_was_filed() -> None:
+    """Q1 is restated from 100 to 90 in 2025, after the half year (250) was filed and never
+    restated. The quarter is 150, as the half year's filing saw it; each term's latest filing would
+    pair a restated Q1 with an unrestated half year and give 160."""
+    out = cash_rows({
+        ("us-gaap", OCF.concept): {"USD": [
+            ytd("2024-03-31", 100, filed="2024-05-01", accn="0000000000-24-000001"),
+            ytd("2024-06-30", 250, filed="2024-08-01", accn="0000000000-24-000002"),
+            ytd("2024-03-31", 90, filed="2025-03-01", accn="0000000000-25-000009"),
+        ]},
+    })  # fmt: skip
+    assert computed(out)["2024-06-30"]["operating_cash_flow"] == 150
+
+
+def test_a_per_share_figure_or_a_share_count_is_never_computed() -> None:
+    """Neither adds: EPS for six months is not the sum of two quarters' EPS."""
+    out = cash_rows({
+        ("us-gaap", EPS.concept): {"USD/shares": [ytd("2024-03-31", 1.0), ytd("2024-06-30", 2.5)]},
+        ("us-gaap", SHARES.concept): {"shares": [ytd("2024-03-31", 10), ytd("2024-06-30", 10)]},
+    })  # fmt: skip
+    assert computed(out) == {}
+    assert out.stats["ytd_computed"] == 0
+
+
+def test_a_semi_annual_filer_gets_no_computed_quarters() -> None:
+    """Its quarters are the calendar's, not observed: it reports halves, and its H1 is written."""
+    out = cash_rows(
+        {("us-gaap", OCF.concept): {"USD": [ytd("2024-03-31", 100), ytd("2024-06-30", 250)]}},
+        SEMI_ANNUAL,
+    )
+    assert computed(out) == {}
+    assert row(out, "cash", "half", "2024-06-30")["data"]["operating_cash_flow"] == 250
+
+
+def test_a_computed_quarter_that_disagrees_with_a_stated_one_is_counted_and_not_written() -> None:
+    out = cash_rows({
+        ("us-gaap", OCF.concept): {"USD": [
+            ytd("2024-03-31", 100), ytd("2024-06-30", 263),
+            fact("2024-06-30", 151, start="2024-04-01", form="10-Q"),
+        ]},
+    })  # fmt: skip
+    assert computed(out) == {}
+    assert (out.stats["ytd_agrees"], out.stats["ytd_disagrees"]) == (0, 1)
+    assert stated(out, "2024-06-30")["operating_cash_flow"] == 151
+
+
+def test_real_filers_computed_quarters_agree_with_the_ones_they_state() -> None:
+    """Apple, Costco and Bristow state every captured quarter, so each computed one is checked.
+    Bristow reports in thousands: its 2021 nine months less its six is -57,000 against a stated
+    -56,000, one rounding unit, which agrees."""
+    agrees = {f: rows_of(f).stats for f in ("AAPL", "COST", "VTOL")}
+    assert {f: (s["ytd_agrees"], s["ytd_disagrees"]) for f, s in agrees.items()} == {
+        "AAPL": (8, 0), "COST": (2, 0), "VTOL": (22, 0),
+    }  # fmt: skip
