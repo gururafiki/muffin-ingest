@@ -151,9 +151,10 @@ select source_code, count(*) from (
  group by 1 order by 1
 """
 
+#: Both SEC sources are written on a canonical period, the computed quarters included.
 UNLABELLED = """
 select count(*) filter (where fiscal_period is null), count(*)
-  from market.security_statement where source_code = 'sec-xbrl'
+  from market.security_statement where source_code in ('sec-xbrl', 'sec-xbrl-ytd')
 """
 
 HELD_FILINGS = """
@@ -186,17 +187,18 @@ def statements_carry_a_known_currency(postgres: Postgres) -> dg.AssetCheckResult
 def one_fiscal_period_one_point(postgres: Postgres) -> dg.AssetCheckResult:
     """No source holds two rows of one statement for one fiscal period.
 
-    ERROR FOR `sec-xbrl` ONLY: its rows are placed on a canonical period of the filer's own
-    calendar, so a second row with the same label is a defect in the lane. A Yahoo calendar is
-    observed from Yahoo's own period ends, and its duplicates are counted here until the labelling
-    drain is measured (step 8).
+    ERROR FOR THE SEC SOURCES ONLY (`sec-xbrl`, and `sec-xbrl-ytd`, its computed quarters): their
+    rows are placed on a canonical period of the filer's own calendar, so a second row with the
+    same label is a defect in the lane. A Yahoo calendar is observed from Yahoo's own period ends,
+    and its duplicates are counted here until the labelling drain is measured (step 8).
     """
     found = _by_source(postgres, DUPLICATE_LABELS)
+    sec = found.get("sec-xbrl", 0) + found.get("sec-xbrl-ytd", 0)
     return dg.AssetCheckResult(
-        passed=found.get("sec-xbrl", 0) == 0,
+        passed=sec == 0,
         severity=dg.AssetCheckSeverity.ERROR,
         metadata={
-            "sec_xbrl_duplicates": found.get("sec-xbrl", 0),
+            "sec_xbrl_duplicates": sec,
             "by_source": ", ".join(f"{k} {v}" for k, v in found.items()) or "none",
         },
     )

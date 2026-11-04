@@ -483,7 +483,11 @@ def test_a_filer_fans_out_to_every_equity_holding_its_cik(tmp_path: Path, sec: S
     retractions = [
         p for sql, p in CALLS if sql.startswith("delete from market.security_statement as")
     ]
-    assert [p[:2] for p in retractions] == [["s-a1", "sec-xbrl"], ["s-a2", "sec-xbrl"]]
+    # Each source in its own scope: a computed quarter goes when the filer later states it.
+    assert [p[:2] for p in retractions] == [
+        ["s-a1", "sec-xbrl"], ["s-a1", "sec-xbrl-ytd"],
+        ["s-a2", "sec-xbrl"], ["s-a2", "sec-xbrl-ytd"],
+    ]  # fmt: skip
     calendars = [p for sql, p in CALLS if sql.startswith("delete from market.fiscal_calendar")]
     assert calendars == [["s-a1"], ["s-a2"]]
     [labels] = [p for sql, p in CALLS if sql.startswith("select market.label_fiscal_periods")]
@@ -664,6 +668,10 @@ def test_a_fiscal_period_twice_fails_for_sec_and_is_counted_for_yahoo() -> None:
     ANSWERS["having count(*) > 1"] = [("sec-xbrl", 1), ("yfinance", 4)]
     sec = _result(sec_checks.one_fiscal_period_one_point(FakePostgres()))
     assert sec.passed is False and sec.metadata["sec_xbrl_duplicates"].value == 1
+    # Its computed quarters sit on canonical periods too.
+    ANSWERS["having count(*) > 1"] = [("sec-xbrl-ytd", 2), ("yfinance", 4)]
+    computed = _result(sec_checks.one_fiscal_period_one_point(FakePostgres()))
+    assert computed.passed is False and computed.metadata["sec_xbrl_duplicates"].value == 2
 
 
 def test_an_unlabelled_sec_statement_warns() -> None:

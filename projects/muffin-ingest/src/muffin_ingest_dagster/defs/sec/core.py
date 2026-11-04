@@ -557,16 +557,23 @@ def _parse_filer(
                 ),
                 "statement",
             )  # fmt: skip
+            # EACH SOURCE IS RETRACTED IN ITS OWN SCOPE: a quarter computed from year-to-date facts
+            # (`SOURCE_YTD`) goes when the filer later states it, or a restated term moves it.
             for sid in sids:
-                retracted = retract_unproduced(
-                    cur,
-                    "market.security_statement",
-                    [r for r in out.rows if r["security_id"] == sid],
-                    scope={"security_id": sid, "source_code": sec_facts.SOURCE},
-                    key=["statement", "period_ending", "period_type"],
-                    types={"statement": "text", "period_ending": "date", "period_type": "text"},
-                )
-                stats["statement_retracted"] += retracted.retracted
+                for source in (sec_facts.SOURCE, sec_facts.SOURCE_YTD):
+                    retracted = retract_unproduced(
+                        cur,
+                        "market.security_statement",
+                        [
+                            r
+                            for r in out.rows
+                            if r["security_id"] == sid and r["source_code"] == source
+                        ],
+                        scope={"security_id": sid, "source_code": source},
+                        key=["statement", "period_ending", "period_type"],
+                        types={"statement": "text", "period_ending": "date", "period_type": "text"},
+                    )
+                    stats["statement_retracted"] += retracted.retracted
         cur.execute("select market.label_fiscal_periods(%s::uuid[])", (list(sids),))
         labelled = cur.fetchone()
         stats["labelled"] += int(labelled[0]) if labelled and labelled[0] is not None else 0
