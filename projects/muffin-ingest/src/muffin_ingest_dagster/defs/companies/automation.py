@@ -14,6 +14,7 @@ from muffin_ingest_dagster.defs.companies.core import (
 from muffin_ingest_dagster.defs.companies.raw import raw_yahoo_company
 from muffin_ingest_dagster.defs.prices.partitions import SECURITY_PARTITION, security_partitions
 from muffin_ingest_dagster.lib import rotation
+from muffin_ingest_dagster.lib.priority import COMPANY_LANE
 from muffin_ingest_dagster.lib.runtime import COMPANY_RUN
 
 #: THE SCHEDULE'S NAME, spelled once: the rotation finds the previous day's runs by it, so a rename
@@ -37,15 +38,16 @@ yahoo_companies_job = dg.define_asset_job(
         raw_yahoo_company, company_facts, yahoo_statement, yahoo_fiscal_calendar
     ),
     partitions_def=security_partitions,
-    run_tags=COMPANY_RUN,
+    run_tags={**COMPANY_LANE, **COMPANY_RUN},
 )
 
 
 @dg.schedule(
     name=COMPANY_SCHEDULE,
     job=yahoo_companies_job,
-    # 03:30 UTC: after the price night (00:00, ~2 hours) and the 03:00 symbology re-ask, so the
-    # `yfinance` pool is free. Both lanes ask Yahoo at the same pace, one at a time.
+    # 03:30 UTC: after the price night (00:00, ~2 hours), so the `yfinance` pool is free. The 03:00
+    # symbology re-ask is still running then; `COMPANY_LANE`'s priority puts these runs ahead of
+    # its remaining ones for the `sql` pool, and the re-ask finishes after the lane.
     cron_schedule="30 3 * * *",
     # RUNNING SINCE 2026-10-17 (Phase 4 step 8). It shipped STOPPED until the lane had run live
     # on a tiny subset (step 7). That run found two defects the lane would have spread to every
