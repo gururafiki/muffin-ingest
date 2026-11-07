@@ -24,8 +24,9 @@ successor case: Bristow's March years before 2021 exist under this CIK only as c
     which is what keeps the partial unique index on canonical labels satisfiable.
   * A SEC CALENDAR'S FIRST YEAR STARTS AFTER THE ONE BEFORE IT. A transition or own year that no
     fact gives a start for begins the day after the previous calendar's last year end, not twelve
-    months before its own end. A recast year (a successor's history) is never clipped: it is
-    derived from a full-year span, which states its start.
+    months before its own end, and is a transition `T` if that leaves less than a year. A recast
+    year (a successor's history) is never clipped: it is derived from a full-year span, which
+    states its start.
   * The CURRENT year is projected one year past the last year end, `is_observed = false`, so the
     quarters filed before its annual report have a year to belong to.
 
@@ -332,8 +333,14 @@ def _finish(
                         ]
                         if before and (year.end - max(before)).days <= 400:
                             clipped = max(before) + timedelta(days=1)
-                            stats["start_after_previous"] += clipped > year.start
-                            year.start = max(year.start, clipped)
+                            if clipped > year.start:
+                                stats["start_after_previous"] += 1
+                                year.start = clipped
+                                # A clipped year shorter than a year is the change's transition:
+                                # Seneca's August 1994 - March 1995 is not its fiscal 1995.
+                                if year.label == "FY" and not _is_year(year.start, year.end):
+                                    year.label = "T"
+                                    stats["clipped_to_transition"] += 1
             previous = year
         if labelled:
             _label(group, stats)

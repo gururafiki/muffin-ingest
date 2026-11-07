@@ -254,6 +254,15 @@ def test_a_transition_no_fact_dates_starts_after_the_year_before() -> None:
     assert (old.year_end_month, new.year_end_month, new.change_kind) == (6, 12, "year_end_change")
 
 
+def test_a_first_year_clipped_short_is_the_change_s_transition() -> None:
+    """Seneca Foods: July years to 1994, then March years. Its first March year has no stated start,
+    and starting after July 1994 leaves eight months: the transition, not fiscal 1995."""
+    t = canonical("SENEA", 1995, "T")
+    assert (t.period_start, t.period_end) == (date(1994, 8, 1), date(1995, 3, 31))
+    assert canonical("SENEA", 1996, "FY").period_start == date(1995, 4, 1)
+    assert calendar("SENEA").regimes[1].change_kind == "year_end_change"
+
+
 def test_a_successor_year_overlapping_by_a_quarter_wins() -> None:
     """Magnera (decision 11): Berry's spun-off business, the accounting acquirer, reports September
     years from October 2022; Glatfelter, the registrant, reported December years. They overlap by
