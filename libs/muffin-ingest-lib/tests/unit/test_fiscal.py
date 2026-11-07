@@ -240,6 +240,73 @@ def test_the_successor_s_calendar_wins() -> None:
     )
 
 
+def test_a_transition_no_fact_dates_starts_after_the_year_before() -> None:
+    """Vericel (Aastrom): a June fiscal 2010, then a 10-KT for July to December 2010.
+
+    No fact states the transition's start, so it used to be its end less twelve months, all of 2010,
+    overlapping the June year by six months and turning a change of year end into a successor's
+    calendar.
+    """
+    t = canonical("VCEL", 2010, "T")
+    assert (t.period_start, t.period_end) == (date(2010, 7, 1), date(2010, 12, 31))
+    assert canonical("VCEL", 2010, "FY").period_end == date(2010, 6, 30)
+    old, new = calendar("VCEL").regimes
+    assert (old.year_end_month, new.year_end_month, new.change_kind) == (6, 12, "year_end_change")
+
+
+def test_a_first_year_clipped_short_is_the_change_s_transition() -> None:
+    """Seneca Foods: July years to 1994, then March years. Its first March year has no stated start,
+    and starting after July 1994 leaves eight months: the transition, not fiscal 1995."""
+    t = canonical("SENEA", 1995, "T")
+    assert (t.period_start, t.period_end) == (date(1994, 8, 1), date(1995, 3, 31))
+    assert canonical("SENEA", 1996, "FY").period_start == date(1995, 4, 1)
+    assert calendar("SENEA").regimes[1].change_kind == "year_end_change"
+
+
+def test_a_successor_year_overlapping_by_a_quarter_wins() -> None:
+    """Magnera (decision 11): Berry's spun-off business, the accounting acquirer, reports September
+    years from October 2022; Glatfelter, the registrant, reported December years. They overlap by
+    90 days, and "more than half" served both, so 2022 and 2023 read as one year reported twice.
+    """
+    berry = canonical("MAGN", 2023, "FY")
+    assert (berry.regime, berry.period_start, berry.period_end) == (
+        2,
+        date(2022, 10, 3),
+        date(2023, 9, 30),
+    )
+    glatfelter = {
+        p.fiscal_year: p.is_canonical
+        for p in calendar("MAGN").periods
+        if p.regime == 1 and p.fiscal_period == "FY"
+    }
+    assert (glatfelter[2021], glatfelter[2022]) == (True, False)
+
+
+def test_the_newer_calendar_wins_however_its_years_are_numbered() -> None:
+    """Republic Airways under Mesa's CIK: Mesa's September 2024 overlaps Republic's December 2023
+    by 92 days and loses, although its fiscal year (2024) is the later one."""
+    mesa = {
+        p.fiscal_year: p.is_canonical
+        for p in calendar("RJET").periods
+        if p.regime == 1 and p.fiscal_period == "FY"
+    }
+    assert (mesa[2022], mesa[2023], mesa[2024]) == (True, False, False)
+    assert canonical("RJET", 2023, "FY").period_end == date(2023, 12, 31)
+
+
+@pytest.mark.parametrize("filer", FILERS)
+def test_no_two_canonical_years_share_more_than_a_month(filer: str) -> None:
+    years = [
+        p for p in calendar(filer).periods if p.is_canonical and p.fiscal_period in ("FY", "T")
+    ]
+    shared = [
+        (a.fiscal_year, a.fiscal_period, b.fiscal_year, b.fiscal_period, fiscal._overlap(a, b))
+        for a, b in itertools.combinations(years, 2)
+        if fiscal._overlap(a, b) > fiscal.SUPERSEDING_OVERLAP_DAYS
+    ]
+    assert shared == []
+
+
 def test_a_recast_year_hosts_no_quarter_of_the_predecessor() -> None:
     """Era's 10-Qs of 2018 are Era's, not quarters of Bristow's April 2018 - March 2019 year."""
     assert not any(
@@ -377,6 +444,17 @@ def test_a_provider_calendar_labels_halves_and_a_december_year_by_its_end() -> N
 def test_an_end_in_the_first_week_of_january_belongs_to_the_year_before() -> None:
     assert fiscal.calendar_year_label(date(2027, 1, 2)) == 2026
     assert fiscal.calendar_year_label(date(2027, 1, 31)) == 2027
+
+
+def test_a_provider_calendar_keeps_both_years_of_a_year_end_change() -> None:
+    """An observed calendar dates every year as its end less twelve months, so the year after a
+    change of year end overlaps the one before by the months it moved: Choushimaru, May 2024 then
+    February 2025, 92 days. That is the dating, not the company, and both years stay canonical."""
+    cal = fiscal.calendar_from_periods(
+        [date(2022, 5, 31), date(2023, 5, 31), date(2024, 5, 31), date(2025, 2, 28)]
+    )
+    years = {p.period_end: p.is_canonical for p in cal.periods if p.fiscal_period in ("FY", "T")}
+    assert years[date(2024, 5, 31)] and years[date(2025, 2, 28)]
 
 
 def test_no_annual_report_is_no_calendar() -> None:

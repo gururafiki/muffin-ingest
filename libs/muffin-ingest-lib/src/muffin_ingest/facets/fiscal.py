@@ -18,9 +18,15 @@ successor case: Bristow's March years before 2021 exist under this CIK only as c
   * A REGIME is one calendar: a run of year ends on one anchor month (the month end nearest the
     year end, so Apple's 52/53-week Saturdays all anchor on September). A change of anchor starts
     a new regime. A period that is not a year (a 10-KT, or 7 months of Mistras) is a transition `T`.
-  * THE NEWEST CALENDAR WINS (decision 11). A year overlapping a newer regime's year by more than
-    half is superseded (`is_canonical = false`), and so is a period whose label a newer regime also
-    uses. The second rule is what keeps the partial unique index on canonical labels satisfiable.
+  * THE NEWEST CALENDAR WINS (decision 11). In a SEC calendar, a year overlapping a newer regime's
+    year by more than a month is superseded (`is_canonical = false`); in a provider's observed
+    calendar, by more than half. A period whose label a newer regime also uses is superseded too,
+    which is what keeps the partial unique index on canonical labels satisfiable.
+  * A SEC CALENDAR'S FIRST YEAR STARTS AFTER THE ONE BEFORE IT. A transition or own year that no
+    fact gives a start for begins the day after the previous calendar's last year end, not twelve
+    months before its own end, and is a transition `T` if that leaves less than a year. A recast
+    year (a successor's history) is never clipped: it is derived from a full-year span, which
+    states its start.
   * The CURRENT year is projected one year past the last year end, `is_observed = false`, so the
     quarters filed before its annual report have a year to belong to.
 
@@ -51,6 +57,13 @@ YEAR_DAYS = (355, 375)
 QUARTER_DAYS = (75, 125)
 #: Two ends this close are one end.
 SAME_END = timedelta(days=20)
+#: A SEC year overlapping a newer regime's year by more than this is superseded. Measured
+#: 2026-11-07 over production's canonical years: Magnera's December 2022 (Glatfelter) and its
+#: September 2023 (Berry's spun-off business, the accounting acquirer) overlap by 90 days, and
+#: Republic Airways' September 2024 (Mesa) and December 2023 (Republic) by 92, so the rule of
+#: "more than half" served both and a year read as reported twice. A month is the noise of a
+#: 52/53-week year against a month end; past it, a quarter of one year is counted in two.
+SUPERSEDING_OVERLAP_DAYS = 31
 #: The shortest span read as a period at all; shorter facts are months or weeks.
 MIN_SPAN_DAYS = 60
 #: An annual or transition report dated this close to its filing (or after it) names no year end:
@@ -290,22 +303,44 @@ def _distance(day: date, group: Sequence[_Year]) -> int:
     return min(abs((day - first).days), abs((day - last).days))
 
 
-def _finish(groups: list[list[_Year]], stats: Counter[str], *, labelled: bool) -> list[_Year]:
-    """Starts, regime numbers, recasts and labels, in place; the years in order."""
+def _finish(
+    groups: list[list[_Year]], stats: Counter[str], *, labelled: bool, after_previous: bool = False
+) -> list[_Year]:
+    """Starts, regime numbers, recasts and labels, in place; the years in order.
+
+    `after_previous` (SEC calendars): a regime's first year with no stated start begins the day
+    after the latest year end of the regimes before it. Measured
+    2026-11-07: without it Vericel's 10-KT for July-December 2010 read as all of 2010, overlapping
+    its June 2010 year by six months, and the change of year end read as a successor's calendar.
+    """
     for number, group in enumerate(groups, start=1):
         group.sort(key=lambda y: y.end)
         first_own = min((y.end for y in group if y.own), default=None)
         previous: _Year | None = None
         for year in group:
             year.regime = number
+            year.recast = (
+                number > 1 and not year.own and first_own is not None and year.end < first_own
+            )
             if year.start is None:
                 if previous is not None and (year.end - previous.end).days <= 400:
                     year.start = previous.end + timedelta(days=1)
                 else:
                     year.start = _add_months(year.end, -12) + timedelta(days=1)
-            year.recast = (
-                number > 1 and not year.own and first_own is not None and year.end < first_own
-            )
+                    if after_previous and previous is None:
+                        before = [
+                            y.end for g in groups[: number - 1] for y in g if y.end < year.end
+                        ]
+                        if before and (year.end - max(before)).days <= 400:
+                            clipped = max(before) + timedelta(days=1)
+                            if clipped > year.start:
+                                stats["start_after_previous"] += 1
+                                year.start = clipped
+                                # A clipped year shorter than a year is the change's transition:
+                                # Seneca's August 1994 - March 1995 is not its fiscal 1995.
+                                if year.label == "FY" and not _is_year(year.start, year.end):
+                                    year.label = "T"
+                                    stats["clipped_to_transition"] += 1
             previous = year
         if labelled:
             _label(group, stats)
@@ -456,7 +491,7 @@ def calendar_from_sec(
             observed=False,
         )
     )
-    years = _finish(groups, stats, labelled=True)
+    years = _finish(groups, stats, labelled=True, after_previous=True)
     stats["years"] = sum(1 for y in years if y.label == "FY" and y.observed)
     stats["transitions"] = sum(1 for y in years if y.label == "T")
 
@@ -525,7 +560,9 @@ def calendar_from_sec(
             stats["quarters_computed"] += sum(1 for p in computed if p.fiscal_period[0] == "Q")
 
     regimes = [_regime(n, g, groups, observed_kind=None) for n, g in enumerate(groups, start=1)]
-    return Calendar(regimes, _canonical(periods, stats), stats)
+    return Calendar(
+        regimes, _canonical(periods, stats, superseding=SUPERSEDING_OVERLAP_DAYS), stats
+    )
 
 
 def _nth(start: date, end: date, length: float) -> int:
@@ -558,8 +595,15 @@ def _overlap(a: Period, b: Period) -> int:
     return max(0, (min(a.period_end, b.period_end) - max(a.period_start, b.period_start)).days + 1)
 
 
-def _canonical(periods: list[Period], stats: Counter[str]) -> list[Period]:
-    """One row per (regime, year, period), then the newest calendar wins (decision 11)."""
+def _canonical(
+    periods: list[Period], stats: Counter[str], *, superseding: int | None = None
+) -> list[Period]:
+    """One row per (regime, year, period), then the newest calendar wins (decision 11).
+
+    `superseding`: a year overlapping a newer regime's year by more than this many days loses. With
+    None (a provider's observed calendar), by more than half the shorter: every start there is its
+    end less twelve months, so a smaller overlap is an artifact of the dating, not of the company.
+    """
     # A PERIOD THAT ENDS BEFORE IT STARTS IS NOT A PERIOD, and `fiscal_period_check` refuses it,
     # failing every filer in the run. A period this module built wrongly is counted, never written.
     sane = [p for p in periods if p.period_start <= p.period_end]
@@ -577,14 +621,18 @@ def _canonical(periods: list[Period], stats: Counter[str]) -> list[Period]:
         by_key[key] = period
     kept = sorted(by_key.values(), key=lambda p: (p.regime, p.period_end, p.fiscal_period))
 
-    # A year overlapping a newer regime's year by more than half the shorter is superseded.
     years = [p for p in kept if p.fiscal_period in ("FY", "T")]
     superseded: set[tuple[int, int, str]] = set()
     for older in years:
         for newer in years:
             if newer.regime <= older.regime:
                 continue
-            if _overlap(older, newer) * 2 > min(_length(older), _length(newer)):
+            overlap = _overlap(older, newer)
+            if (
+                overlap > superseding
+                if superseding is not None
+                else overlap * 2 > min(_length(older), _length(newer))
+            ):
                 superseded.add((older.regime, older.fiscal_year, older.fiscal_period))
     # Then one canonical year per label, the newest regime's: a year that loses either way takes its
     # quarters and halves with it, which belong to that year's calendar and no other.
