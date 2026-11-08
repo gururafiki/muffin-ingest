@@ -445,8 +445,8 @@ def yahoo_analyst_action(
     serving view ranks below Yahoo's. A document without the module (most non-US listings) states
     nothing and retracts nothing.
 
-    OUTSIDE THE `yahoo_companies` JOB until it has run live on a few companies and been replayed
-    over every stored document; joining the job is then one line in `automation.py`.
+    IN THE `yahoo_companies` JOB since 2026-11-08, after a live run on six companies and a replay
+    over every stored document.
     """
     documents = partitioned.loaded_rows(raw_yahoo_summary)
     with postgres.connect() as conn:

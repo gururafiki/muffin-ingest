@@ -8,6 +8,7 @@ import dagster as dg
 from muffin_ingest_dagster.defs.companies import partitions as company_partitions
 from muffin_ingest_dagster.defs.companies.core import (
     company_facts,
+    yahoo_analyst_action,
     yahoo_fiscal_calendar,
     yahoo_statement,
 )
@@ -31,11 +32,16 @@ RESUME_LOOKBACK = 80
 #: STAGE 1 AND STAGE 2 IN ONE RUN, so a company's documents and its rows land together; the
 #: derivation is its own asset, triggered by what this writes. THE CALENDAR RUNS LAST IN THE SAME
 #: RUN (since 2026-10-30), so its labels are on the statements before the derivation, which waits
-#: for the run's `sql` slot, reads them.
+#: for the run's `sql` slot, reads them. ANALYST ACTIONS JOINED ON 2026-11-08, after a live run and
+#: a replay over every stored summary: they read the same document `company_facts` does.
 yahoo_companies_job = dg.define_asset_job(
     COMPANY_SCHEDULE,
     selection=dg.AssetSelection.assets(
-        raw_yahoo_company, company_facts, yahoo_statement, yahoo_fiscal_calendar
+        raw_yahoo_company,
+        company_facts,
+        yahoo_statement,
+        yahoo_fiscal_calendar,
+        yahoo_analyst_action,
     ),
     partitions_def=security_partitions,
     run_tags={**COMPANY_LANE, **COMPANY_RUN},
