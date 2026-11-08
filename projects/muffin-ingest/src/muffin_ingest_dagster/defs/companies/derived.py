@@ -10,9 +10,13 @@ from dagster import AssetExecutionContext
 from muffin_ingest_dagster.defs.companies.core import yahoo_statement
 from muffin_ingest_dagster.lib.resources import Postgres
 
-#: A FLOOR, because not every writer of the statements is a Dagster asset. Until Phase 5 the edge's
-#: SEC and XBRL resources write `security_statement` and `security_metric` through PostgREST, and
-#: nothing upstream here materialises when they do. Every half hour, at an off-minute.
+#: A FLOOR, every half hour at an off-minute. It was added because the edge's SEC and XBRL resources
+#: wrote `security_statement` and `security_metric` through PostgREST, which no upstream
+#: materialisation announced. They left in Phase 5 (2026-11-07). The floor stays for a second
+#: reason: a failed `eager()` request counts as handled and is never retried, so a derivation that
+#: dies at its statement timeout would otherwise wait for the next statement write, which on a
+#: weekend is a day away. A tick with both backlogs empty costs one count and returns. The name is
+#: kept: it is in the condition's label, which Dagster's automation state is keyed on.
 EDGE_WRITES_FLOOR = "17,47 * * * *"
 
 #: The two backlogs, counted from the indexes the functions page on.
