@@ -1604,6 +1604,37 @@
       ],
       "tags": {}
     },
+    "yahoo_analyst_action": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "companies",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "yahoo_classification": {
       "automation_condition": null,
       "backfill_policy": {

@@ -548,6 +548,47 @@ def test_stage_2_writes_each_table_from_the_newest_summary_in_one_transaction(
     assert meta(result, "yahoo_classification")["nodes_created"] == 2
 
 
+def test_analyst_actions_come_from_the_stored_summary_and_retract_only_yahoos_own(
+    tmp_path: Path,
+) -> None:
+    """Stage 2 over the documents stage 1 stored, with no request of its own.
+
+    Apple's document carries 971 actions and is its whole history, so Yahoo's rows it no longer
+    states are retracted, scoped to Apple and to Yahoo's source: finviz's frozen rows are the
+    view's backup. Vodafone's has no `upgradeDowngradeHistory`, so it writes and retracts nothing.
+    """
+    with yahoo(Yahoo({"AAPL": summary_body("AAPL"), "VOD.L": summary_body("VOD.L")})):
+        result = visit(
+            tmp_path,
+            [AAPL, VOD],
+            assets=[company_raw.raw_yahoo_company, company_core.yahoo_analyst_action],
+        )
+    assert result.success
+
+    offered = OFFERED["market.security_price_target"]
+    assert len(offered) == 971
+    assert {r["security_id"] for r in offered} == {AAPL[0]}
+    assert {r["source_code"] for r in offered} == {"yfinance"}
+
+    upserts = [
+        sql for sql, _ in CALLS if sql.startswith("insert into market.security_price_target")
+    ]
+    assert upserts and all(
+        "on conflict (security_id, source_code, published_at, analyst_company)" in sql
+        for sql in upserts
+    )
+    deletes = [
+        params
+        for sql, params in CALLS
+        if sql.startswith("delete from market.security_price_target")
+    ]
+    assert len(deletes) == 1
+    assert deletes[0][:2] == [AAPL[0], "yfinance"]
+
+    m = meta(result, "yahoo_analyst_action")
+    assert (m["companies"], m["without_module"], m["actions"]) == (1, 1, 971)
+
+
 def test_yahoo_statements_are_keyed_by_their_provider_and_merge_into_the_stored_lines(
     tmp_path: Path,
 ) -> None:
