@@ -732,3 +732,13 @@ def test_the_calendar_runs_in_the_company_job_after_the_statements() -> None:
     assert dg.AssetKey("yahoo_fiscal_calendar") in selected
     calendar = loaded_defs().resolve_assets_def("yahoo_fiscal_calendar")
     assert dg.AssetKey("yahoo_statement") in calendar.dependency_keys
+
+
+def test_analyst_actions_run_in_the_company_job_from_the_summary_it_stores() -> None:
+    """They read `raw_yahoo_summary`, which the same run writes, so a company's actions are never
+    older than its other facts."""
+    job = company_automation.yahoo_companies_job
+    selected = job.selection.resolve(loaded_defs().resolve_asset_graph())
+    assert dg.AssetKey("yahoo_analyst_action") in selected
+    actions = loaded_defs().resolve_assets_def("yahoo_analyst_action")
+    assert dg.AssetKey("raw_yahoo_summary") in actions.dependency_keys

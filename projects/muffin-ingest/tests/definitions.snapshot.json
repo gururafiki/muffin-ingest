@@ -1963,6 +1963,7 @@
         "security_officer",
         "security_profile",
         "security_share_stats",
+        "yahoo_analyst_action",
         "yahoo_classification",
         "yahoo_fiscal_calendar",
         "yahoo_statement"
