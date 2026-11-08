@@ -7,8 +7,8 @@ from typing import Any
 
 import dagster as dg
 from dagster import AssetExecutionContext
-from muffin_ingest.facets import company, fiscal, fx, statements
-from muffin_ingest.writers import WriteResult, update_existing, upsert
+from muffin_ingest.facets import analyst_actions, company, fiscal, fx, statements
+from muffin_ingest.writers import WriteResult, retract_unproduced, update_existing, upsert
 
 from muffin_ingest_dagster.defs.companies.partitions import COMPANY_PARTITIONS_PER_RUN
 from muffin_ingest_dagster.defs.companies.raw import FRESH, STATEMENTS, SUMMARY
@@ -409,3 +409,84 @@ def yahoo_fiscal_calendar(
             stats["labelled"] = int(labelled[0]) if labelled and labelled[0] is not None else 0
         conn.commit()
     return dg.MaterializeResult(metadata={"securities": len(sids), **dict(sorted(stats.items()))})
+
+
+#: THE KEY CARRIES THE PROVIDER AND THE ACTION'S TIMESTAMP (muffin-deployment migration
+#: 20261108210000): finviz's frozen rows sit beside Yahoo's, and Yahoo states one firm twice in a
+#: day.
+ANALYST_ACTION_KEY = ["security_id", "source_code", "published_at", "analyst_company"]
+
+
+@dg.asset(
+    ins={"raw_yahoo_summary": dg.AssetIn(key=SUMMARY, metadata=_TOLERATE_MISSING)},
+    partitions_def=security_partitions,
+    backfill_policy=dg.BackfillPolicy.multi_run(COMPANY_PARTITIONS_PER_RUN),
+    pool="sql",
+    group_name="companies",
+    kinds={"postgres"},
+    metadata={"table": "market.security_price_target"},
+    freshness_policy=FRESH,
+    description=(
+        "Analysts' rating and price-target actions from each company's newest summary document, "
+        "back to 2012; the app reads them through market.security_analyst_action."
+    ),
+)
+def yahoo_analyst_action(
+    context: AssetExecutionContext, postgres: Postgres, raw_yahoo_summary: Any
+) -> dg.MaterializeResult[None]:
+    """`upgradeDowngradeHistory` from the stored summaries, into `market.security_price_target`.
+
+    No provider call: the company lane already fetched these documents. Replaces finviz's analyst
+    actions, which retired on 2026-11-06 (approved 2026-11-08, the umbrella's
+    docs/specs/2026-11-07-analyst-actions-from-yahoo.md).
+
+    A DOCUMENT CARRYING THE MODULE IS THE COMPANY'S WHOLE HISTORY, so Yahoo's rows it no longer
+    states are retracted, per company and for Yahoo's source only: finviz's rows are a backup the
+    serving view ranks below Yahoo's. A document without the module (most non-US listings) states
+    nothing and retracts nothing.
+
+    OUTSIDE THE `yahoo_companies` JOB until it has run live on a few companies and been replayed
+    over every stored document; joining the job is then one line in `automation.py`.
+    """
+    documents = partitioned.loaded_rows(raw_yahoo_summary)
+    with postgres.connect() as conn:
+        known = fx.known_currencies(conn)
+        parsed = analyst_actions.normalise(documents, known_currencies=known)
+        by_company: dict[str, list[dict[str, Any]]] = {sid: [] for sid in parsed.answered}
+        for row in parsed.rows:
+            by_company[row["security_id"]].append(row)
+        retracted = 0
+        with conn.cursor() as cur:
+            written = upsert(
+                cur,
+                "market.security_price_target",
+                parsed.rows,
+                conflict=ANALYST_ACTION_KEY,
+                update=[
+                    "published_date",
+                    "target_from",
+                    "target_to",
+                    "currency_code",
+                    "status",
+                    "rating_change",
+                ],
+            )
+            for sid, rows in sorted(by_company.items()):
+                retracted += retract_unproduced(
+                    cur,
+                    "market.security_price_target",
+                    rows,
+                    scope={"security_id": sid, "source_code": analyst_actions.SOURCE},
+                    key=["published_at", "analyst_company"],
+                    types={"published_at": "timestamptz", "analyst_company": "text"},
+                ).retracted
+        conn.commit()
+    if parsed.stats["unknown_action"]:
+        context.log.warning(
+            "%d analyst actions carry a code outside %s; stored with no status",
+            parsed.stats["unknown_action"],
+            ", ".join(sorted(analyst_actions.STATUS)),
+        )
+    return dg.MaterializeResult(
+        metadata={**parsed.stats, **_written(written), "retracted": retracted}
+    )
