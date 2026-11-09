@@ -71,10 +71,16 @@ class SecTransport(RuntimeError):
 
 @dataclass(frozen=True)
 class SecAnswer:
-    """What SEC served, unchanged, and the status it served it with: 200 or 404."""
+    """What SEC served, unchanged, and the status it served it with: 200 or 404.
+
+    `too_large` is a 200 whose body was NOT read because it is over the `max_bytes` asked for: the
+    document's body is then empty. "This filing has no instance" and "we declined to read 128 MB"
+    are different facts, so the refusal travels as its own flag rather than as an absence.
+    """
 
     document: Document
     status: int
+    too_large: bool = False
 
 
 _lock = threading.Lock()
@@ -119,16 +125,31 @@ def _configure() -> ModuleType:
     return cast(ModuleType, module)
 
 
-def fetch(url: str, *, provider: Provider, timeout_s: float = 60.0) -> SecAnswer:
-    """One SEC request, past http-cache, paced by edgartools' limiter. 200 and 404 return."""
+def fetch(
+    url: str, *, provider: Provider, timeout_s: float = 60.0, max_bytes: int | None = None
+) -> SecAnswer:
+    """One SEC request, past http-cache, paced by edgartools' limiter. 200 and 404 return.
+
+    With `max_bytes`, a 200 over that size is not read (`SecAnswer.too_large`): refused on its
+    `Content-Length` before the body, as the edge did, and also while reading, because with gzip
+    that header is the COMPRESSED size and the body is what lands in memory.
+    """
     import httpx
 
     httpclient = edgar().httpclient
     refused: SecRefused | None = None
+    too_large = False
     with metrics.request(provider) as outcome:
         try:
             with httpclient.http_client() as client:
-                response = client.get(url, headers=PAST_THE_CACHE, timeout=timeout_s)
+                if max_bytes is None:
+                    response = client.get(url, headers=PAST_THE_CACHE, timeout=timeout_s)
+                    body = response.content
+                else:
+                    with client.stream(
+                        "GET", url, headers=PAST_THE_CACHE, timeout=timeout_s
+                    ) as response:
+                        body, too_large = _read_bounded(response, max_bytes)
         except httpx.HTTPError as exc:
             raise SecTransport(f"{url}: {type(exc).__name__}: {exc}") from exc
         if response.status_code == 404:
@@ -136,18 +157,38 @@ def fetch(url: str, *, provider: Provider, timeout_s: float = 60.0) -> SecAnswer
         elif response.status_code != 200:
             outcome["outcome"] = "throttled" if response.status_code == 429 else "refused"
             refused = SecRefused(response.status_code, url)
+        elif too_large:
+            outcome["outcome"] = "too_large"
     # RAISED OUTSIDE THE METRICS BLOCK, which records any exception escaping it as `transport`.
     if refused is not None:
         raise refused
     return SecAnswer(
         document=Document(
             url=url,
-            body=response.content,
+            body=body,
             content_type=response.headers.get("content-type", "application/octet-stream"),
             fetched_at=datetime.now(UTC),
         ),
         status=response.status_code,
+        too_large=too_large,
     )
+
+
+def _read_bounded(response: Any, max_bytes: int) -> tuple[bytes, bool]:
+    """A streamed body, or (b"", True) once it is known to be over `max_bytes`."""
+    if response.status_code != 200:
+        return bytes(response.read()), False
+    declared = response.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > max_bytes:
+        return b"", True
+    chunks: list[bytes] = []
+    read = 0
+    for chunk in response.iter_bytes():
+        read += len(chunk)
+        if read > max_bytes:
+            return b"", True
+        chunks.append(chunk)
+    return b"".join(chunks), False
 
 
 def _www() -> str:
@@ -189,6 +230,87 @@ def quarter_listing_url(day: date) -> str:
 def filing_text_url(cik: int, accession: str) -> str:
     """A filing's complete submission text file, which carries a Form 4's XML inline."""
     return f"{_www()}/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{accession}.txt"
+
+
+def filing_directory_url(cik: int, accession: str) -> str:
+    """A filing's archive directory, which spells the accession without its dashes."""
+    return f"{_www()}/Archives/edgar/data/{cik}/{accession.replace('-', '')}"
+
+
+def filing_index_url(cik: int, accession: str) -> str:
+    """The directory listing as JSON, with each file's size."""
+    return f"{filing_directory_url(cik, accession)}/index.json"
+
+
+def filing_index_html_url(cik: int, accession: str) -> str:
+    """The filing's HTML index, which lists every document and no sizes."""
+    return f"{filing_directory_url(cik, accession)}/{accession}-index.htm"
+
+
+def filing_document_url(cik: int, accession: str, name: str) -> str:
+    return f"{filing_directory_url(cik, accession)}/{name}"
+
+
+@dataclass(frozen=True)
+class InstanceFetch:
+    """Every document SEC was asked for to read one filing's XBRL instance, in order.
+
+    `outcome` is `answered` (the instance is the last answer), `absent` (no index names one, or the
+    document it names is a 404) or `too_large` (over `segments.MAX_INSTANCE_BYTES`, by the size in
+    `index.json` or the response's; the body is not read). A refusal or a transport failure raises,
+    and is never one of these.
+    """
+
+    answers: tuple[SecAnswer, ...]
+    instance_name: str | None
+    outcome: Literal["answered", "absent", "too_large"]
+
+
+def fetch_instance(
+    cik: int, accession: str, *, index_timeout_s: float = 15.0, timeout_s: float = 25.0
+) -> InstanceFetch:
+    """A filing's XBRL instance, found as the edge found it (`segments.ts::findInstanceUrl`).
+
+    `index.json` first, for its sizes: the 32 MB gate is applied before the body is fetched, which
+    is what kept AEP's 127.72 MB 2015 10-K from killing the edge worker on every run. It is
+    INCOMPLETE for some filings (Diageo's and Infosys's FY2025 20-Fs list 4 items, not the
+    instance), so when it names no instance the HTML index is asked too; that carries no size, and
+    the fetch itself is bounded instead.
+    """
+    from muffin_ingest.facets import segments
+
+    answers: list[SecAnswer] = []
+    listing = fetch(filing_index_url(cik, accession), provider="sec", timeout_s=index_timeout_s)
+    answers.append(listing)
+    picked: tuple[str, float | None] | None = None
+    if listing.status == 200:
+        picked = segments.instance_from_index_json(segments.text_of(listing.document.body))
+    if picked is None:
+        html = fetch(
+            filing_index_html_url(cik, accession), provider="sec", timeout_s=index_timeout_s
+        )
+        answers.append(html)
+        name = (
+            segments.instance_from_index_html(segments.text_of(html.document.body))
+            if html.status == 200
+            else None
+        )
+        if name is None:
+            return InstanceFetch(tuple(answers), None, "absent")
+        picked = (name, None)
+    name, size = picked
+    if segments.instance_is_too_large(size):
+        return InstanceFetch(tuple(answers), name, "too_large")
+    document = fetch(
+        filing_document_url(cik, accession, name),
+        provider="sec",
+        timeout_s=timeout_s,
+        max_bytes=segments.MAX_INSTANCE_BYTES,
+    )
+    answers.append(document)
+    if document.too_large:
+        return InstanceFetch(tuple(answers), name, "too_large")
+    return InstanceFetch(tuple(answers), name, "answered" if document.status == 200 else "absent")
 
 
 def insider_dataset_url(year: int, quarter: int) -> str:
