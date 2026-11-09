@@ -1095,13 +1095,6 @@ def test_an_unknown_size_is_not_a_zero_size() -> None:
     assert segments.instance_from_index_json(body) == ("x-20250630_htm.xml", None)
 
 
-def test_the_archive_directory_drops_the_accession_dashes() -> None:
-    assert (
-        segments.archive_directory("https://www.sec.gov", 1018724, "0001018724-25-000086")
-        == "https://www.sec.gov/Archives/edgar/data/1018724/000101872425000086"
-    )
-
-
 # ── Rules the edge's checks never exercised, each found by mutating this port ──────────────────
 
 

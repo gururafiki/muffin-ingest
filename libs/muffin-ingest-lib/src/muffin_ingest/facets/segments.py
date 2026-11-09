@@ -934,11 +934,6 @@ def is_instance_name(name: str) -> bool:
     return _INSTANCE_NAME.search(name) is not None
 
 
-def archive_directory(base: str, cik: int, accession: str) -> str:
-    """`{base}/Archives/edgar/data/{cik}/{accession without dashes}`."""
-    return f"{base}/Archives/edgar/data/{cik}/{accession.replace('-', '')}"
-
-
 def _js_number(value: object) -> float:
     """`Number(value)` for what `index.json` puts in `size`: a numeric string, '' or a number."""
     if isinstance(value, bool):
