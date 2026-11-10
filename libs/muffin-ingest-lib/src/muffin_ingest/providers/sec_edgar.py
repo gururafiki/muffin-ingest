@@ -319,9 +319,14 @@ def filing_document_url(cik: int, accession: str, name: str) -> str:
     return f"{filing_directory_url(cik, accession)}/{name}"
 
 
+InstanceDocument = Literal["index_json", "index_html", "instance"]
+InstanceOutcome = Literal["answered", "absent", "too_large"]
+
+
 @dataclass(frozen=True)
 class InstanceFetch:
-    """Every document SEC was asked for to read one filing's XBRL instance, in order.
+    """Every document SEC was asked for to read one filing's XBRL instance, in order, each named
+    for what it is: `index_json`, `index_html` or `instance`.
 
     `outcome` is `answered` (the instance is the last answer), `absent` (no index names one, or the
     document it names is a 404) or `too_large` (over `segments.MAX_INSTANCE_BYTES`, by the size in
@@ -329,9 +334,9 @@ class InstanceFetch:
     and is never one of these.
     """
 
-    answers: tuple[SecAnswer, ...]
+    answers: tuple[tuple[InstanceDocument, SecAnswer], ...]
     instance_name: str | None
-    outcome: Literal["answered", "absent", "too_large"]
+    outcome: InstanceOutcome
 
 
 def fetch_instance(
@@ -347,9 +352,9 @@ def fetch_instance(
     """
     from muffin_ingest.facets import segments
 
-    answers: list[SecAnswer] = []
+    answers: list[tuple[InstanceDocument, SecAnswer]] = []
     listing = fetch(filing_index_url(cik, accession), provider="sec", timeout_s=index_timeout_s)
-    answers.append(listing)
+    answers.append(("index_json", listing))
     picked: tuple[str, float | None] | None = None
     if listing.status == 200:
         picked = segments.instance_from_index_json(segments.text_of(listing.document.body))
@@ -357,7 +362,7 @@ def fetch_instance(
         html = fetch(
             filing_index_html_url(cik, accession), provider="sec", timeout_s=index_timeout_s
         )
-        answers.append(html)
+        answers.append(("index_html", html))
         name = (
             segments.instance_from_index_html(segments.text_of(html.document.body))
             if html.status == 200
@@ -375,7 +380,7 @@ def fetch_instance(
         timeout_s=timeout_s,
         max_bytes=segments.MAX_INSTANCE_BYTES,
     )
-    answers.append(document)
+    answers.append(("instance", document))
     if document.too_large:
         return InstanceFetch(tuple(answers), name, "too_large")
     return InstanceFetch(tuple(answers), name, "answered" if document.status == 200 else "absent")

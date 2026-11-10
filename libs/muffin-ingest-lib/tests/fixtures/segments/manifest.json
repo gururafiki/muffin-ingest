@@ -1,0 +1,56 @@
+{
+ "captured": "2026-11-09",
+ "expected_from": "market-refresh/segments.ts at muffin-deployment 2981e0a, run under Deno",
+ "filings": [
+  {
+   "label": "aapl_10q_2026q3",
+   "cik": 320193,
+   "accession": "0000320193-26-000020",
+   "instance": "aapl-20260627_htm.xml",
+   "bytes": 962405,
+   "sha256": "28f986bb243c8fdd445560d381df4b57912ca290b03b8451ecd518e63cdb5d2b",
+   "rows": 46,
+   "placed": 42
+  },
+  {
+   "label": "googl_10q_2026q3",
+   "cik": 1652044,
+   "accession": "0001652044-26-000084",
+   "instance": "goog-20260930_htm.xml",
+   "bytes": 3161339,
+   "sha256": "6852dda6a5ebc0d953bb5341a3a1f5b84422206df56bc3a6f5aea9b69cbb84da",
+   "rows": 40,
+   "placed": 37
+  },
+  {
+   "label": "cvx_10k_2025",
+   "cik": 93410,
+   "accession": "0000093410-26-000078",
+   "instance": "cvx-20251231_htm.xml",
+   "bytes": 4946413,
+   "sha256": "383742ba0900c6bad8fbea17085f2854a2264ca1d3673de71654c94b76ddbe98",
+   "rows": 125,
+   "placed": 125
+  },
+  {
+   "label": "scco_10k_2018",
+   "cik": 1001838,
+   "accession": "0001047469-19-000845",
+   "instance": "scco-20181231.xml",
+   "bytes": 7749012,
+   "sha256": "c861043a8b4abef0f57da52718f1e8f2c38742a75d2d06d78b2e2600968ea536",
+   "rows": 235,
+   "placed": 228
+  },
+  {
+   "label": "eqnr_20f_2025",
+   "cik": 1140625,
+   "accession": "0001140625-26-000013",
+   "instance": "eqnr-20251231_htm.xml",
+   "bytes": 8956977,
+   "sha256": "6a9cfa22f5a2c056f8185220ecd1ddf57d13a9ad911ee4dbc7ef49b2be6e7150",
+   "rows": 102,
+   "placed": 102
+  }
+ ]
+}

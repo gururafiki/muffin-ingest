@@ -578,3 +578,57 @@ def test_nothing_sent_is_nothing_changed() -> None:
     result = upsert(cur, "market.thing", [], conflict=["k"], update=["v"])
     assert (result.written, result.changed) == (0, 0)
     assert cur.calls == [], "nothing is sent"
+
+
+SEGMENT_KEY = ["security_id", "axis", "member_code", "parent_key"]
+
+
+def test_a_computed_key_column_keys_the_dedupe_and_the_conflict_and_is_never_inserted() -> None:
+    """`security_segment.parent_key` is generated (`coalesce(parent_member, '')`): Postgres refuses
+    a value for it, and it is still part of the key.
+
+    THE FIXTURE MAKES THE RULES DISAGREE. Search exists flat AND inside Services, so a dedupe that
+    ignored the computed column would keep one of the two; the two Services cells are a true
+    duplicate, so a dedupe that ignored nothing would still collapse exactly one.
+    """
+    cur = FakeCursor()
+    cell: dict[str, Any] = {"security_id": "s1", "axis": "product", "member_code": "Search"}
+    rows = [
+        {**cell, "parent_member": None, "parent_key": "", "value": 1},
+        {**cell, "parent_member": "Services", "parent_key": "Services", "value": 2},
+        {**cell, "parent_member": "Services", "parent_key": "Services", "value": 3},
+    ]
+    result = upsert(
+        cur, "market.security_segment", rows,
+        conflict=SEGMENT_KEY, update=["value", "parent_member"], computed=["parent_key"],
+    )  # fmt: skip
+
+    assert (result.written, result.collapsed) == (2, 1)
+    sql, params = cur.calls[0]
+    inserted = sql[sql.index("(") + 1 : sql.index(")")].split(", ")
+    assert inserted == ["axis", "member_code", "parent_member", "security_id", "value"]
+    assert "on conflict (security_id, axis, member_code, parent_key)" in sql
+    assert "parent_key =" not in sql, "a generated column is never assigned"
+    assert sql.count("(%s, %s, %s, %s, %s)") == 2
+    assert params.count("Services") == 1 and "" not in params, "the computed value is not sent"
+    assert 3 in params and 2 not in params, "the LAST duplicate wins, as everywhere"
+
+
+def test_a_computed_column_must_be_in_the_key_carried_by_every_row_and_never_updated() -> None:
+    row = {"security_id": "s1", "axis": "a", "member_code": "m", "parent_key": "", "value": 1}
+    with pytest.raises(WriterError, match="not part of the conflict key"):
+        upsert(FakeCursor(), "market.t", [row], conflict=["security_id"], computed=["parent_key"])
+    for broken in (
+        {k: v for k, v in row.items() if k != "parent_key"},
+        {**row, "parent_key": None},
+    ):
+        with pytest.raises(WriterError, match="lacks computed key column"):
+            upsert(
+                FakeCursor(), "market.t", [row, broken],
+                conflict=SEGMENT_KEY, update=["value"], computed=["parent_key"],
+            )  # fmt: skip
+    with pytest.raises(WriterError, match="cannot be updated"):
+        upsert(
+            FakeCursor(), "market.t", [row],
+            conflict=SEGMENT_KEY, update=["value", "parent_key"], computed=["parent_key"],
+        )  # fmt: skip

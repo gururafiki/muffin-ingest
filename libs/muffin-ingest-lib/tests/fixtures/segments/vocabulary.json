@@ -1,0 +1,274 @@
+{
+ "axes": [
+  {
+   "axis": "cninfo:分产品",
+   "kind": "product",
+   "priority": 100,
+   "required_member": null
+  },
+  {
+   "axis": "cninfo:分地区",
+   "kind": "geography",
+   "priority": 50,
+   "required_member": null
+  },
+  {
+   "axis": "cninfo:分行业",
+   "kind": "business",
+   "priority": 90,
+   "required_member": null
+  },
+  {
+   "axis": "ifrs-full:ConsolidatedAndSeparateFinancialStatementsAxis",
+   "kind": "qualifier",
+   "priority": 0,
+   "required_member": "ifrs-full:ConsolidatedMember"
+  },
+  {
+   "axis": "ifrs-full:GeographicalAreasAxis",
+   "kind": "geography",
+   "priority": 50,
+   "required_member": null
+  },
+  {
+   "axis": "ifrs-full:MajorCustomersAxis",
+   "kind": "qualifier",
+   "priority": 0,
+   "required_member": null
+  },
+  {
+   "axis": "ifrs-full:OperatingSegmentsAxis",
+   "kind": "business",
+   "priority": 90,
+   "required_member": null
+  },
+  {
+   "axis": "ifrs-full:ProductsAndServicesAxis",
+   "kind": "product",
+   "priority": 100,
+   "required_member": null
+  },
+  {
+   "axis": "ifrs-full:SegmentConsolidationItemsAxis",
+   "kind": "qualifier",
+   "priority": 0,
+   "required_member": "ifrs-full:OperatingSegmentsMember"
+  },
+  {
+   "axis": "ifrs-full:SegmentsAxis",
+   "kind": "business",
+   "priority": 90,
+   "required_member": null
+  },
+  {
+   "axis": "ifrs-full:TimingOfTransferOfGoodsOrServicesAxis",
+   "kind": "qualifier",
+   "priority": 0,
+   "required_member": null
+  },
+  {
+   "axis": "in-bse-fin:ReportableSegmentAssetsAxis",
+   "kind": "business",
+   "priority": 89,
+   "required_member": null
+  },
+  {
+   "axis": "in-bse-fin:ReportableSegmentLiabilitiesAxis",
+   "kind": "business",
+   "priority": 88,
+   "required_member": null
+  },
+  {
+   "axis": "in-bse-fin:ReportableSegmentsAxis",
+   "kind": "business",
+   "priority": 90,
+   "required_member": null
+  },
+  {
+   "axis": "in-bse-fin:ReportableSegmentsFinanceCostsAxis",
+   "kind": "business",
+   "priority": 87,
+   "required_member": null
+  },
+  {
+   "axis": "srt:ConsolidationItemsAxis",
+   "kind": "qualifier",
+   "priority": 0,
+   "required_member": null
+  },
+  {
+   "axis": "srt:ProductOrServiceAxis",
+   "kind": "product",
+   "priority": 100,
+   "required_member": null
+  },
+  {
+   "axis": "srt:StatementGeographicalAxis",
+   "kind": "geography",
+   "priority": 50,
+   "required_member": null
+  },
+  {
+   "axis": "us-gaap:StatementBusinessSegmentsAxis",
+   "kind": "business",
+   "priority": 90,
+   "required_member": null
+  },
+  {
+   "axis": "us-gaap:StatementConsolidationItemsAxis",
+   "kind": "qualifier",
+   "priority": 0,
+   "required_member": null
+  }
+ ],
+ "captured": "2026-11-09",
+ "concepts": [
+  {
+   "concept": "PaymentsToAcquirePropertyPlantAndEquipment",
+   "metric_code": "capital_expenditure",
+   "priority": 100
+  },
+  {
+   "concept": "PropertyPlantAndEquipmentAdditions",
+   "metric_code": "capital_expenditure",
+   "priority": 70
+  },
+  {
+   "concept": "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",
+   "metric_code": "capital_expenditure",
+   "priority": 100
+  },
+  {
+   "concept": "SegmentExpenditureAdditionToLongLivedAssets",
+   "metric_code": "capital_expenditure",
+   "priority": 60
+  },
+  {
+   "concept": "CostOfGoodsAndServicesSold",
+   "metric_code": "cost_of_revenue",
+   "priority": 100
+  },
+  {
+   "concept": "CostOfRevenue",
+   "metric_code": "cost_of_revenue",
+   "priority": 90
+  },
+  {
+   "concept": "CostOfSales",
+   "metric_code": "cost_of_revenue",
+   "priority": 100
+  },
+  {
+   "concept": "Depreciation",
+   "metric_code": "depreciation",
+   "priority": 100
+  },
+  {
+   "concept": "DepreciationAndAmortisationExpense",
+   "metric_code": "depreciation",
+   "priority": 100
+  },
+  {
+   "concept": "DepreciationDepletionAndAmortization",
+   "metric_code": "depreciation",
+   "priority": 90
+  },
+  {
+   "concept": "Goodwill",
+   "metric_code": "goodwill",
+   "priority": 100
+  },
+  {
+   "concept": "NoncurrentAssets",
+   "metric_code": "long_lived_assets",
+   "priority": 100
+  },
+  {
+   "concept": "OperatingIncomeLoss",
+   "metric_code": "operating_income",
+   "priority": 100
+  },
+  {
+   "concept": "ProfitLossFromOperatingActivities",
+   "metric_code": "operating_income",
+   "priority": 100
+  },
+  {
+   "concept": "SegmentProfitLossBeforeTaxAndFinanceCosts",
+   "metric_code": "operating_income",
+   "priority": 90
+  },
+  {
+   "concept": "Revenue",
+   "metric_code": "revenue",
+   "priority": 100
+  },
+  {
+   "concept": "RevenueFromContractsWithCustomers",
+   "metric_code": "revenue",
+   "priority": 90
+  },
+  {
+   "concept": "RevenueFromContractWithCustomerExcludingAssessedTax",
+   "metric_code": "revenue",
+   "priority": 100
+  },
+  {
+   "concept": "RevenueFromContractWithCustomerIncludingAssessedTax",
+   "metric_code": "revenue",
+   "priority": 90
+  },
+  {
+   "concept": "Revenues",
+   "metric_code": "revenue",
+   "priority": 80
+  },
+  {
+   "concept": "SalesRevenueNet",
+   "metric_code": "revenue",
+   "priority": 70
+  },
+  {
+   "concept": "SegmentRevenue",
+   "metric_code": "revenue",
+   "priority": 100
+  },
+  {
+   "concept": "Assets",
+   "metric_code": "total_assets",
+   "priority": 100
+  },
+  {
+   "concept": "SegmentAssets",
+   "metric_code": "total_assets",
+   "priority": 90
+  }
+ ],
+ "member_roles": [
+  {
+   "class": "residual",
+   "member_code": "ifrs-full:AllOtherSegmentsMember"
+  },
+  {
+   "class": "subtotal",
+   "member_code": "ifrs-full:ReportableSegmentsMember"
+  },
+  {
+   "class": "residual",
+   "member_code": "us-gaap:AllOtherSegmentsMember"
+  },
+  {
+   "class": "residual",
+   "member_code": "us-gaap:CorporateAndOtherMember"
+  },
+  {
+   "class": "subtotal",
+   "member_code": "us-gaap:OperatingSegmentsMember"
+  },
+  {
+   "class": "subtotal",
+   "member_code": "us-gaap:ReportableSegmentAggregationBeforeOtherOperatingSegmentMember"
+  }
+ ],
+ "parser_version": 20
+}
