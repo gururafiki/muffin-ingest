@@ -13,6 +13,7 @@ nothing.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -138,24 +139,103 @@ def test_series_id_is_read_out_of_the_filing_header() -> None:
     assert nport.series_id(_ewj()) == "S000004249"
 
 
-def test_the_fund_directory_is_asked_past_the_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lane asks this URL daily against a 30-day cache entry: without the bypass a fund SEC
-    listed in the last month could not resolve for up to a month."""
-    import httpx
+def _one_client(monkeypatch: pytest.MonkeyPatch, status: int = 200) -> list[tuple[str, str, float]]:
+    """`sec_edgar.fetch` faked: what it was asked, by whom, with which timeout."""
+    from datetime import UTC, datetime
 
+    from muffin_ingest.providers import sec_edgar
+    from muffin_ingest.providers.documents import Document
+
+    asked: list[tuple[str, str, float]] = []
+
+    def fetch(
+        url: str, *, provider: str, timeout_s: float = 60.0, max_bytes: int | None = None
+    ) -> sec_edgar.SecAnswer:
+        asked.append((url, provider, timeout_s))
+        return sec_edgar.SecAnswer(
+            document=Document(
+                url=url, body=b"{}", content_type="application/json", fetched_at=datetime.now(UTC)
+            ),
+            status=status,
+        )
+
+    monkeypatch.setattr(sec_edgar, "fetch", fetch)
+    monkeypatch.delenv("HTTP_CACHE_URL", raising=False)
+    return asked
+
+
+def test_every_nport_request_goes_through_the_one_sec_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Until 2026-11-11 these three used plain httpx: outside the limiter the other SEC lanes
+    share, and with every non-200 raised as one undifferentiated refusal. `sec_edgar.fetch` is the
+    only door now, and it sends every request past http-cache, which is what the directory needs:
+    asked daily against a 30-day cache entry, a fund SEC listed in the last month could not
+    resolve for up to a month."""
     from muffin_ingest.providers import sec_nport
 
-    sent: list[dict[str, str]] = []
-
-    def get(url: str, *, headers: dict[str, str], **kwargs: Any) -> httpx.Response:
-        sent.append(headers)
-        return httpx.Response(200, content=b"{}")
-
-    monkeypatch.setattr(httpx, "get", get)
-    monkeypatch.setenv("MUFFIN_USER_AGENT", "muffin-market/1.0 (ops@example.com)")
+    asked = _one_client(monkeypatch)
     sec_nport.fund_directory()
-    assert sent and sent[0].get("X-Muffin-Cache-Bypass") == "1"
-    assert "User-Agent" in sent[0], "SEC's required identity must survive the merge"
+    sec_nport.search_index("S000004249", start="2026-01-05", end="2026-11-11")
+    sec_nport.primary_doc("0000930667", "000175272426200001")
+    assert asked == [
+        ("https://www.sec.gov/files/company_tickers_mf.json", "sec", 60.0),
+        (
+            "https://efts.sec.gov/LATEST/search-index?q=%22S000004249%22&forms=NPORT-P"
+            "&startdt=2026-01-05&enddt=2026-11-11",
+            "sec-fts",
+            30.0,
+        ),
+        (
+            "https://www.sec.gov/Archives/edgar/data/930667/000175272426200001/primary_doc.xml",
+            "sec",
+            90.0,
+        ),
+    ]
+
+
+def test_through_the_cache_each_nport_request_uses_its_host_s_location(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The search lives on a third host. Asked through `sec`, it would reach the archive host and
+    come back a 404, which is the defect `settings.CACHE_LOCATIONS` exists to refuse."""
+    from muffin_ingest.providers import sec_nport
+
+    asked = _one_client(monkeypatch)
+    monkeypatch.setenv("HTTP_CACHE_URL", "http://http-cache:8080")
+    sec_nport.fund_directory()
+    sec_nport.search_index("S000004249", start="2026-01-05", end="2026-11-11")
+    sec_nport.primary_doc("930667", "000175272426200001")
+    assert [url.split("/", 4)[3] for url, _, _ in asked] == ["sec", "sec-fts", "sec"]
+    assert all(url.startswith("http://http-cache:8080/") for url, _, _ in asked)
+
+
+def test_a_404_is_raised_and_never_returned_as_a_document(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The same accession is a 404 under the CIK it embeds and the full document under the
+    directory's (measured 2026-09-12). A 404 handed back as a document would be stored as the
+    filing, and stage 2 would read an error page as a fund with no holdings."""
+    from muffin_ingest.providers import sec_edgar, sec_nport
+
+    _one_client(monkeypatch, status=404)
+    asks: list[Callable[[], object]] = [
+        sec_nport.fund_directory,
+        lambda: sec_nport.search_index("S000004249", start="2026-01-05", end="2026-11-11"),
+        lambda: sec_nport.primary_doc("1004726", "000175272426200001"),
+        sec_edgar.company_tickers,
+    ]
+    for ask in asks:
+        with pytest.raises(sec_edgar.SecNotFound):
+            ask()
+
+
+def test_the_cik_map_is_asked_of_the_one_sec_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """It was read through http-cache's `sec` location, which keeps a 200 for 30 days."""
+    from muffin_ingest.providers import sec_edgar
+
+    asked = _one_client(monkeypatch)
+    document = sec_edgar.company_tickers()
+    assert asked == [("https://www.sec.gov/files/company_tickers.json", "sec", 30.0)]
+    assert document.body == b"{}"
 
 
 def test_the_fund_directory_is_an_object_with_parallel_columns() -> None:

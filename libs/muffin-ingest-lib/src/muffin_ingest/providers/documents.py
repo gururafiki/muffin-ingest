@@ -12,6 +12,9 @@ everything the backlog used to carry.
 
 A `Document` is returned rather than parsed rows, because the parse belongs to stage 2: a header
 change at NSE (which throws, deliberately) must cost a re-parse and never a re-fetch.
+
+SEC's file is fetched by `sec_edgar.company_tickers` since 2026-11-11: every SEC request goes
+through that one client. `_get` here serves the providers that have no client of their own.
 """
 
 from __future__ import annotations
@@ -101,22 +104,6 @@ def _get(url: str, *, provider: str, headers: dict[str, str], timeout_s: float) 
         body=response.content,
         content_type=response.headers.get("content-type", "application/octet-stream"),
         fetched_at=datetime.now(UTC),
-    )
-
-
-def sec_company_tickers(timeout_s: float = 30.0) -> Document:
-    """SEC's ticker→CIK file. ~776 KB, ~10,400 filers, keyless.
-
-    SEC MANDATES A DESCRIPTIVE User-Agent and refuses a generic one. `settings.user_agent()` is
-    that header and had no caller until now — the one HTTP provider in the repo sent its own
-    browser string instead, so the SEC-mandated path was dead code.
-    """
-    base = settings.provider_base("sec", "https://www.sec.gov")
-    return _get(
-        f"{base}/files/company_tickers.json",
-        provider="sec",
-        headers={"User-Agent": settings.user_agent(), "Accept": "application/json"},
-        timeout_s=timeout_s,
     )
 
 

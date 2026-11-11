@@ -188,6 +188,47 @@ def test_through_the_cache_each_document_uses_its_hosts_location(
     )
 
 
+def test_a_request_is_counted_under_the_provider_it_names_not_under_the_cache_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """In production every base URL is http-cache's, so a label read off the URL's host makes
+    every provider one series named after a proxy (measured on `documents._get`, 2026-09-12). The
+    fixture routes through the cache so that the two rules disagree. The registries' CIK map and
+    N-PORT's search joined this client on 2026-11-11, the search on SEC's third host."""
+    from muffin_ingest import metrics
+    from muffin_ingest.providers import sec_nport
+
+    monkeypatch.setenv("HTTP_CACHE_URL", "http://http-cache:8080")
+    counted: list[str] = []
+
+    @contextmanager
+    def recording(provider: str) -> Iterator[dict[str, str]]:
+        counted.append(provider)
+        yield {"outcome": "answered"}
+
+    monkeypatch.setattr(metrics, "request", recording)
+    seen: list[httpx.Request] = []
+    routes = {"/sec/files/company_tickers.json": 200, "/sec-fts/LATEST/search-index": 200}
+    with _sec(routes, seen):
+        sec_edgar.company_tickers()
+        sec_nport.search_index("S000004249", start="2026-01-05", end="2026-11-11")
+    assert [request.url.host for request in seen] == ["http-cache", "http-cache"]
+    assert counted == ["sec", "sec-fts"], f"counted under {counted}"
+    assert all(request.headers["X-Muffin-Cache-Bypass"] == "1" for request in seen)
+    assert seen[1].url.query == (
+        b"q=%22S000004249%22&forms=NPORT-P&startdt=2026-01-05&enddt=2026-11-11"
+    )
+
+
+def test_a_document_that_must_exist_raises_on_a_404_and_passes_a_refusal_through() -> None:
+    with _sec({"/a": 404, "/b": 503, "/c": 200}, []):
+        with pytest.raises(sec_edgar.SecNotFound):
+            sec_edgar.document("https://www.sec.gov/a", provider="sec")
+        with pytest.raises(sec_edgar.SecRefused):
+            sec_edgar.document("https://www.sec.gov/b", provider="sec")
+        assert sec_edgar.document("https://www.sec.gov/c", provider="sec").body == b'{"ok": true}'
+
+
 # ── A filing's XBRL instance, found and bounded as the edge did ────────────────────────────────
 
 CIK, ACCESSION = 320193, "0000320193-25-000079"

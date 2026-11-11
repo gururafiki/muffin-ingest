@@ -4,7 +4,7 @@ from typing import Any
 
 import dagster as dg
 from dagster import AssetExecutionContext
-from muffin_ingest.providers import documents
+from muffin_ingest.providers import documents, sec_edgar
 
 from muffin_ingest_dagster.defs.registries.partitions import STALE_AFTER
 
@@ -25,7 +25,7 @@ def raw_sec_cik_map(context: AssetExecutionContext) -> list[dict[str, Any]]:
     raw keeps one storage class and one I/O manager, and the provenance travels as columns rather
     than a sidecar file that can go missing or go stale relative to the bytes it describes.
     """
-    doc = documents.sec_company_tickers()
+    doc = sec_edgar.company_tickers()
     context.add_output_metadata({"bytes": len(doc.body), "sha256": doc.sha256, "url": doc.url})
     return [doc.as_row(context.run.run_id)]
 
