@@ -1,7 +1,10 @@
 """SEC EDGAR through edgartools: its identity, pacing and client, with its own cache switched off.
 
-DECIDED 2026-10-24 (Phase 5 decisions 2 and 9). edgartools is the transport for every SEC request
-of the SEC family, and its parser reads submissions (`extract_company_filings_table`). Company facts
+DECIDED 2026-10-24 (Phase 5 decisions 2 and 9). edgartools is the transport for EVERY SEC request
+this library makes, and its parser reads submissions (`extract_company_filings_table`). Since
+2026-11-11 that includes the two callers that predate the family and used plain httpx: the CIK map
+(`company_tickers`) and N-PORT (`providers/sec_nport`). Before, they ran outside the limiter, and
+the CIK map was read from a cache entry up to 30 days old. Company facts
 are read by our own reader, because its concept map carries no `ifrs-full` concept and its facts
 parser turns every exception into `None`, an empty answer. Form 4 is read by our own reader too
 (amended 2026-10-27): `Form4.parse_xml` fetches each reporting owner from SEC while it parses.
@@ -17,8 +20,9 @@ THIS IS THE ONLY MODULE THAT IMPORTS `edgar`, AND IT DOES SO LAZILY, for two rea
   * The Dagster definitions load without edgartools installed (the CI `definitions` job installs
     neither extra), so nothing reachable from `definitions.py` may import it at module level.
 
-Every request names its provider (`sec` for www.sec.gov, `sec-data` for data.sec.gov) and goes
-through http-cache's matching location PAST the cache: `X-Muffin-Cache-Bypass` skips a stored
+Every request names its provider (`sec` for www.sec.gov, `sec-data` for data.sec.gov, `sec-fts` for
+the full-text search on efts.sec.gov) and goes through http-cache's matching location PAST the
+cache: `X-Muffin-Cache-Bypass` skips a stored
 entry and `X-Muffin-Cache-No-Store` keeps this answer out of it. Raw is the store, and http-cache
 keeps a `sec-data` 200 for 7 days, which is exactly the staleness a filing-triggered refresh exists
 to avoid.
@@ -38,13 +42,15 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from types import ModuleType
 from typing import Any, Literal, cast
+from urllib.parse import quote
 
 from muffin_ingest import metrics, settings
 from muffin_ingest.providers.documents import Document
 
-#: SEC's two hosts, which are http-cache's `sec` and `sec-data` locations.
+#: SEC's three hosts, which are http-cache's `sec`, `sec-data` and `sec-fts` locations.
 WWW_ORIGIN = "https://www.sec.gov"
 DATA_ORIGIN = "https://data.sec.gov"
+FTS_ORIGIN = "https://efts.sec.gov"
 
 #: A filer whose company facts and submissions answer every day: Apple. An absence is filed only
 #: when this answered in the same run, past the cache, so a run SEC was refusing or a cache serving
@@ -54,7 +60,7 @@ CONTROL_CIK = 320193
 #: Sent on every request (see the module docstring).
 PAST_THE_CACHE = {"X-Muffin-Cache-Bypass": "1", "X-Muffin-Cache-No-Store": "1"}
 
-Provider = Literal["sec", "sec-data"]
+Provider = Literal["sec", "sec-data", "sec-fts"]
 
 
 class SecRefused(RuntimeError):
@@ -67,6 +73,17 @@ class SecRefused(RuntimeError):
 
 class SecTransport(RuntimeError):
     """The request never got a status. Never an absence."""
+
+
+class SecNotFound(RuntimeError):
+    """SEC answered 404 for a document the caller cannot do without (`document`).
+
+    Its own class because it is neither of the others: SEC did answer, and the caller has decided
+    that this answer is an error and not an absence to record.
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(f"SEC holds nothing at {url}: HTTP 404")
 
 
 @dataclass(frozen=True)
@@ -191,8 +208,25 @@ def _read_bounded(response: Any, max_bytes: int) -> tuple[bytes, bool]:
     return b"".join(chunks), False
 
 
+def document(url: str, *, provider: Provider, timeout_s: float = 60.0) -> Document:
+    """One SEC document that has to exist: `fetch`, with a 404 raised as `SecNotFound`.
+
+    For the registries and N-PORT, where a 404 names no absence worth recording: SEC's own ticker
+    files, a search, and a filing the search has just named. The SEC family's lanes call `fetch`
+    and decide what a 404 means, with a control filer beside it.
+    """
+    answer = fetch(url, provider=provider, timeout_s=timeout_s)
+    if answer.status != 200:
+        raise SecNotFound(url)
+    return answer.document
+
+
 def _www() -> str:
     return settings.provider_base("sec", WWW_ORIGIN)
+
+
+def _fts() -> str:
+    return settings.provider_base("sec-fts", FTS_ORIGIN)
 
 
 def _data() -> str:
@@ -210,6 +244,40 @@ def submissions_url(cik: int) -> str:
 def submissions_page_url(name: str) -> str:
     """An older page of a filer's submissions, named by the main document's `filings.files`."""
     return f"{_data()}/submissions/{name}"
+
+
+def company_tickers_url() -> str:
+    """SEC's ticker -> CIK file for operating companies."""
+    return f"{_www()}/files/company_tickers.json"
+
+
+def fund_tickers_url() -> str:
+    """SEC's ticker -> (CIK, series) file for fund share classes."""
+    return f"{_www()}/files/company_tickers_mf.json"
+
+
+def nport_search_url(series_id: str, *, start: str, end: str) -> str:
+    """EDGAR full-text search for one series' NPORT-P filings between two ISO dates."""
+    return (
+        f"{_fts()}/LATEST/search-index"
+        f"?q=%22{quote(series_id)}%22&forms=NPORT-P&startdt={start}&enddt={end}"
+    )
+
+
+def nport_primary_doc_url(cik: str, accession: str) -> str:
+    """One N-PORT filing's `primary_doc.xml`. `accession` is the 18-digit form without dashes,
+    which is how `facets.nport.filing_refs` reads it from the search and how the path spells it."""
+    return f"{_www()}/Archives/edgar/data/{int(cik)}/{accession}/primary_doc.xml"
+
+
+def company_tickers(timeout_s: float = 30.0) -> Document:
+    """SEC's ticker -> CIK file. ~776 KB, ~10,400 filers, keyless.
+
+    Moved here from `documents` on 2026-11-11. There it was read through http-cache's `sec`
+    location, which keeps a 200 for 30 days, so a filer SEC listed in the last month could be
+    missing from the map; here it is asked past the cache like every other SEC request.
+    """
+    return document(company_tickers_url(), provider="sec", timeout_s=timeout_s)
 
 
 def _quarter(day: date) -> int:

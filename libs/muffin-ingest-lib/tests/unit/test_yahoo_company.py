@@ -481,8 +481,8 @@ def test_the_chart_and_document_refusals_are_counted_as_refused(
         yahoo_chart.fetch("4290.T", range_="5d", interval="1d")
     assert "4290" not in str(raised.value) and not vocab.throttled(str(raised.value))
     with pytest.raises(documents.DocumentRefused):
-        documents.sec_company_tickers()
-    assert outcomes == [("yahoo", "refused"), ("sec", "refused")]
+        documents.nse_equity_list()
+    assert outcomes == [("yahoo", "refused"), ("nse", "refused")]
 
 
 # --- stage 2: the writes that need SQL -----------------------------------------------------------

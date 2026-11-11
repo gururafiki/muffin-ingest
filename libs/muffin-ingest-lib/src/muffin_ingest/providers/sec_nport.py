@@ -1,50 +1,38 @@
-"""SEC EDGAR access for N-PORT: the fund directory, the full-text search, the primary document.
+"""N-PORT's three requests: the fund directory, the full-text search, the primary document.
 
 WHY THESE ARE SEPARATE FROM THE PARSE. `facets/nport.py` runs in stage 2 against bytes already
 on disk, so a header change at EDGAR (which the parse throws on, deliberately) costs a re-parse
 and never a re-fetch. These three fetches are the only network calls in the whole Discovery lane:
 one per series per day for the search, one per filing for the document.
 
-SEC ACCESS RULES, which are not optional:
-  * a descriptive User-Agent with contact details is required — `settings.user_agent()` is that
-    header and refuses to run without a valid value, having been the one value in production that
-    could only ever have 403'd;
-  * fair access is ~10 req/s; this lane is far below it and paces its own calls;
-  * a throttle is REAL and surfaces as a non-ok response — `_get` raises `DocumentRefused` for
-    any non-200, and a refusal must never be read as "this series does not file".
+ALL THREE GO THROUGH `sec_edgar`, the one SEC client (since 2026-11-11; before, plain httpx). That
+gives them what every other SEC request has:
+  * the identity SEC requires, set once where the client is configured;
+  * the shared limiter, so the search's burst of one request per tracked fund is paced;
+  * three outcomes: a refusal (403, 429, 5xx) is `SecRefused`, a request with no status is
+    `SecTransport`, and a 404 is `SecNotFound`. None of them is ever read as "this series does not
+    file";
+  * a fresh answer, past http-cache. The directory and the search answer "what is listed now",
+    and a filing's document is fetched once and kept in raw.
+
+This module names no host: the URLs are `sec_edgar`'s.
 """
 
 from __future__ import annotations
 
-from urllib.parse import quote
-
-from muffin_ingest import settings
-from muffin_ingest.providers.documents import Document, _get
-
-
-def _headers() -> dict[str, str]:
-    return {"User-Agent": settings.user_agent(), "Accept": "application/json"}
+from muffin_ingest.providers import sec_edgar
+from muffin_ingest.providers.documents import Document
 
 
 def fund_directory(timeout_s: float = 60.0) -> Document:
     """SEC's `company_tickers_mf.json`. ~1.2 MB, ~28,500 fund share classes, keyless.
 
     THE DISCOVERY DIRECTORY: it is the only keyless map from the tracked-fund `symbol` an operator
-    adds to the `(cik, seriesId)` the FTS and the Archives path need. `company_tickers.json` (the
-    registries lane) lists operating companies, not series — ETFs are series within a trust, and one
-    CIK covers many funds.
+    adds to the `(cik, seriesId)` the search and the Archives path need. `company_tickers.json`
+    (the registries lane) lists operating companies, not series: ETFs are series within a trust,
+    and one CIK covers many funds.
     """
-    base = settings.provider_base("sec", "https://www.sec.gov")
-    # PAST THE CACHE: the lane asks this one URL daily, and http-cache's `sec` location keeps it 30
-    # days, so a fund SEC listed in the last month could not resolve for up to a month. One request
-    # a day is nothing to SEC; the fresh copy is still stored (umbrella docs/deferred/2026-10-20-
-    # the-cache-serves-a-failing-provider-s-last-answer-for-ever.md, decided 2026-10-25).
-    return _get(
-        f"{base}/files/company_tickers_mf.json",
-        provider="sec",
-        headers={**_headers(), "X-Muffin-Cache-Bypass": "1"},
-        timeout_s=timeout_s,
-    )
+    return sec_edgar.document(sec_edgar.fund_tickers_url(), provider="sec", timeout_s=timeout_s)
 
 
 def search_index(
@@ -54,32 +42,35 @@ def search_index(
     end: str,
     timeout_s: float = 30.0,
 ) -> Document:
-    """EDGAR FULL-TEXT SEARCH for one series' NPORT-P filings — one request per series.
+    """EDGAR FULL-TEXT SEARCH for one series' NPORT-P filings: one request per series.
 
     THE SERIES ID APPEARS VERBATIM IN THE DOCUMENT BODY, so searching for it is exact rather than
     heuristic. The probe-walk alternative (open each trust's submissions and stream a KB of each
-    candidate's document to match the series) cannot reach a given fund in a big trust at all —
-    measured: a 24-probe walk found XLK, EWJ, EWZ but could not find MCHI or EWU, while FTS finds
-    all five in one hop. The response is the fixture `sec_nport_fts_ewj.json`.
+    candidate's document to match the series) cannot reach a given fund in a big trust at all.
+    Measured: a 24-probe walk found XLK, EWJ, EWZ but could not find MCHI or EWU, while the search
+    finds all five in one hop. The response is the fixture `sec_nport_fts_ewj.json`.
+
+    THE LIMITER SETS THE PACE, NOT SEC. The search answers in ~15 ms, so the sensor's pass over 74
+    funds took 14.8 s at five requests a second (measured 2026-11-11; 27 s on a slower pass). A
+    sensor evaluation is cut at 60 s, so one pass holds up to about 250 funds; past that the
+    sensor needs a cursor.
     """
-    base = settings.provider_base("sec-fts", "https://efts.sec.gov")
-    url = (
-        f"{base}/LATEST/search-index"
-        f"?q=%22{quote(series_id)}%22&forms=NPORT-P&startdt={start}&enddt={end}"
+    return sec_edgar.document(
+        sec_edgar.nport_search_url(series_id, start=start, end=end),
+        provider="sec-fts",
+        timeout_s=timeout_s,
     )
-    return _get(url, provider="sec", headers=_headers(), timeout_s=timeout_s)
 
 
 def primary_doc(cik: str, accession: str, timeout_s: float = 90.0) -> Document:
     """One filing's `primary_doc.xml`, byte for byte.
 
-    THE FILER CIK IS THE DIRECTORY'S, NOT THE ONE THE ACCESSION EMBEDS — measured 2026-09-12, the
+    THE FILER CIK IS THE DIRECTORY'S, NOT THE ONE THE ACCESSION EMBEDS. Measured 2026-09-12, the
     same accession served under the accession-embedded CIK is a 404 and under the directory's CIK
     is the full document. This is why the Discovery sensor queues `f"{cik}:{accession}"` partition
-    keys rather than bare accessions.
+    keys rather than bare accessions, and why a 404 here is raised (`SecNotFound`) and never filed
+    as a fund with no filing.
     """
-    # `sec`, the location that proxies to www.sec.gov, where EDGAR's archives live. This named
-    # `sec-data` (data.sec.gov) until 2026-09-26 and 404'd on the lane's first production fetch.
-    base = settings.provider_base("sec", "https://www.sec.gov")
-    url = f"{base}/Archives/edgar/data/{int(cik)}/{accession}/primary_doc.xml"
-    return _get(url, provider="sec", headers=_headers(), timeout_s=timeout_s)
+    return sec_edgar.document(
+        sec_edgar.nport_primary_doc_url(cik, accession), provider="sec", timeout_s=timeout_s
+    )
