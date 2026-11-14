@@ -41,6 +41,61 @@ _CODECS = frozenset({"snappy", "zstd", "gzip", "brotli", "lz4", "none"})
 Rows = Sequence[Mapping[str, Any]]
 
 
+def _local(path: UPath) -> str:
+    """A path pyarrow opens: the block volume is a local filesystem."""
+    return str(path.path) if hasattr(path, "path") else str(path)
+
+
+def _table_of(rows: Rows) -> Any:
+    """Rows as an Arrow table, its columns sorted by name, a row lacking one holding null."""
+    import pyarrow as pa
+
+    columns = sorted({key for row in rows for key in row})
+    return pa.table({column: [row.get(column) for row in rows] for column in columns})
+
+
+def _conformed(table: Any, schema: Any) -> Any:
+    """`table` with exactly `schema`'s columns, in its order and types; a missing one is null."""
+    import pyarrow as pa
+
+    columns = []
+    for field in schema:
+        if field.name in table.column_names:
+            column = table.column(field.name)
+            columns.append(column if column.type == field.type else column.cast(field.type))
+        else:
+            columns.append(pa.nulls(table.num_rows, type=field.type))
+    return pa.Table.from_arrays(columns, schema=schema)
+
+
+def _stored_count(path: UPath) -> int:
+    """How many rows a partition's file holds, read from its footer: no data is decoded."""
+    import pyarrow.parquet as pq
+
+    if not path.exists():
+        return 0
+    stored = pq.ParquetFile(_local(path))
+    if stored.schema_arrow.names == ["collected_nothing"]:
+        return 0
+    return int(stored.metadata.num_rows)
+
+
+def _may_hold(group: Any, names: Sequence[str], where: Mapping[str, Any]) -> bool:
+    """Whether a row group's min/max statistics allow a row equal to `where`. Without usable
+    statistics, or with values that do not compare, the answer is yes: a group is skipped only
+    when it provably holds no such row."""
+    for column, value in where.items():
+        statistics = group.column(names.index(column)).statistics
+        if statistics is None or not statistics.has_min_max:
+            continue
+        try:
+            if value < statistics.min or value > statistics.max:
+                return False
+        except TypeError:
+            continue
+    return True
+
+
 class ParquetIOManager(dg.UPathIOManager):
     """Raw: exactly what the provider said, one file per partition.
 
@@ -65,6 +120,15 @@ class ParquetIOManager(dg.UPathIOManager):
     AN ASSET MAY ALSO NAME ITS COMPRESSION (`metadata={"compression": "zstd"}`); the default is
     pyarrow's snappy, so no existing lane changes. Measured 2026-10-26 on one AAPL company facts
     body: snappy 599 KB, zstd 308 KB. Reading needs nothing: Parquet records the codec per column.
+
+    AND ITS ROW GROUP (`metadata={"row_group_rows": 1}`), for a file of documents too large to hold
+    at once. A row group is the unit Parquet decodes: with one group, reading any one document's
+    body decodes every body in the file. Measured 2026-11-14 on Principal Financial's SEC instances
+    (42 rows, 413 MB of bodies, 14 MB on disk): reading the whole file peaked at 2,143 MB, a
+    streaming scan at 1,073 MB, and the code location's 2.5 GB was shared with the other runs, so
+    stage 2 was OOM-killed. With a small group, `stored_rows_where` reads only the groups whose
+    statistics can hold the rows asked for, and a merge copies the stored file one group at a time,
+    so neither ever holds more than one group.
     """
 
     extension: str | None = ".parquet"
@@ -230,6 +294,12 @@ class ParquetIOManager(dg.UPathIOManager):
                 f"{context.asset_key.to_user_string()} names compression {compression!r}; "
                 f"pyarrow writes {sorted(_CODECS)}."
             )
+        group_rows = metadata.get("row_group_rows")
+        if group_rows is not None and (not isinstance(group_rows, int) or group_rows < 1):
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} names row_group_rows {group_rows!r}; it is "
+                f"a positive number of rows."
+            )
         # A COMPLETE ANSWER REPLACES; AN EXTENSION MERGES. The asset knows which it asked for and
         # says so per partition (`partitioned.Complete`), because one run holds both: the price
         # sweep loads a never-collected security in full and extends its neighbour, in the same run.
@@ -238,18 +308,21 @@ class ParquetIOManager(dg.UPathIOManager):
         # rows means a dead symbol, a refusal or a holiday — writing that over a stored history
         # would delete it to record a quiet day, which is the failure the merge exists to prevent.
         if merge_on and isinstance(obj, Complete) and rows:
-            stored = self._stored_rows(path)
             self._record(
                 {
                     "merged_on": ", ".join(merge_on),
                     "rows_fetched": len(rows),
                     "rows_kept": 0,
-                    "rows_superseded": len(stored),
+                    "rows_superseded": _stored_count(path),
                     "rows_unkeyable": 0,
                     "rows_total": len(rows),
                     "replaced": True,
                 }
             )
+        elif merge_on and group_rows is not None:
+            # THE STORED FILE IS COPIED ONE ROW GROUP AT A TIME, never loaded whole.
+            self._merge_by_group(context, rows, path, merge_on, compression, group_rows)
+            return
         elif merge_on:
             rows = self._merge_with_stored(context, rows, path, merge_on)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,16 +342,126 @@ class ParquetIOManager(dg.UPathIOManager):
             # which is the honest cost of recording the distinction at all.
             pq.write_table(
                 pa.table({"collected_nothing": pa.array([], type=pa.bool_())}),
-                path.path if hasattr(path, "path") else str(path),
+                _local(path),
                 compression=compression,
             )
             return
 
-        columns = sorted({key for row in rows for key in row})
-        table = pa.table({column: [row.get(column) for row in rows] for column in columns})
         pq.write_table(
-            table, path.path if hasattr(path, "path") else str(path), compression=compression
+            _table_of(rows), _local(path), compression=compression, row_group_size=group_rows
         )
+
+    @staticmethod
+    def _merge_keys(
+        context: dg.OutputContext, rows: Rows, merge_on: list[str]
+    ) -> set[tuple[Any, ...]]:
+        """The keys this run fetched.
+
+        A ROW THE RUN CANNOT KEY WOULD COLLAPSE EVERY OTHER UNKEYED ROW ONTO IT. `row.get` returns
+        None for a missing column, so a `merge_on` naming a field the provider does not send makes
+        every row share the key `(None, ...)`: one row would survive and the rest would be dropped,
+        silently, on data that is perfectly good. Refuse instead.
+        """
+        missing = sorted({c for row in rows for c in merge_on if c not in row})
+        if missing:
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} declares merge_on={merge_on} but its rows "
+                f"do not carry {missing}. Every row must carry every merge column, or rows that "
+                f"lack it all collapse onto one key and only one survives."
+            )
+        try:
+            return {tuple(row.get(column) for column in merge_on) for row in rows}
+        except TypeError as exc:  # a provider field that is a list or a dict
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} declares merge_on={merge_on}, but one of "
+                f"those columns holds an unhashable value. Merge on scalars the provider keys its "
+                f"own answer by."
+            ) from exc
+
+    def _merge_by_group(
+        self,
+        context: dg.OutputContext,
+        rows: Rows,
+        path: UPath,
+        merge_on: list[str],
+        compression: str,
+        group_rows: int,
+    ) -> None:
+        """`_merge_with_stored`, copying the stored file one row group at a time.
+
+        The same rules, in the same words: newest wins per key, a stored row that cannot be keyed is
+        kept, and an empty fetch leaves the stored file exactly as it is. What differs is memory:
+        the most this holds is one stored row group plus what the run fetched. A file written
+        before the asset named its row group is one group, so its first merge still decodes it
+        whole, and writes it back in groups of `group_rows`.
+
+        THE NEW FILE IS WRITTEN BESIDE THE OLD AND RENAMED OVER IT, because the old one is being
+        read while the new one is written, and a write that dies half-way must leave the stored
+        history readable.
+        """
+        import os
+
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        local = _local(path)
+        fresh_keys = self._merge_keys(context, rows, merge_on)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        stored = None
+        if os.path.exists(local):
+            stored = pq.ParquetFile(local)
+            if stored.schema_arrow.names == ["collected_nothing"]:
+                stored = None
+        tally: dict[str, Any] = {
+            "merged_on": ", ".join(merge_on),
+            "rows_fetched": len(rows),
+            "rows_kept": 0,
+            "rows_superseded": 0,
+            "rows_unkeyable": 0,
+            "replaced": False,
+        }
+        if stored is None or not rows:
+            # NOTHING STORED, OR NOTHING FETCHED: no merge to do. An empty fetch over a stored
+            # history leaves the file alone; over nothing it writes the empty marker.
+            kept = 0 if stored is None else stored.metadata.num_rows
+            self._record({**tally, "rows_kept": kept, "rows_total": kept + len(rows)})
+            if stored is not None:
+                return
+            if rows:
+                pq.write_table(
+                    _table_of(rows), local, compression=compression, row_group_size=group_rows
+                )
+            else:
+                pq.write_table(
+                    pa.table({"collected_nothing": pa.array([], type=pa.bool_())}),
+                    local,
+                    compression=compression,
+                )
+            return
+
+        fresh = _table_of(rows)
+        schema = pa.unify_schemas([stored.schema_arrow, fresh.schema])
+        schema = pa.schema(sorted(schema, key=lambda field: field.name))
+        temporary = f"{local}.merging"
+        with pq.ParquetWriter(temporary, schema, compression=compression) as writer:
+            for group in range(stored.num_row_groups):
+                table = stored.read_row_group(group)
+                if any(column not in table.column_names for column in merge_on):
+                    keep = [True] * table.num_rows
+                    tally["rows_unkeyable"] += table.num_rows
+                else:
+                    keys = zip(
+                        *(table.column(column).to_pylist() for column in merge_on), strict=True
+                    )
+                    keep = [key not in fresh_keys for key in keys]
+                kept = table.filter(pa.array(keep, type=pa.bool_()))
+                tally["rows_kept"] += kept.num_rows
+                tally["rows_superseded"] += table.num_rows - kept.num_rows
+                if kept.num_rows:
+                    writer.write_table(_conformed(kept, schema), row_group_size=group_rows)
+            writer.write_table(_conformed(fresh, schema), row_group_size=group_rows)
+        os.replace(temporary, local)
+        self._record({**tally, "rows_total": tally["rows_kept"] + len(rows)})
 
     def _merge_with_stored(
         self, context: dg.OutputContext, rows: Rows, path: UPath, merge_on: list[str]
@@ -303,26 +486,7 @@ class ParquetIOManager(dg.UPathIOManager):
         def key(row: Mapping[str, Any]) -> tuple[Any, ...]:
             return tuple(row.get(column) for column in merge_on)
 
-        # A ROW THE RUN CANNOT KEY WOULD COLLAPSE EVERY OTHER UNKEYED ROW ONTO IT. `row.get` returns
-        # None for a missing column, so a `merge_on` naming a field the provider does not send makes
-        # every row share the key `(None, ...)` — one row would survive and the rest would be
-        # dropped, silently, on data that is perfectly good. Refuse instead.
-        missing = sorted({c for row in rows for c in merge_on if c not in row})
-        if missing:
-            raise dg.DagsterInvariantViolationError(
-                f"{context.asset_key.to_user_string()} declares merge_on={merge_on} but its rows "
-                f"do not carry {missing}. Every row must carry every merge column, or rows that "
-                f"lack it all collapse onto one key and only one survives."
-            )
-
-        try:
-            fresh_keys = {key(row) for row in rows}
-        except TypeError as exc:  # a provider field that is a list or a dict
-            raise dg.DagsterInvariantViolationError(
-                f"{context.asset_key.to_user_string()} declares merge_on={merge_on}, but one of "
-                f"those columns holds an unhashable value. Merge on scalars the provider keys its "
-                f"own answer by."
-            ) from exc
+        fresh_keys = self._merge_keys(context, rows, merge_on)
 
         # UNKEYABLE STORED ROWS ARE KEPT, NEVER DROPPED. A file written before the key existed, or
         # by an older shape, cannot be compared — and "I cannot tell whether this was superseded"
@@ -375,6 +539,41 @@ class ParquetIOManager(dg.UPathIOManager):
         path = self._base_path.joinpath(*asset_key.path, partition_key)
         return self._stored_rows(self._with_extension(path), columns)
 
+    def stored_rows_where(
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        where: Mapping[str, Any],
+        columns: Sequence[str] | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        """The stored rows whose columns equal `where`, reading only the row groups that can hold
+        them (by each group's min/max statistics), one group at a time.
+
+        For a file written with `row_group_rows`, this is the read that stays one document wide:
+        stage 2 of the SEC segment lane reads one filing's documents from a filer's file of tens.
+        A file written as one group is read as one group, which is no worse than `stored_rows_for`.
+        A column of `where` the file lacks matches nothing.
+        """
+        import pyarrow.parquet as pq
+
+        path = self._with_extension(self._base_path.joinpath(*asset_key.path, partition_key))
+        if not path.exists():
+            return []
+        stored = pq.ParquetFile(_local(path))
+        names = stored.schema_arrow.names
+        if names == ["collected_nothing"] or any(c not in names for c in where):
+            return []
+        wanted = names if columns is None else [c for c in columns if c in names]
+        read = sorted(set(wanted) | set(where))
+        found: list[dict[str, Any]] = []
+        for group in range(stored.num_row_groups):
+            if not _may_hold(stored.metadata.row_group(group), names, where):
+                continue
+            for row in stored.read_row_group(group, columns=read).to_pylist():
+                if all(row.get(c) == v for c, v in where.items()):
+                    found.append({c: row.get(c) for c in wanted})
+        return found
+
     def _stored_rows(
         self, path: UPath, columns: Sequence[str] | None = None
     ) -> Sequence[Mapping[str, Any]]:
@@ -383,7 +582,7 @@ class ParquetIOManager(dg.UPathIOManager):
 
         if not path.exists():
             return []
-        local = path.path if hasattr(path, "path") else str(path)
+        local = _local(path)
         names = pq.read_schema(local).names
         if names == ["collected_nothing"]:
             return []
@@ -395,7 +594,7 @@ class ParquetIOManager(dg.UPathIOManager):
     def load_from_path(self, context: dg.InputContext, path: UPath) -> list[dict[str, Any]]:
         import pyarrow.parquet as pq
 
-        table = pq.read_table(path.path if hasattr(path, "path") else str(path))
+        table = pq.read_table(_local(path))
         # The empty-partition marker is not data; a partition that collected nothing loads as no
         # rows, which is what every downstream stage should see.
         if table.column_names == ["collected_nothing"]:
@@ -426,6 +625,17 @@ class RawStore(dg.ConfigurableResource):  # type: ignore[type-arg]
     ) -> Sequence[Mapping[str, Any]]:
         return ParquetIOManager(base_path=self.base_path).stored_rows_for(
             asset_key, partition_key, columns
+        )
+
+    def stored_rows_where(
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        where: Mapping[str, Any],
+        columns: Sequence[str] | None = None,
+    ) -> Sequence[Mapping[str, Any]]:
+        return ParquetIOManager(base_path=self.base_path).stored_rows_where(
+            asset_key, partition_key, where, columns
         )
 
 

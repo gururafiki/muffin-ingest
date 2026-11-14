@@ -123,6 +123,7 @@ def merging_seam(
     runs: list[list[dict[str, Any]]],
     merge_on: list[str],
     key: str = "2026-09-02",
+    metadata: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Materialise ONE merging asset once per entry in `runs`, and return what downstream last saw.
 
@@ -136,7 +137,7 @@ def merging_seam(
         partitions_def=DAY,
         io_manager_key="parquet_io",
         name="raw_thing",
-        metadata={"merge_on": merge_on},
+        metadata={"merge_on": merge_on, **(metadata or {})},
     )
     def raw_thing() -> list[dict[str, Any]]:
         return fetched.pop(0)
@@ -519,3 +520,158 @@ def test_an_asset_may_name_its_compression_and_the_default_is_unchanged(tmp_path
 def test_a_codec_pyarrow_does_not_write_is_refused(tmp_path: Path) -> None:
     results, _ = visiting_seam(tmp_path, [[{"cik": 1}]], metadata={"compression": "zip"})
     assert not results[0].success
+
+
+# --- ONE DOCUMENT PER ROW GROUP (2026-11-14) ------------------------------------------------------
+#
+# Principal Financial's SEC instances (21 filings, 413 MB of bodies, 14 MB on disk) were one row
+# group, so reading any one body decoded all of them: 2,143 MB read whole, 1,073 MB streamed, and
+# stage 2 of the segment lane was OOM-killed in a 2.5 GB code location.
+
+DOCS = ["accession", "document"]
+
+
+def _doc(accession: str, document: str, body: bytes) -> dict[str, Any]:
+    return {"accession": accession, "document": document, "body": body}
+
+
+def _file(root: Path) -> Path:
+    return root / "raw_thing" / "2026-09-02.parquet"
+
+
+def _seed(root: Path, rows: list[dict[str, Any]]) -> None:
+    """A file as an asset wrote it before it named a row group: one group."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    _file(root).parent.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows), str(_file(root)))
+
+
+def _by_doc(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(rows, key=lambda r: (r["accession"], str(r.get("document"))))
+
+
+def test_a_merge_by_row_group_keeps_what_the_whole_file_merge_keeps(tmp_path: Path) -> None:
+    """The same runs over the same stored file, merged both ways, hold the same rows: newest wins
+    per key, a stored row the key cannot read (no `document` column) is kept, and an empty fetch
+    keeps everything."""
+    legacy = [{"accession": "a0", "body": b"zero"}]
+    runs = [
+        [_doc("a1", "instance", b"one"), _doc("a2", "instance", b"two")],
+        [_doc("a2", "instance", b"TWO"), _doc("a3", "index", b"three")],
+        [],
+    ]
+    for root in (tmp_path / "whole", tmp_path / "grouped"):
+        _seed(root, legacy)
+    whole = merging_seam(tmp_path / "whole", [list(r) for r in runs], DOCS)
+    grouped = merging_seam(
+        tmp_path / "grouped", [list(r) for r in runs], DOCS, metadata={"row_group_rows": 1}
+    )
+    assert _by_doc(grouped) == _by_doc(whole)
+    assert {r["accession"]: r["body"] for r in grouped} == {
+        "a0": b"zero",
+        "a1": b"one",
+        "a2": b"TWO",
+        "a3": b"three",
+    }
+
+
+def test_a_merge_writes_one_group_per_row_and_rewrites_a_file_that_was_one(
+    tmp_path: Path,
+) -> None:
+    import pyarrow.parquet as pq
+
+    _seed(tmp_path, [_doc("a1", "instance", b"one"), _doc("a2", "instance", b"two")])
+    assert pq.ParquetFile(str(_file(tmp_path))).num_row_groups == 1
+    merging_seam(
+        tmp_path, [[_doc("a3", "instance", b"three")]], DOCS, metadata={"row_group_rows": 1}
+    )
+    stored = pq.ParquetFile(str(_file(tmp_path)))
+    assert stored.num_row_groups == 3
+    assert stored.metadata.num_rows == 3
+    assert not list(_file(tmp_path).parent.glob("*.merging")), "the temporary file was left"
+
+
+def test_an_empty_fetch_leaves_a_grouped_file_untouched(tmp_path: Path) -> None:
+    import pyarrow.parquet as pq
+
+    first = [_doc("a1", "instance", b"one"), _doc("a1", "index", b"idx")]
+    merging_seam(tmp_path, [first], DOCS, metadata={"row_group_rows": 1})
+    assert pq.ParquetFile(str(_file(tmp_path))).num_row_groups == 2, "a first write is grouped"
+    before = _file(tmp_path).read_bytes()
+    seen = merging_seam(tmp_path, [[]], DOCS, metadata={"row_group_rows": 1})
+    assert _file(tmp_path).read_bytes() == before
+    assert _by_doc(seen) == _by_doc(first)
+
+
+def test_a_replacing_asset_may_name_its_row_group_too(tmp_path: Path) -> None:
+    import pyarrow.parquet as pq
+
+    rows = [_doc("a1", "instance", b"one"), _doc("a2", "instance", b"two")]
+    _, seen = visiting_seam(tmp_path, [rows], metadata={"row_group_rows": 1})
+    assert pq.ParquetFile(str(_file(tmp_path))).num_row_groups == 2
+    assert _by_doc(seen) == _by_doc(rows)
+
+
+def test_an_empty_first_fetch_writes_the_empty_marker(tmp_path: Path) -> None:
+    seen = merging_seam(tmp_path, [[]], DOCS, metadata={"row_group_rows": 1})
+    assert seen == []
+    assert _file(tmp_path).exists(), "collected and found nothing is written"
+
+
+@pytest.mark.parametrize("bad", [0, -1, "1"])
+def test_a_row_group_that_is_not_a_positive_count_is_refused(tmp_path: Path, bad: Any) -> None:
+    results, _ = visiting_seam(
+        tmp_path, [[{"cik": 1}]], metadata={"merge_on": ["cik"], "row_group_rows": bad}
+    )
+    assert not results[0].success
+
+
+def _six(root: Path, *, group_rows: int | None) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows = [_doc(f"a{n}", d, f"{n}{d}".encode()) for n in (1, 2, 3) for d in ("index", "instance")]
+    _file(root).parent.mkdir(parents=True)
+    pq.write_table(pa.Table.from_pylist(rows), str(_file(root)), row_group_size=group_rows)
+
+
+def test_a_where_read_decodes_only_the_groups_that_can_hold_the_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The point of the layout: one filing's documents are read without decoding the others."""
+    import pyarrow.parquet as pq
+
+    from muffin_ingest_dagster.lib.io_managers import RawStore
+
+    _six(tmp_path, group_rows=1)
+    decoded: list[int] = []
+    original = pq.ParquetFile.read_row_group
+
+    def spy(self: Any, group: int, *args: Any, **kwargs: Any) -> Any:
+        decoded.append(group)
+        return original(self, group, *args, **kwargs)
+
+    monkeypatch.setattr(pq.ParquetFile, "read_row_group", spy)
+    store = RawStore(base_path=str(tmp_path))
+    got = store.stored_rows_where(dg.AssetKey("raw_thing"), "2026-09-02", {"accession": "a2"})
+    assert _by_doc([dict(r) for r in got]) == [
+        _doc("a2", "index", b"2index"),
+        _doc("a2", "instance", b"2instance"),
+    ]
+    assert decoded == [2, 3], "a group that cannot hold the filing was decoded"
+
+
+def test_a_where_read_of_a_one_group_file_still_finds_exactly_the_rows(tmp_path: Path) -> None:
+    from muffin_ingest_dagster.lib.io_managers import RawStore
+
+    _six(tmp_path, group_rows=None)
+    store = RawStore(base_path=str(tmp_path))
+    key = dg.AssetKey("raw_thing")
+    got = store.stored_rows_where(key, "2026-09-02", {"accession": "a3"}, columns=["document"])
+    assert sorted(r["document"] for r in got) == ["index", "instance"]
+    assert all(set(r) == {"document"} for r in got), "only the columns asked for"
+    assert store.stored_rows_where(key, "2026-09-02", {"accession": "a9"}) == []
+    assert store.stored_rows_where(key, "2026-09-02", {"absent": "x"}) == []
+    assert store.stored_rows_where(key, "2026-09-03", {"accession": "a1"}) == [], "no file"

@@ -93,9 +93,6 @@ def sec_segment(
         if not filings:
             continue
         stats["filers_with_filings"] += 1
-        # THE BODIES ARE READ ONLY FOR A FILER WITH A FILING TO PARSE: a filer's file holds every
-        # instance fetched for it, megabytes each.
-        full: dict[str, list[Mapping[str, Any]]] | None = None
         with postgres.connect() as conn:
             for filing in filings:
                 stats["filings"] += 1
@@ -106,9 +103,13 @@ def sec_segment(
                 facts: list[segments.SegmentFact] | None = None
                 try:
                     if held.outcome == "answered":
-                        if full is None:
-                            full = _by_accession(raw_store.stored_rows_for(SEC_INSTANCE, key))
-                        body = sec_segments.instance_body(full.get(filing.accession, []), held)
+                        # ONE FILING'S DOCUMENTS AT A TIME: a filer's file holds every instance
+                        # fetched for it, and Principal Financial's 21 hold 413 MB, which read at
+                        # once OOM-killed this step on 2026-11-14 (`row_group_rows` on stage 1).
+                        documents = raw_store.stored_rows_where(
+                            SEC_INSTANCE, key, {"accession": filing.accession}
+                        )
+                        body = sec_segments.instance_body(documents, held)
                         if body is None:
                             stats["not_held"] += 1
                             continue

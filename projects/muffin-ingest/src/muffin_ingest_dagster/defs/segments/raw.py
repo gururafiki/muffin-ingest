@@ -66,7 +66,15 @@ class SecInstanceRun(dg.Config):
     freshness_policy=FRESH_WEEK,
     # EVERY FILING'S DOCUMENTS ARE KEPT, keyed by filing and document: a filer's file only grows,
     # and a visit asks only for filings it does not hold.
-    metadata={"merge_on": list(sec_segments.MERGE_ON), "compression": "zstd"},
+    #
+    # ONE DOCUMENT PER ROW GROUP, so neither a merge nor stage 2's read ever decodes more than one
+    # instance at a time. Principal Financial's file (21 filings, 413 MB of instances, 14 MB on
+    # disk) took 2,143 MB to read whole, measured 2026-11-14, against a 2.5 GB code location.
+    metadata={
+        "merge_on": list(sec_segments.MERGE_ON),
+        "compression": "zstd",
+        "row_group_rows": 1,
+    },
     description=(
         "Each SEC accounts filing's XBRL instance and the index that named it, by filer, whole."
     ),
