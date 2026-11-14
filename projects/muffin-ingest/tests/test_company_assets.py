@@ -614,6 +614,37 @@ def test_yahoo_statements_are_keyed_by_their_provider_and_merge_into_the_stored_
     assert {r["period_type"] for r in rows} == {"annual", "quarter"}
 
 
+def test_a_quarter_or_half_year_written_retracts_its_twin_of_the_other_type(
+    tmp_path: Path,
+) -> None:
+    """A PERIOD END IS A QUARTER OR A HALF-YEAR, NEVER BOTH, decided per company by its cadence.
+    The edge filed Vodafone's half-years as quarters, so the table held both at one period end and
+    the derivation read six months as three. The write retracts the other type at each key it
+    writes, in the same transaction and before the upsert, and never touches an annual row."""
+    with yahoo(Yahoo({"AAPL": summary_body("AAPL"), "VOD.L": summary_body("VOD.L")})):
+        result = visit(
+            tmp_path,
+            [AAPL, VOD],
+            assets=[company_raw.raw_yahoo_company, company_core.yahoo_statement],
+        )
+    assert result.success
+    statements = [
+        (n, sql, params)
+        for n, (sql, params) in enumerate(CALLS)
+        if "market.security_statement" in sql and not sql.startswith("select")
+    ]
+    retractions = [s for s in statements if s[1].startswith("delete")]
+    assert len(retractions) == 1, "one statement for the whole write"
+    n, sql, params = retractions[0]
+    assert "stored_row.period_type <> p.period_type" in sql
+    assert all(m < i for m, _, _ in retractions for i, s, _ in statements if s.startswith("insert"))
+    security_ids, sources, _, _, types, among = params
+    assert set(zip(security_ids, types, strict=True)) == {(AAPL[0], "quarter"), (VOD[0], "half")}
+    assert set(sources) == {"yfinance"}
+    assert among == ["quarter", "half"]
+    assert meta(result, "yahoo_statement")["alternatives_retracted"] == 0
+
+
 # --- stage 3 -------------------------------------------------------------------------------------
 
 
