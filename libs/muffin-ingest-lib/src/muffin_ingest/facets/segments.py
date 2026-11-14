@@ -21,7 +21,8 @@ The tag regexes are the edge's, ASCII-only, as `\\w` is in JS. Maps iterate in i
 JS `Map` does. Two axes of equal priority are ordered as ICU's root collation orders ASCII names
 (`localeCompare`), approximated by `_collation_key`.
 
-NO NETWORK. Stage 1 fetches; this reads text it is given.
+NO NETWORK. Stage 1 fetches; this reads text it is given. The readers at the end are the control
+tables every regulator's lane parses with, and the rows every one of them writes.
 """
 
 from __future__ import annotations
@@ -29,9 +30,12 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Iterable, Sequence
+from collections import Counter
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
+from decimal import Decimal
+from typing import Any
 
 QUALIFIER = "qualifier"
 SUBTOTAL = "subtotal"
@@ -998,3 +1002,171 @@ def instance_is_too_large(size: float | None) -> bool:
     """An unknown size is NOT too large: the HTML fallback has none, and refusing it would drop
     every foreign private issuer whose `index.json` is incomplete."""
     return size is not None and size > MAX_INSTANCE_BYTES
+
+
+# ── The control tables, and the rows a parsed filing becomes ───────────────────────────────────
+
+#: The metrics a segment is read for, as `market.metric` codes (the edge's `SEGMENT_METRICS`).
+#: `total_assets`, `long_lived_assets` and `goodwill` are instants.
+SEGMENT_METRICS = (
+    "revenue",
+    "operating_income",
+    "capital_expenditure",
+    "total_assets",
+    "depreciation",
+    "cost_of_revenue",
+    "long_lived_assets",
+    "goodwill",
+)
+
+
+@dataclass(frozen=True)
+class Vocabulary:
+    """The control tables one parse reads, for every regulator: a new axis, concept or member role
+    is a row, never a release.
+
+    `parser_version` is `market.segment_parser.version`. Every filing read is stamped with it
+    (`security_filing.segments_parser_version`), and raising it makes every filing due again. It
+    is a row and not a `code_version` because the unit of work is the FILING, and a filer's
+    partition holds many: 226,000 SEC accounts filings cannot be a partition each.
+    """
+
+    axes: tuple[AxisSpec, ...]
+    concepts: tuple[ConceptSpec, ...]
+    roles: tuple[MemberRole, ...]
+    parser_version: int
+
+
+class VocabularyEmpty(RuntimeError):
+    """A control table has no rows. Parsing would read every filing as disclosing nothing, and
+    stamp it as read."""
+
+
+def vocabulary(conn: Any) -> Vocabulary:
+    """`segment_axis`, the segment metrics' `xbrl_concept` rows, `segment_member_class` and the
+    parser version. Ordered, so two runs read them identically."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "select axis, kind, priority, required_member from market.segment_axis order by axis"
+        )
+        axes = tuple(AxisSpec(str(a), str(k), int(p), r) for a, k, p, r in cur.fetchall())
+        cur.execute(
+            "select metric_code, concept, priority from market.xbrl_concept "
+            "where metric_code = any(%s) order by metric_code, concept",
+            (list(SEGMENT_METRICS),),
+        )
+        concepts = tuple(ConceptSpec(str(m), str(c), int(p)) for m, c, p in cur.fetchall())
+        cur.execute(
+            "select member_code, class from market.segment_member_class order by member_code"
+        )
+        roles = tuple(MemberRole(str(m), str(c)) for m, c in cur.fetchall())
+        cur.execute("select max(version) from market.segment_parser")
+        found = cur.fetchone()
+    if not axes:
+        raise VocabularyEmpty("market.segment_axis is empty: every filing would yield nothing")
+    if not concepts:
+        raise VocabularyEmpty("market.xbrl_concept has no segment metric: nothing would be read")
+    version = 1 if found is None or found[0] is None else int(found[0])
+    return Vocabulary(axes, concepts, roles, version)
+
+
+#: `market.security_segment`'s key. `parent_key` is generated (`coalesce(parent_member, '')`): it
+#: is carried by every row for the dedupe and never inserted (`writers.upsert(computed=...)`).
+#: THE ACCESSION IS NOT IN IT, on purpose: a newer filing restating a period takes the row over.
+SEGMENT_KEY = (
+    "security_id",
+    "axis",
+    "member_code",
+    "parent_key",
+    "metric_code",
+    "period_type",
+    "period_ending",
+)
+#: What a parse may change. `as_of` is last and is left out of the comparison: it says when the
+#: document was read, and a re-read that changes nothing must not rewrite the row.
+SEGMENT_UPDATE = (
+    "period_start",
+    "value",
+    "currency_code",
+    "partition_id",
+    "parent_axis",
+    "parent_member",
+    "reconciled_to",
+    "accession_number",
+    "source_code",
+    "as_of",
+)
+SEGMENT_COMPARE = SEGMENT_UPDATE[:-1]
+#: The key a filing's own rows are retracted on, within (security, accession).
+SEGMENT_RETRACT_KEY = SEGMENT_KEY[1:]
+SEGMENT_RETRACT_TYPES = {
+    "axis": "text",
+    "member_code": "text",
+    "parent_key": "text",
+    "metric_code": "text",
+    "period_type": "text",
+    "period_ending": "date",
+}
+
+#: A filing read is stamped whether or not it had segments: "this filing discloses none" is a
+#: permanent fact about an immutable document. Never stamped for a document that was not read.
+STAMP_PARSED = """
+update market.security_filing
+   set segments_parsed_at = %s, segments_parser_version = %s
+ where accession_number = %s and security_id = any(%s::uuid[])
+"""
+
+
+def _numeric(value: float) -> int | Decimal:
+    """A parsed figure as the number the edge stored: JS serialised a float by its shortest
+    round-trip digits, and Postgres read that text exactly. Passing the float itself would have
+    Postgres round it to 15 significant digits on the way into `numeric`."""
+    if value.is_integer():
+        return int(value)
+    return Decimal(repr(value))
+
+
+def segment_rows(
+    facts: Iterable[SegmentFact],
+    *,
+    security_id: str,
+    accession: str,
+    source: str,
+    as_of: str,
+    known_currencies: Collection[str],
+) -> tuple[list[dict[str, Any]], Counter[str]]:
+    """One filing's facts as `market.security_segment` rows for one security.
+
+    A ROW IN A CURRENCY `market.currency` DOES NOT HOLD IS WITHHELD AND COUNTED: the column
+    references that table, so one such row would fail the filing's whole write. The edge inserted
+    the code instead; a lane does not mint reference data.
+    """
+    rows: list[dict[str, Any]] = []
+    stats: Counter[str] = Counter()
+    for f in facts:
+        if f.currency not in known_currencies:
+            stats["currency_unknown"] += 1
+            continue
+        rows.append(
+            {
+                "security_id": security_id,
+                "axis": f.axis,
+                "member_code": f.member_code,
+                "parent_key": f.parent_member or "",
+                "metric_code": f.metric_code,
+                "period_type": f.period_type,
+                "period_ending": f.period_ending,
+                "period_start": f.period_start,
+                "value": _numeric(f.value),
+                "currency_code": f.currency,
+                "partition_id": f.partition_id,
+                "parent_axis": f.parent_axis,
+                "parent_member": f.parent_member,
+                "reconciled_to": None if f.reconciled_to is None else _numeric(f.reconciled_to),
+                "accession_number": accession,
+                "source_code": source,
+                "as_of": as_of,
+            }
+        )
+        stats["placed" if f.partition_id > 0 else "unplaced"] += 1
+    return rows, stats

@@ -210,6 +210,7 @@ def upsert(
     only_replacing: Mapping[str, Any] | None = None,
     merge_json: Sequence[str] = (),
     compare: Sequence[str] | None = None,
+    computed: Sequence[str] = (),
 ) -> WriteResult:
     """Insert many rows, updating on conflict — and dedupe on the conflict key first, always.
 
@@ -242,6 +243,13 @@ def upsert(
     a row for the metric derivation whenever its `as_of` moves. Left out of `compare`, the row keeps
     the `as_of` of the read that last changed it, and still takes the offered one when a compared
     column changes.
+
+    `computed` NAMES CONFLICT COLUMNS THE TABLE COMPUTES ITSELF (a stored generated column).
+    `security_segment.parent_key` is `coalesce(parent_member, '')`, because a primary key admits no
+    NULL and a flat member has no parent. Postgres refuses any value offered for such a column, so
+    it is never inserted. EVERY ROW STILL CARRIES IT, as the table would compute it: the dedupe
+    runs on the whole conflict key, and without it a cross-tab cell and the flat member of the same
+    axis collapse into one row before the statement ever sees them.
     """
     if not rows:
         # NOTHING SENT IS A KNOWN ZERO, not an unknown: None here made every empty partition
@@ -255,15 +263,30 @@ def upsert(
         raise WriterError("merge_json merges on update; with DO NOTHING there is nothing to merge")
     if compare is not None and update is None:
         raise WriterError("compare guards an update; with DO NOTHING there is nothing to compare")
+    if update is not None and set(computed) & set(update):
+        raise WriterError("a computed column cannot be updated; the table derives it")
 
     target = _qualified(table)
     keys = [_ident(c) for c in conflict]
+    derived = {_ident(c) for c in computed}
+    if derived - set(keys):
+        raise WriterError(
+            f"computed column(s) {sorted(derived - set(keys))} are not part of the conflict key; "
+            "a computed column that keys nothing is simply left out of the rows"
+        )
+    for row in rows:
+        absent = [c for c in sorted(derived) if c not in row or row[c] is None]
+        if absent:
+            raise WriterError(
+                f"a row lacks computed key column(s) {absent}: it must carry the value the table "
+                f"would compute, or rows that differ only there collapse. {dict(row)!r}"
+            )
     deduped, collapsed = dedupe_by(rows, lambda r: tuple(r.get(k) for k in keys))
 
-    columns = sorted({c for row in deduped for c in row})
+    columns = sorted({c for row in deduped for c in row} - derived)
     for c in columns:
         _ident(c)
-    missing = [k for k in keys if k not in columns]
+    missing = [k for k in keys if k not in columns and k not in derived]
     if missing:
         raise WriterError(f"conflict column(s) {missing} are not present in the rows")
 

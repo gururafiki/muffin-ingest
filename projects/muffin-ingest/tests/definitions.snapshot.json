@@ -36,6 +36,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "sec_segment:every_sec_filing_was_read": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "sec_statement:one_fiscal_period_one_point": {
       "additional_deps": [],
       "blocking": false
@@ -846,6 +850,38 @@
       ],
       "tags": {}
     },
+    "raw_sec_instance": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "sec_filing": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 604800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "sec"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      },
+      "pools": [
+        "sec"
+      ],
+      "tags": {}
+    },
     "raw_sec_submissions": {
       "automation_condition": null,
       "backfill_policy": {
@@ -1115,6 +1151,37 @@
         "kind": "time_window",
         "start": "2006-01-01T00:00:00+00:00",
         "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "sec_segment": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 50,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_sec_instance": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 604800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
       },
       "pools": [
         "sql"
@@ -1954,6 +2021,17 @@
         "timezone": "UTC"
       }
     },
+    "sec_segments": {
+      "assets": [
+        "raw_sec_instance",
+        "sec_segment"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "sec_filer"
+      }
+    },
     "yahoo_companies": {
       "assets": [
         "raw_yahoo_statements",
@@ -2102,6 +2180,14 @@
         "sec_filers"
       ],
       "minimum_interval_seconds": 900,
+      "type": "STANDARD"
+    },
+    "sec_instances_due": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "sec_segments"
+      ],
+      "minimum_interval_seconds": 1800,
       "type": "STANDARD"
     },
     "symbology_rungs": {

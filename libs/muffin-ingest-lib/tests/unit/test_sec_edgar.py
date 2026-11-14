@@ -275,8 +275,8 @@ def test_the_instance_is_named_by_index_json_and_fetched() -> None:
     with _documents(routes, seen):
         got = sec_edgar.fetch_instance(CIK, ACCESSION)
     assert (got.outcome, got.instance_name) == ("answered", "aapl-20250628_htm.xml")
-    assert [a.status for a in got.answers] == [200, 200]
-    assert got.answers[-1].document.body == b"<xbrl/>"
+    assert [(kind, a.status) for kind, a in got.answers] == [("index_json", 200), ("instance", 200)]
+    assert got.answers[-1][1].document.body == b"<xbrl/>"
     assert seen == [f"{DIRECTORY}/index.json", f"{DIRECTORY}/aapl-20250628_htm.xml"]
 
 
@@ -303,7 +303,7 @@ def test_an_incomplete_or_missing_index_json_falls_back_to_the_html_index(
     with _documents(routes, seen):
         got = sec_edgar.fetch_instance(CIK, ACCESSION)
     assert (got.outcome, got.instance_name) == ("answered", "deo-20250630_htm.xml")
-    assert len(got.answers) == 3
+    assert [kind for kind, _ in got.answers] == ["index_json", "index_html", "instance"]
 
 
 @pytest.mark.parametrize("html", [(404, b"<Error/>"), (200, b"<html>no instance</html>")])
@@ -321,7 +321,7 @@ def test_an_instance_that_is_a_404_is_absent() -> None:
     routes = {f"{DIRECTORY}/index.json": (200, _index(("a-20250628_htm.xml", "9")))}
     with _documents(routes, []):
         got = sec_edgar.fetch_instance(CIK, ACCESSION)
-    assert got.outcome == "absent" and got.answers[-1].status == 404
+    assert got.outcome == "absent" and got.answers[-1][1].status == 404
 
 
 def test_a_refused_index_raises_rather_than_reading_as_absent() -> None:
