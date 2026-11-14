@@ -107,6 +107,9 @@ PARSER = {"version": 20}
 CALLS: list[tuple[str, Any]] = []
 #: An accession whose rows the database refuses, as a bad date or an unknown metric would be.
 POISON: set[str] = set()
+#: Per security, the segment keys a NEWER filing holds:
+#: (axis, member_code, parent_key, metric_code, period_type, period_ending).
+NEWER: dict[str, set[tuple[str, ...]]] = {}
 
 
 def _due(mark: int | None) -> bool:
@@ -171,6 +174,10 @@ class Cursor:
             self.rows = [(PARSER["version"],)]
         elif text.startswith("select code from market.currency"):
             self.rows = [("USD",)]
+        elif "from market.security_segment g" in text:
+            periods = set(params[2])
+            held = NEWER.get(params[0], set())
+            self.rows = [key for key in held if key[5] in periods]
         elif text.startswith("insert into market.security_segment"):
             if POISON & {p for p in params if isinstance(p, str)}:
                 raise RuntimeError("date/time field value out of range")
@@ -224,6 +231,7 @@ def _clean() -> Iterator[None]:
     PARSER["version"] = 20
     CALLS.clear()
     POISON.clear()
+    NEWER.clear()
     yield
 
 
@@ -417,6 +425,36 @@ def test_two_filings_of_one_filer_are_written_oldest_first(tmp_path: Path, sec: 
     stamped = [params[2] for _, params in writes("update market.security_filing")]
     assert stamped == [Q2, Q3]
     assert len(stored(tmp_path, K_AAPL)) == 4
+
+
+def test_a_filing_read_again_never_takes_a_period_a_newer_filing_holds(
+    tmp_path: Path, sec: Sec
+) -> None:
+    """The key leaves the accession out, so the last write owned the row. Reading an older filing
+    again on its own (a hand re-read, or the re-queue of filings the edge read as having no
+    instance) would take its periods back from the filing that restated them. A newer filing
+    holding 2025-06-28's rows for one share class keeps them; the other share class, which no
+    newer filing holds, is written in full."""
+    golden = json.loads((GOLDEN / "expected_aapl_10q_2026q3.json").read_bytes())
+    columns = golden["columns"]
+    restated: set[tuple[str, ...]] = {
+        tuple(str(v) for v in (r["axis"], r["member_code"], r["parent_member"] or "",
+                               r["metric_code"], r["period_type"], r["period_ending"]))
+        for r in (dict(zip(columns, row, strict=True)) for row in golden["rows"])
+        if r["period_ending"] == "2025-06-28"
+    }  # fmt: skip
+    NEWER["s-a1"] = restated
+    sec.filing(AAPL, Q3)
+    result = run(tmp_path, instance_with(K_AAPL), [K_AAPL])
+    assert result.success
+    s = meta(result, "sec_segment")
+    assert s["kept_by_newer"] == len(restated) == 23
+    assert s["rows"] == 2 * AAPL_ROWS - len(restated)
+    [held] = [p for sql, p in CALLS if "from market.security_segment g" in sql and p[0] == "s-a1"]
+    filed = date(2026, 7, 31)
+    assert held == ["s-a1", Q3, ["2025-06-28", "2026-06-27"], filed, filed, Q3]
+    # Still marked read: the filing was read, it just owns less.
+    assert marks(Q3) == {"s-a1": 20, "s-a2": 20}
 
 
 # --- what is not an absence ----------------------------------------------------------------------

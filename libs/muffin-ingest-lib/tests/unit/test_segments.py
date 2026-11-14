@@ -12,6 +12,8 @@ import json
 from datetime import date, timedelta
 from typing import Any
 
+import pytest
+
 from muffin_ingest.facets import segments
 from muffin_ingest.facets.segments import (
     AxisSpec,
@@ -1088,6 +1090,102 @@ def test_an_incomplete_or_unreadable_index_json_falls_through_to_the_html() -> N
     )
     assert segments.instance_from_index_html(html) == "deo-20250630_htm.xml"
     assert segments.instance_from_index_html("<html></html>") is None
+
+
+#: Instance names filing agents gave, each from a filing the edge recorded as having no instance
+#: (read on the Dagster lane's first wave, 2026-11-14).
+AGENT_NAMED = [
+    "scco-20260930x10q_htm.xml",  # Toppan Merrill
+    "form10-q_htm.xml",  # M2 Compliance
+    "bomn20260930_10q_htm.xml",  # RDG
+    "desp20260930_10q_htm.xml",
+    "lwg_10q-093026_htm.xml",
+    "actuate_i10q-093026_htm.xml",
+]
+
+
+@pytest.mark.parametrize("name", AGENT_NAMED)
+def test_an_instance_a_filing_agent_named_is_found_in_both_listings(name: str) -> None:
+    """The edge's dated rule rejects every one of these, so the filing read as having no
+    instance, permanently. 7 of the first 11 such filings read carried segments."""
+    assert not segments.is_instance_name(name), "the edge's rule must stay as it was"
+    stem = name.removesuffix("_htm.xml")
+    body = json.dumps(
+        {
+            "directory": {
+                "item": [
+                    {"name": "0001104659-26-120639-xbrl.zip", "size": "900"},
+                    {"name": "FilingSummary.xml", "size": "40"},
+                    {"name": "scco-20260930.xsd", "size": "50"},
+                    {"name": "scco-20260930_cal.xml", "size": "60"},
+                    {"name": "scco-20260930_lab.xml", "size": "70"},
+                    {"name": name, "size": "5010000"},
+                    {"name": f"{stem}.htm", "size": "2000000"},
+                ]
+            }
+        }
+    )
+    assert segments.instance_from_index_json(body) == (name, 5010000)
+    html = (
+        f'<a href="/Archives/edgar/data/1001838/000110465926120639/{name}">x</a>'
+        '<a href="/Archives/edgar/data/1001838/000110465926120639/scco-20260930_def.xml">x</a>'
+        '<a href="/Archives/edgar/data/1001838/000110465926120639/FilingSummary.xml">x</a>'
+    )
+    assert segments.instance_from_index_html(html) == name
+
+
+def test_the_edge_s_dated_name_still_wins_when_both_kinds_are_listed() -> None:
+    """Every filing the edge read must pick the same file. The agent-style name here is SHORTER
+    than the dated one, so a rule ranking all candidates by length together would pick it."""
+    body = json.dumps(
+        {
+            "directory": {
+                "item": [
+                    {"name": "q_htm.xml", "size": "10"},
+                    {"name": "aapl-20250628_htm.xml", "size": "960000"},
+                ]
+            }
+        }
+    )
+    assert segments.instance_from_index_json(body) == ("aapl-20250628_htm.xml", 960000)
+    html = '<a href="/x/q_htm.xml">x</a><a href="/x/aapl-20250628_htm.xml">x</a>'
+    assert segments.instance_from_index_html(html) == "aapl-20250628_htm.xml"
+
+
+def test_two_extracted_instances_and_no_dated_one_are_no_instance() -> None:
+    """SEC extracts one instance per inline XBRL filing; two would mean we cannot tell which is
+    the company's, so the filing reads as it did before rather than as a guess."""
+    body = json.dumps(
+        {
+            "directory": {
+                "item": [
+                    {"name": "a10q_htm.xml", "size": "1"},
+                    {"name": "ex99_htm.xml", "size": "2"},
+                ]
+            }
+        }
+    )
+    assert segments.instance_from_index_json(body) is None
+    assert (
+        segments.instance_from_index_html(
+            '<a href="/x/a10q_htm.xml">x</a><a href="/x/ex99_htm.xml">x</a>'
+        )
+        is None
+    )
+    # A name listed twice is still one instance.
+    twice = json.dumps(
+        {
+            "directory": {
+                "item": [
+                    {"name": "a10q_htm.xml", "size": "1"},
+                    {"name": "a10q_htm.xml", "size": "9"},
+                ]
+            }
+        }
+    )
+    assert segments.instance_from_index_json(twice) == ("a10q_htm.xml", 1)
+    # A linkbase is never an instance, whatever it ends with.
+    assert not segments.is_extracted_instance_name("form10-q_htm_cal.xml")
 
 
 def test_an_unknown_size_is_not_a_zero_size() -> None:
