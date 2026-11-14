@@ -23,7 +23,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import dagster as dg
-from muffin_ingest.writers import WriteResult, replace_scope, upsert
+from muffin_ingest.writers import WriteResult, replace_scope, retract_alternatives, upsert
 
 from muffin_ingest_dagster.lib.partitioned import Complete, Unchanged
 from muffin_ingest_dagster.lib.resources import Postgres
@@ -685,9 +685,30 @@ class PostgresIOManager(dg.ConfigurableIOManager):
                 f"{context.asset_key.to_user_string()} declares replace_scope with only_replacing "
                 f"or merge_json; a scope it deletes has nothing left to guard or merge into"
             )
+        # A KEY COLUMN WHOSE VALUES ARE ALTERNATIVES (`writers.retract_alternatives`): writing a
+        # row retracts the stored row stating the same rest-of-key under another of them, in the
+        # same transaction. `{"column": …, "among": […], "types": {column: sql type}}`.
+        exclusive = meta.get("exclusive")
+        if exclusive and scope_columns:
+            raise dg.DagsterInvariantViolationError(
+                f"{context.asset_key.to_user_string()} declares replace_scope with exclusive; a "
+                f"scope it deletes already holds nothing but what it writes"
+            )
 
+        alternatives_retracted = 0
         with self.postgres.connect() as conn:
             with conn.cursor() as cur:
+                if exclusive:
+                    column = str(exclusive["column"])
+                    alternatives_retracted = retract_alternatives(
+                        cur,
+                        str(table),
+                        rows,
+                        key=[str(c) for c in conflict if c != column],
+                        column=column,
+                        among=[str(v) for v in exclusive["among"]],
+                        types={str(k): str(v) for k, v in exclusive["types"].items()},
+                    ).retracted
                 if scope_columns:
                     result = _replace_scopes(cur, str(table), rows, scope_columns, list(conflict))
                 else:
@@ -710,6 +731,7 @@ class PostgresIOManager(dg.ConfigurableIOManager):
                 # security is how this was first noticed.
                 "collapsed": result.collapsed,
                 "scopes_retracted": result.retracted,
+                "alternatives_retracted": alternatives_retracted,
                 # ROWS THE DATABASE ACTUALLY CHANGED, beside `rows` SENT. An identical row is
                 # skipped, so a night that re-publishes whole files reads as a small `changed`
                 # against a large `rows`, which is the point. -1 when the driver could not say.

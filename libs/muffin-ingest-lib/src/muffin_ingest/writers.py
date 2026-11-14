@@ -448,6 +448,70 @@ def retract_unproduced(
     return WriteResult(written=0, retracted=count if isinstance(count, int) and count > 0 else 0)
 
 
+def retract_alternatives(
+    cur: DbCursor,
+    table: str,
+    produced: Sequence[Mapping[str, Any]],
+    *,
+    key: Sequence[str],
+    column: str,
+    among: Sequence[str],
+    types: Mapping[str, str],
+) -> WriteResult:
+    """Delete the stored rows that state a produced row's `key` under ANOTHER value of `column`,
+    where both values are in `among`: the values are alternatives, and a key holds one of them.
+
+    Yahoo's quarterly series is read as quarters or as half-years by the gaps between its period
+    ends (`statements.cadence`), so one period end is a quarter or a half, never both. The edge
+    filed half-years as quarters, and a cadence read again on more periods can change its answer;
+    either way a key would keep both rows, and the derivation and the serving view would read a
+    six-month period as three months (Vodafone, Nestlé and BHP, measured 2026-11-10: 2,002
+    quarter rows beside a half twin). Writing the produced row retracts the other.
+
+    A value outside `among` is never touched on either side: a fiscal year end is also a fourth
+    quarter or a second half, and its annual row is not an alternative to either.
+    """
+    if not key:
+        raise WriterError("retract_alternatives needs the key the alternatives share")
+    if column in key:
+        raise WriterError(f"{column!r} is the column that varies; it cannot be part of the key")
+    if len(set(among)) < 2:
+        raise WriterError("retract_alternatives needs at least two values to choose between")
+    produced = [row for row in produced if row.get(column) in among]
+    if not produced:
+        return WriteResult(written=0, retracted=0)
+    target = _qualified(table)
+    for c in [*key, column]:
+        _ident(c)
+        if c not in types or not _TYPE.match(types[c]):
+            raise WriterError(f"column {c!r} needs a plain SQL type in `types`")
+    chosen: dict[tuple[Any, ...], Any] = {}
+    for row in produced:
+        missing = [c for c in key if row.get(c) is None]
+        if missing:
+            raise WriterError(f"a produced row lacks key column(s) {missing}: {dict(row)!r}")
+        # A PRODUCER THAT STATES BOTH ALTERNATIVES FOR ONE KEY is the defect this exists to remove;
+        # retracting on its word would delete one of its own rows.
+        k = tuple(row[c] for c in key)
+        if chosen.setdefault(k, row[column]) != row[column]:
+            raise WriterError(
+                f"{k!r} is produced as both {chosen[k]!r} and {row[column]!r}; they are "
+                f"alternatives, so one key holds one"
+            )
+
+    columns = [*key, column]
+    arrays = ", ".join(f"%s::{types[c]}[]" for c in columns)
+    matched = " and ".join(f"{_STORED}.{c} = p.{c}" for c in key)
+    sql = (
+        f"delete from {target} as {_STORED} using unnest({arrays}) as p ({', '.join(columns)}) "
+        f"where {matched} and {_STORED}.{column} <> p.{column} "
+        f"and {_STORED}.{column} = any(%s::{types[column]}[])"
+    )
+    cur.execute(sql, [*([row[c] for row in produced] for c in columns), list(among)])
+    count = getattr(cur, "rowcount", None)
+    return WriteResult(written=0, retracted=count if isinstance(count, int) and count > 0 else 0)
+
+
 def update_existing(
     cur: DbCursor,
     table: str,

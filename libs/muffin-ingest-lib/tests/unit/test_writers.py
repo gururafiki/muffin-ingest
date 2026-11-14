@@ -568,6 +568,115 @@ def test_retract_unproduced_reports_the_rows_the_driver_deleted() -> None:
     assert result.written == 0
 
 
+ALTERNATIVE_TYPES = {
+    "security_id": "uuid",
+    "source_code": "text",
+    "statement": "text",
+    "period_ending": "date",
+    "period_type": "text",
+}
+ALTERNATIVE_KEY = ["security_id", "source_code", "statement", "period_ending"]
+
+
+def _statement(period_ending: str, period_type: str, statement: str = "income") -> dict[str, Any]:
+    return {
+        "security_id": "s1",
+        "source_code": "yfinance",
+        "statement": statement,
+        "period_ending": period_ending,
+        "period_type": period_type,
+        "data": "{}",
+    }
+
+
+def test_retract_alternatives_deletes_the_other_value_at_each_produced_key() -> None:
+    """A half-year written retracts the quarter stored at the same period end, and only among the
+    alternatives: the annual row of a fiscal year end is neither, so it is never sent."""
+    cur = FakeCursor()
+    writers.retract_alternatives(
+        cur,
+        "market.security_statement",
+        [_statement("2025-09-30", "half"), _statement("2026-03-31", "annual")],
+        key=ALTERNATIVE_KEY,
+        column="period_type",
+        among=["quarter", "half"],
+        types=ALTERNATIVE_TYPES,
+    )
+    [(sql, params)] = cur.calls
+    assert sql == (
+        "delete from market.security_statement as stored_row using unnest(%s::uuid[],"
+        " %s::text[], %s::text[], %s::date[], %s::text[]) as p (security_id, source_code,"
+        " statement, period_ending, period_type) where stored_row.security_id = p.security_id"
+        " and stored_row.source_code = p.source_code and stored_row.statement = p.statement and"
+        " stored_row.period_ending = p.period_ending and stored_row.period_type <> p.period_type"
+        " and stored_row.period_type = any(%s::text[])"
+    )
+    assert params == [
+        ["s1"],
+        ["yfinance"],
+        ["income"],
+        ["2025-09-30"],
+        ["half"],
+        ["quarter", "half"],
+    ]
+
+
+def test_retract_alternatives_sends_nothing_when_no_row_holds_an_alternative() -> None:
+    cur = FakeCursor()
+    result = writers.retract_alternatives(
+        cur,
+        "market.security_statement",
+        [_statement("2026-03-31", "annual")],
+        key=ALTERNATIVE_KEY,
+        column="period_type",
+        among=["quarter", "half"],
+        types=ALTERNATIVE_TYPES,
+    )
+    assert cur.calls == []
+    assert result.retracted == 0
+
+
+def test_retract_alternatives_refuses_what_could_delete_more_than_it_means() -> None:
+    def retract(rows: list[dict[str, Any]], **kwargs: Any) -> None:
+        args: dict[str, Any] = {
+            "key": ALTERNATIVE_KEY,
+            "column": "period_type",
+            "among": ["quarter", "half"],
+            "types": ALTERNATIVE_TYPES,
+        }
+        args.update(kwargs)
+        writers.retract_alternatives(FakeCursor(), "market.security_statement", rows, **args)
+
+    one = [_statement("2025-09-30", "half")]
+    # A producer stating both for one key would retract one of its own rows.
+    with pytest.raises(WriterError, match="alternatives"):
+        retract([_statement("2025-09-30", "half"), _statement("2025-09-30", "quarter")])
+    with pytest.raises(WriterError, match="key"):
+        retract(one, key=[])
+    with pytest.raises(WriterError, match="varies"):
+        retract(one, key=[*ALTERNATIVE_KEY, "period_type"])
+    with pytest.raises(WriterError, match="two values"):
+        retract(one, among=["half"])
+    with pytest.raises(WriterError, match="type"):
+        retract(one, types={**ALTERNATIVE_TYPES, "statement": "text; drop table x"})
+    with pytest.raises(WriterError, match="lacks key"):
+        retract([{**_statement("2025-09-30", "half"), "statement": None}])
+
+
+def test_retract_alternatives_reports_the_rows_the_driver_deleted() -> None:
+    cur = CountingCursor([2])
+    result = writers.retract_alternatives(
+        cur,
+        "market.security_statement",
+        [_statement("2025-09-30", "half")],
+        key=ALTERNATIVE_KEY,
+        column="period_type",
+        among=["quarter", "half"],
+        types=ALTERNATIVE_TYPES,
+    )
+    assert result.retracted == 2
+
+
 def test_nothing_sent_is_nothing_changed() -> None:
     """An empty upsert executes no statement, so the count is a known zero, not unknown.
 
