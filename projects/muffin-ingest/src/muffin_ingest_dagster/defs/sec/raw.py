@@ -76,12 +76,18 @@ class Form4Run(dg.Config):
     group_name="sec",
     kinds={"sec", "parquet"},
     freshness_policy=FRESH_DAY,
+    # A DAY SEC HAS NOT PUBLISHED ENDS THE RUN CLAIMING NOTHING, and does not fail it, as the data
+    # set lane decided on 2026-10-30. The day after a weekday holiday is "not published" until the
+    # next business day is listed, so failing fired "A Dagster run failed" for six hours on correct
+    # behaviour: on 2026-11-12 for Veterans Day, and three days running after Christmas and New
+    # Year's Day, which both fall on a Friday in 2026.
+    output_required=False,
     description=(
         "SEC's daily form index, one file a day, kept whole; a holiday keeps the quarter listing "
         "that proves it."
     ),
 )
-def raw_sec_daily_index(context: AssetExecutionContext) -> Any:
+def raw_sec_daily_index(context: AssetExecutionContext) -> Iterator[dg.Output[Any]]:
     """Each day's `form.<yyyymmdd>.idx`, decided from the quarter's listing before it is asked for.
 
     A DAY WITH NO INDEX ANSWERS 403, NOT 404 (measured 2026-10-26: Columbus Day, a Saturday, and a
@@ -90,7 +96,9 @@ def raw_sec_daily_index(context: AssetExecutionContext) -> Any:
     names it (`sec_index.classify_day`):
       * a weekend writes the empty marker, with no request;
       * a holiday keeps the listing, which names a later day and not this one;
-      * a day not yet published fails the run, claiming nothing.
+      * a day not yet published ends the run claiming nothing: no day in the run is materialised,
+        the day's Form 4 steps are skipped, an observation records that it was asked, and the
+        schedule asks again the next day (it re-asks every day of the lookback not held).
     """
     days = sorted(date.fromisoformat(k) for k in context.partition_keys)
     run_id = context.run.run_id
@@ -152,12 +160,25 @@ def raw_sec_daily_index(context: AssetExecutionContext) -> Any:
                 rows.append(found)
                 placed[id(found)] = day.isoformat()
     if unpublished:
-        raise dg.Failure(
-            f"SEC has not published {', '.join(d.isoformat() for d in unpublished)} yet; "
-            "nothing in this run is claimed"
-        )
-    context.add_output_metadata({"days": len(days), "listings": len(listings), **stats})
-    return partitioned.by_partition(context, rows, key=lambda r: placed[id(r)])
+        # ALL OR NOTHING: an output covers the run's whole range, so one unpublished day leaves the
+        # run's other days unclaimed too. The schedule asks one day a run, so this costs a backfill
+        # range only, which the next tick asks again.
+        named = ", ".join(d.isoformat() for d in unpublished)
+        context.log.info("SEC has not published %s yet; nothing in this run is claimed", named)
+        # So "not published" stays distinguishable from "never asked".
+        for day in unpublished:
+            context.log_event(
+                dg.AssetObservation(
+                    asset_key=context.asset_key,
+                    partition=day.isoformat(),
+                    metadata={"published": False, "calls": stats["calls"]},
+                )
+            )
+        return
+    yield dg.Output(
+        partitioned.by_partition(context, rows, key=lambda r: placed[id(r)]),
+        metadata={"days": len(days), "listings": len(listings), **stats},
+    )
 
 
 def _today() -> date:

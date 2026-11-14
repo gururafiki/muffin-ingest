@@ -225,14 +225,52 @@ def test_a_day_is_placed_by_its_partition_and_never_stored_with_it(
         }  # fmt: skip
 
 
-def test_a_day_not_yet_published_fails_the_run_and_claims_nothing(tmp_path: Path, sec: Sec) -> None:
-    """The listing names nothing after 10-23, so 10-26 is not published, not a holiday."""
+def test_a_day_not_yet_published_ends_the_run_and_claims_nothing(tmp_path: Path, sec: Sec) -> None:
+    """The listing names nothing after 10-23, so 10-26 is not published, not a holiday.
+
+    That is correct behaviour, and the day after every weekday holiday looks exactly like it until
+    the next business day is listed (2026-11-12, for Veterans Day). A failed run fires "A Dagster
+    run failed" for six hours, so the run succeeds, claims none of its days, skips the Form 4
+    steps and records what it was asked.
+    """
     sec.answers[listing_url()] = (200, LISTING)
     sec.answers[sec_edgar.daily_index_url(date(2026, 10, 23))] = (200, INDEX_1023)
-    result = run(tmp_path, [sec_raw.raw_sec_daily_index], ["2026-10-23", "2026-10-26"])
-    assert not result.success
+    result = run(
+        tmp_path,
+        [sec_raw.raw_sec_daily_index, sec_raw.raw_sec_form4],
+        ["2026-10-23", "2026-10-26"],
+    )
+    assert result.success
+    assert not result.get_asset_materialization_events()
     assert not list(tmp_path.rglob("*.parquet"))
     assert sec_edgar.daily_index_url(date(2026, 10, 26)) not in sec.calls
+    observed = [
+        e.asset_observation_data.asset_observation
+        for e in result.all_events
+        if e.event_type_value == "ASSET_OBSERVATION"
+    ]
+    assert [(o.partition, o.metadata["published"].value) for o in observed] == [
+        ("2026-10-26", False)
+    ]
+    skipped = {e.step_key for e in result.all_events if e.event_type_value == "STEP_SKIPPED"}
+    assert skipped == {"raw_sec_form4"}
+
+
+def test_an_unpublished_day_is_asked_again_the_next_day() -> None:
+    """Claiming nothing is safe only because the schedule asks again: it re-asks every day of its
+    lookback that is not held, so the day after the next business day is listed, a holiday is
+    proven and stored."""
+    with dg.instance_for_test() as instance:
+        with dg.build_schedule_context(
+            instance=instance, scheduled_execution_time=datetime(2026, 11, 13, 11, tzinfo=UTC)
+        ) as context:
+            requests = sec_automation.sec_daily_index(context)
+        assert isinstance(requests, list)
+        asked = {r.partition_key for r in requests}
+        assert {"2026-11-11", "2026-11-12"} <= asked
+        assert all(
+            r.run_key and r.run_key.startswith("sec_daily_index:2026-11-13:") for r in requests
+        )
 
 
 # --- the day's Form 4s ---------------------------------------------------------------------------
