@@ -635,7 +635,7 @@ def test_a_quarter_or_half_year_written_retracts_its_twin_of_the_other_type(
     ]
     retractions = [s for s in statements if s[1].startswith("delete")]
     assert len(retractions) == 1, "one statement for the whole write"
-    n, sql, params = retractions[0]
+    _, sql, params = retractions[0]
     assert "stored_row.period_type <> p.period_type" in sql
     assert all(m < i for m, _, _ in retractions for i, s, _ in statements if s.startswith("insert"))
     security_ids, sources, _, _, types, among = params
