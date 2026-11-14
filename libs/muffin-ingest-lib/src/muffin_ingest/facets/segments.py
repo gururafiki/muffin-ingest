@@ -928,7 +928,8 @@ _INDEX_HREF = re.compile(r'href="[^"]*/([A-Za-z0-9_-]+\.xml)"', re.A)
 
 def is_instance_name(name: str) -> bool:
     """The instance, not a linkbase or `FilingSummary.xml`, in both eras: `aapl-20250628_htm.xml`
-    (inline XBRL, 2019+) and `aapl-20150926.xml` (the standalone instance before it)."""
+    (inline XBRL, 2019+) and `aapl-20150926.xml` (the standalone instance before it). The edge's
+    rule, unchanged: a name it accepts is always chosen first (`_pick_instance`)."""
     if not name.endswith(".xml"):
         return False
     if _LINKBASE.search(name):
@@ -936,6 +937,33 @@ def is_instance_name(name: str) -> bool:
     if _FILING_SUMMARY.match(name):
         return False
     return _INSTANCE_NAME.search(name) is not None
+
+
+def is_extracted_instance_name(name: str) -> bool:
+    """Any instance SEC extracted from an inline XBRL document: `<primary document>_htm.xml`.
+
+    WIDENED 2026-11-14 (the user's decision; umbrella docs/deferred/2026-11-14-an-agent-named-
+    instance-is-read-as-no-instance.md). Filing agents name the primary document their own way, so
+    the edge's dated rule rejected `scco-20260930x10q_htm.xml`, `form10-q_htm.xml` and
+    `desp20260930_10q_htm.xml`, and recorded each filing as having no instance for good. Measured on
+    the lane's first wave: 10 of 29 filings, 7 of the 11 read carrying segments; since 2019, 64.7%
+    of agent-filed filings had no segment rows against 24.2% self-filed.
+    """
+    return name.endswith("_htm.xml") and not _LINKBASE.search(name)
+
+
+def _pick_instance(names: Sequence[str]) -> str | None:
+    """The instance among a filing's file names, or None.
+
+    THE EDGE'S RULE FIRST, so every filing it read picks the same file and parity holds: shortest
+    of the names it accepts. Only when it accepts none, the one `*_htm.xml` SEC extracted; two or
+    more with no dated name are ambiguous and read as no instance, as before.
+    """
+    dated = [n for n in names if is_instance_name(n)]
+    if dated:
+        return sorted(dated, key=len)[0]
+    extracted = [n for n in names if is_extracted_instance_name(n)]
+    return extracted[0] if len(set(extracted)) == 1 else None
 
 
 def _js_number(value: object) -> float:
@@ -972,7 +1000,7 @@ def instance_from_index_json(body: str) -> tuple[str, float | None] | None:
         return None
     if not isinstance(items, list):
         return None
-    named: list[tuple[str, float | None]] = []
+    sizes: dict[str, float | None] = {}
     for item in items:
         if item is None:
             return None  # `i.name` of null throws in the edge, which fell through to the HTML
@@ -980,22 +1008,18 @@ def instance_from_index_json(body: str) -> tuple[str, float | None] | None:
             continue
         raw_name = item.get("name")
         name = "" if raw_name is None else str(raw_name)
-        if not is_instance_name(name):
+        if not (is_instance_name(name) or is_extracted_instance_name(name)):
             continue
         size = item.get("size")
         n = _js_number(0 if size is None else size)
-        named.append((name, None if n == 0 or math.isnan(n) else n))
-    if not named:
-        return None
-    return sorted(named, key=lambda nb: len(nb[0]))[0]
+        sizes.setdefault(name, None if n == 0 or math.isnan(n) else n)
+    picked = _pick_instance(list(sizes))
+    return None if picked is None else (picked, sizes[picked])
 
 
 def instance_from_index_html(html: str) -> str | None:
     """The instance file name from a filing's `<accession>-index.htm`, which carries no size."""
-    found = [str(m.group(1)) for m in _INDEX_HREF.finditer(html) if is_instance_name(m.group(1))]
-    if not found:
-        return None
-    return sorted(found, key=len)[0]
+    return _pick_instance([str(m.group(1)) for m in _INDEX_HREF.finditer(html)])
 
 
 def instance_is_too_large(size: float | None) -> bool:
