@@ -66,7 +66,7 @@ def test_a_filing_is_due_only_as_an_xbrl_accounts_form_of_an_equity_unread_at_th
 ):
     """The predicate is one piece of SQL shared by the sensor, both stages and the check, so the
     four cannot disagree about what is left."""
-    for sql in (sec_segments.DUE_BY_FILER, sec_segments.FILINGS, sec_segments.UNREAD_OLDER_THAN):
+    for sql in (sec_segments.DUE_BY_FILER, sec_segments.FILINGS, sec_segments.UNREAD):
         text = " ".join(sql.split())
         assert "f.is_xbrl" in text
         assert "s.security_type_code = 'equity'" in text
@@ -105,12 +105,25 @@ def test_no_filers_asks_nothing() -> None:
     assert conn.calls == []
 
 
-def test_due_by_filer_and_the_unread_count() -> None:
+def test_due_by_filer_and_what_is_unread() -> None:
     assert sec_segments.due_by_filer(Conn([(320193, 2), (1652044, 1)])) == {320193: 2, 1652044: 1}
-    conn = Conn([(3, 2, date(2026, 11, 3))])
-    assert sec_segments.unread_older_than(conn, 3) == (3, 2, date(2026, 11, 3))
-    assert conn.calls[0][1] == (3,)
-    assert sec_segments.unread_older_than(Conn([]), 3) == (0, 0, None)
+    conn = Conn([(3, 2, date(2026, 11, 3), 41)])
+    assert sec_segments.unread(conn, 1) == sec_segments.Unread(3, 2, date(2026, 11, 3), 41)
+    assert conn.calls[0][1] == {"days": 1}
+    assert sec_segments.unread(Conn([]), 1) == sec_segments.Unread(0, 0, None, 0)
+
+
+def test_a_filing_never_read_is_judged_from_when_we_held_it_not_from_its_filing_date() -> None:
+    """Friday's filings are written on Monday, three days old by their own date. A clock on
+    `filing_date` would call them late the moment they arrive, in every run of Monday's wave."""
+    text = " ".join(sec_segments.UNREAD.split())
+    never = "f.segments_parsed_at is null and f.as_of <= now() - make_interval(days => %(days)s)"
+    assert text.count(f"filter (where {never})") == 3
+    assert "filing_date <=" not in text and "current_date" not in text
+    # A filing read by an older parser version is counted apart, whatever its age.
+    assert (
+        "count(distinct f.accession_number) filter (where f.segments_parsed_at is not null)" in text
+    )
 
 
 # ── raw ────────────────────────────────────────────────────────────────────────────────────────
@@ -146,51 +159,59 @@ def _stored(
     }
 
 
-def test_held_is_the_newest_finished_fetch_and_its_own_instance() -> None:
+def test_the_newest_finished_fetch_decides_and_its_own_instance_is_the_body() -> None:
     rows = [
         _stored("index_json", "answered", run="r1", at="2026-11-10T12:00:00"),
         _stored("instance", "answered", run="r1", at="2026-11-10T12:00:01", body=b"<xbrl/>"),
     ]
-    got = sec_segments.held(rows)
-    assert got is not None
-    assert (got.outcome, got.body, got.run_id) == ("answered", b"<xbrl/>", "r1")
-    assert got.fetched_at == "2026-11-10T12:00:01"
+    got = sec_segments.finished(rows)
+    assert got == sec_segments.Finished("answered", "2026-11-10T12:00:01", "r1")
+    assert sec_segments.instance_body(rows, got) == b"<xbrl/>"
     assert sec_segments.held_accessions(rows) == {ACCESSION}
+    # The outcome needs no body: stage 2 asks it of every filing before reading a megabyte.
+    light = [{k: v for k, v in r.items() if k != "body"} for r in rows]
+    assert sec_segments.finished(light) == got
+    assert sec_segments.instance_body(light, got) is None
 
 
 @pytest.mark.parametrize("outcome", ["absent", "too_large"])
-def test_a_fetch_that_ended_without_an_instance_is_held_with_no_body(outcome: str) -> None:
-    got = sec_segments.held([_stored("index_json", outcome, run="r1", at="2026-11-10T12:00:00")])
-    assert got is not None and (got.outcome, got.body) == (outcome, None)
+def test_a_fetch_that_ended_without_an_instance_has_no_body(outcome: str) -> None:
+    rows = [_stored("index_json", outcome, run="r1", at="2026-11-10T12:00:00")]
+    got = sec_segments.finished(rows)
+    assert got is not None and got.outcome == outcome
+    assert sec_segments.instance_body(rows, got) is None
 
 
 def test_a_later_fetch_that_found_no_instance_does_not_use_an_older_one() -> None:
     """A re-fetch replaces the same document of the same filing and cannot remove the instance row
     an earlier fetch wrote. Taking any stored instance would parse a document the newest fetch
     says is not there."""
-    rows = [
-        _stored("index_json", "answered", run="r1", at="2026-11-01T12:00:00"),
+    merged = [
         _stored("instance", "answered", run="r1", at="2026-11-01T12:00:01", body=b"<old/>"),
+        # The merge keeps one row per (accession, document): r2's index_json replaced r1's.
         _stored("index_json", "absent", run="r2", at="2026-11-10T12:00:00"),
         _stored("index_html", "absent", run="r2", at="2026-11-10T12:00:01"),
     ]
-    # The merge keeps one row per (accession, document): r2's index_json replaced r1's.
-    merged = [rows[1], rows[2], rows[3]]
-    got = sec_segments.held(merged)
-    assert got is not None and (got.outcome, got.body) == ("absent", None)
+    got = sec_segments.finished(merged)
+    assert got is not None and got.outcome == "absent"
+    assert sec_segments.instance_body(merged, got) is None
 
 
-def test_rows_with_no_finished_fetch_are_not_held() -> None:
-    assert sec_segments.held([]) is None
-    unfinished = [_stored("index_json", None, run="r1", at="2026-11-10T12:00:00")]
-    assert sec_segments.held(unfinished) is None
-    assert sec_segments.held_accessions(unfinished) == set()
-    # Answered, and the instance row is another run's: the answer cannot be read.
+def test_an_answered_fetch_never_reads_another_run_s_instance() -> None:
     torn = [
         _stored("index_json", "answered", run="r2", at="2026-11-10T12:00:00"),
         _stored("instance", "answered", run="r1", at="2026-11-01T12:00:00", body=b"<old/>"),
     ]
-    assert sec_segments.held(torn) is None
+    got = sec_segments.finished(torn)
+    assert got is not None and got.run_id == "r2"
+    assert sec_segments.instance_body(torn, got) is None
+
+
+def test_rows_with_no_finished_fetch_are_not_held() -> None:
+    assert sec_segments.finished([]) is None
+    unfinished = [_stored("index_json", None, run="r1", at="2026-11-10T12:00:00")]
+    assert sec_segments.finished(unfinished) is None
+    assert sec_segments.held_accessions(unfinished) == set()
 
 
 # ── the rows written, and the control tables ───────────────────────────────────────────────────

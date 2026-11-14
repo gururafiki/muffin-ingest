@@ -67,15 +67,22 @@ select s.cik, f.accession_number, min(f.filing_date),
 having bool_or({_UNREAD}) or f.accession_number = any(%s)
 """
 
-#: Accounts filings filed at least this many days ago and still unread: the completeness check.
-UNREAD_OLDER_THAN = f"""
-select count(distinct f.accession_number), count(distinct s.cik), min(f.filing_date)
+#: What is still unread, in two kinds: filings NEVER read that we have held for at least N days, and
+#: filings read by an older parser version (any age). The clock is `as_of`, when the filer lane
+#: wrote the row, and never `filing_date`: Friday's filings are written on Monday, already three
+#: days old by their own date, and a check on that date would fail every Monday for an hour.
+UNREAD = f"""
+select count(distinct f.accession_number) filter (where {{never}}),
+       count(distinct s.cik) filter (where {{never}}),
+       min(f.filing_date) filter (where {{never}}),
+       count(distinct f.accession_number) filter (where f.segments_parsed_at is not null)
   from market.security_filing f
   join market.security s on s.security_id = f.security_id
  where {_ACCOUNTS_FILING}
    and {_UNREAD}
-   and f.filing_date <= current_date - %s::int
-"""
+""".format(
+    never="f.segments_parsed_at is null and f.as_of <= now() - make_interval(days => %(days)s)"
+)
 
 
 @dataclass(frozen=True)
@@ -123,12 +130,25 @@ def filings(conn: Any, ciks: Sequence[int], named: Sequence[str] = ()) -> dict[i
     return out
 
 
-def unread_older_than(conn: Any, days: int) -> tuple[int, int, date | None]:
-    """(filings, filers, the oldest filing date) still unread `days` after they were filed."""
+@dataclass(frozen=True)
+class Unread:
+    """What `UNREAD` counts."""
+
+    #: Filings never read, held for at least the days asked: a wave that keeps failing on them.
+    never_read: int
+    filers: int
+    oldest_filed: date | None
+    #: Filings read by an older parser version: a re-read that has not drained.
+    behind_the_parser: int
+
+
+def unread(conn: Any, days: int) -> Unread:
     with conn.cursor() as cur:
-        cur.execute(UNREAD_OLDER_THAN, (days,))
+        cur.execute(UNREAD, {"days": days})
         row = cur.fetchone()
-    return (0, 0, None) if row is None else (int(row[0]), int(row[1]), row[2])
+    if row is None:
+        return Unread(0, 0, None, 0)
+    return Unread(int(row[0]), int(row[1]), row[2], int(row[3]))
 
 
 # ── Raw ────────────────────────────────────────────────────────────────────────────────────────
@@ -163,39 +183,45 @@ def raw_rows(fetch: InstanceFetch, *, accession: str, run_id: str) -> list[dict[
 
 
 @dataclass(frozen=True)
-class Held:
-    """What raw holds for one filing: how its newest fetch ended, and its instance if answered."""
+class Finished:
+    """How the newest finished fetch of one filing ended, and which run made it."""
 
     outcome: InstanceOutcome
-    body: bytes | None
     fetched_at: str
     run_id: str
 
 
-def held(rows: Sequence[Mapping[str, Any]]) -> Held | None:
-    """One filing's stored rows -> its newest fetch, or None when raw holds no finished fetch.
+def finished(rows: Sequence[Mapping[str, Any]]) -> Finished | None:
+    """One filing's stored rows -> its newest finished fetch, or None when raw holds none.
 
-    THE NEWEST ROW DECIDES THE OUTCOME. A re-fetch replaces the same document of the same filing
-    and cannot remove a row its own path did not produce: a filing first found through the HTML
-    index and later through `index.json` keeps the old HTML row. So an instance body is used only
-    when the newest fetch answered, and only if that fetch wrote it.
+    Reads no body, so it can be asked of every filing a filer's file holds.
+
+    THE NEWEST ROW DECIDES. A re-fetch replaces the same document of the same filing and cannot
+    remove a row its own path did not produce: a filing first found through the HTML index and
+    later through `index.json` keeps the old HTML row, and one that answered once and is absent
+    now keeps the old instance.
     """
-    finished = [r for r in rows if r.get("outcome") in OUTCOMES and r.get("fetched_at") is not None]
-    if not finished:
+    done = [r for r in rows if r.get("outcome") in OUTCOMES and r.get("fetched_at") is not None]
+    if not done:
         return None
-    newest = max(finished, key=lambda r: str(r["fetched_at"]))
+    newest = max(done, key=lambda r: str(r["fetched_at"]))
     outcome: InstanceOutcome = newest["outcome"]
-    body: bytes | None = None
-    if outcome == "answered":
-        instance = [
-            r
-            for r in finished
-            if r.get("document") == "instance" and r.get("run_id") == newest.get("run_id")
-        ]
-        if not instance or instance[0].get("body") is None:
-            return None
-        body = bytes(instance[0]["body"])
-    return Held(outcome, body, str(newest["fetched_at"]), str(newest.get("run_id") or ""))
+    return Finished(outcome, str(newest["fetched_at"]), str(newest.get("run_id") or ""))
+
+
+def instance_body(rows: Sequence[Mapping[str, Any]], fetch: Finished) -> bytes | None:
+    """The instance the given fetch wrote, or None: never an older fetch's, which the newest one
+    may have found gone."""
+    if fetch.outcome != "answered":
+        return None
+    for row in rows:
+        if (
+            row.get("document") == "instance"
+            and str(row.get("run_id") or "") == fetch.run_id
+            and row.get("body") is not None
+        ):
+            return bytes(row["body"])
+    return None
 
 
 def held_accessions(rows: Sequence[Mapping[str, Any]]) -> set[str]:
