@@ -2183,7 +2183,7 @@
       "type": "STANDARD"
     },
     "sec_instances_due": {
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "jobs": [
         "sec_segments"
       ],
