@@ -297,6 +297,22 @@ def company_facts(
         "conflict": ["security_id", "source_code", "statement", "period_ending", "period_type"],
         # YAHOO'S WINDOW ROLLS PER LINE, so a narrower answer must not erase a stored line.
         "merge_json": ["data"],
+        # A PERIOD END OF THE QUARTERLY SERIES IS A QUARTER OR A HALF-YEAR, NEVER BOTH
+        # (`statements.cadence` decides per company). The edge filed half-years as quarters, so
+        # 806 half-year reporters held a quarter row beside each half (2,002 of them, measured
+        # 2026-11-10), and the derivation read six months as three. Writing one retracts the
+        # other; an annual row is never an alternative.
+        "exclusive": {
+            "column": "period_type",
+            "among": ["quarter", "half"],
+            "types": {
+                "security_id": "uuid",
+                "source_code": "text",
+                "statement": "text",
+                "period_ending": "date",
+                "period_type": "text",
+            },
+        },
     },
     freshness_policy=FRESH,
     description="Yahoo's annual, quarterly and half-yearly statements, with their currency.",
