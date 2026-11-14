@@ -1,7 +1,9 @@
 """The segments family's job and sensor.
 
-`sec_instances_due` SHIPS STOPPED. It is started in code once the lane has read a tiny subset live
-and the edge's `security-segments` resource is retired: two writers never read one queue.
+`sec_instances_due` RUNS, declared here so a reset of Dagster's state cannot stop it. It shipped
+stopped (muffin-ingest#174) and was started on 2026-11-14 once the lane had read a tiny subset live
+and the edge's `security-segments` resource was retired (muffin-deployment#511): two writers never
+read one queue.
 """
 
 from collections.abc import Mapping, Sequence
@@ -63,7 +65,7 @@ def chunks_due(grid: Sequence[str], due: Mapping[int, int]) -> list[list[str]]:
 @dg.sensor(
     job=sec_segments_job,
     minimum_interval_seconds=1800,
-    default_status=dg.DefaultSensorStatus.STOPPED,
+    default_status=dg.DefaultSensorStatus.RUNNING,
     description="Filers with an accounts filing whose XBRL instance has not been read.",
 )
 def sec_instances_due(

@@ -595,10 +595,10 @@ def test_the_sensor_asks_nothing_when_nothing_is_due_or_the_queue_is_a_history(
     assert isinstance(_sensor(instance), dg.SensorResult), "at the bound it is still a day"
 
 
-def test_the_sensor_ships_stopped_and_the_bound_is_above_the_busiest_day() -> None:
-    """Started in code only after the lane has read a tiny subset live and the edge's resource is
-    retired. 506 accounts filings arrived on 2026-11-05, the busiest day measured."""
-    assert automation.sec_instances_due.default_status is dg.DefaultSensorStatus.STOPPED
+def test_the_sensor_runs_and_the_bound_is_above_the_busiest_day() -> None:
+    """Declared RUNNING so a reset of Dagster's state cannot stop the lane. 506 accounts filings
+    arrived on 2026-11-05, the busiest day measured."""
+    assert automation.sec_instances_due.default_status is dg.DefaultSensorStatus.RUNNING
     assert automation.MAX_DUE_PER_TICK >= 3 * 506
 
 
