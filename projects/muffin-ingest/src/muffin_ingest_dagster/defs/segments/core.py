@@ -5,14 +5,25 @@ No provider call: a parser change re-reads files already on disk.
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Any
 
 import dagster as dg
 from dagster import AssetExecutionContext
-from muffin_ingest.facets import fx, sec_segments, segments
+from muffin_ingest.facets import cn_child, fx, sec_segments, segments
+from muffin_ingest.facets import cninfo as cn
+from muffin_ingest.writers import upsert
 
 from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
-from muffin_ingest_dagster.defs.segments.raw import FRESH_WEEK, SEC_INSTANCE
+from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILERS_PER_RUN, cninfo_filers
+from muffin_ingest_dagster.defs.segments.raw import (
+    CNINFO_FILINGS,
+    CNINFO_STOCK_LIST,
+    FRESH_FLOOR,
+    FRESH_TWO_WEEKS,
+    FRESH_WEEK,
+    SEC_INSTANCE,
+)
 from muffin_ingest_dagster.lib import segment_tables
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
@@ -171,6 +182,229 @@ def sec_segment(
     if errors:
         raise dg.Failure(
             description=f"{len(errors)} filing(s) could not be read; first: {errors[0]}",
+            metadata={**metadata, "first_error": errors[0], "last_error": errors[-1]},
+        )
+    return dg.MaterializeResult(metadata=metadata)
+
+
+# ── CNINFO (China) ─────────────────────────────────────────────────────────────────────────────
+
+
+@dg.asset(
+    ins={"raw_cninfo_stock_list": dg.AssetIn(key=CNINFO_STOCK_LIST)},
+    pool="sql",
+    group_name="segments",
+    kinds={"postgres"},
+    freshness_policy=FRESH_TWO_WEEKS,
+    metadata={"table": "market.security_filer"},
+    description="Each A-share's CNINFO org id, from CNINFO's own stock lists.",
+)
+def security_cninfo_filer(
+    context: AssetExecutionContext, postgres: Postgres, raw_cninfo_stock_list: list[dict[str, Any]]
+) -> dg.MaterializeResult[None]:
+    """Every Chinese equity with a six-digit listing whose code the lists name gets a filer row.
+
+    A row is never deleted here: a company missing from this week's list (a delisting, a list CNINFO
+    served short) keeps its history, and the lane simply finds nothing new for it.
+    """
+    bodies = [bytes(r["body"]) for r in raw_cninfo_stock_list if r.get("body") is not None]
+    org = cn.org_ids(bodies)
+    with postgres.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(cn.SECURITIES)
+            securities = [(str(sid), str(code)) for sid, code in cur.fetchall()]
+        rows = [
+            {"security_id": sid, "source_code": cn.SOURCE, "filer_id": org[code]}
+            for sid, code in securities
+            if code in org
+        ]
+        with conn.cursor() as cur:
+            written = upsert(
+                cur,
+                "market.security_filer",
+                rows,
+                conflict=["security_id", "source_code"],
+                update=["filer_id"],
+            )
+        conn.commit()
+    return dg.MaterializeResult(
+        metadata={
+            "listed": len(org),
+            "securities": len(securities),
+            "mapped": len(rows),
+            "unmapped": len(securities) - len(rows),
+            "changed": -1 if written.changed is None else written.changed,
+        }
+    )
+
+
+#: What a full report considered in a run came to. They sum to `filings`.
+#:   `read`        parsed; its rows written (or none, a report with no table) and marked;
+#:   `no_report`   CNINFO holds no PDF there (404, or a page that is not a PDF): marked;
+#:   `too_large`   over the size gate: marked, unread;
+#:   `unreadable`  the parsing child raised, died or ran out of memory or time: marked;
+#:   `not_held`    stage 1 has not fetched it (refused, unasked, or pruned): left due;
+#:   `failed`      the write raised: rolled back and left due.
+CNINFO_OUTCOMES = ("read", "no_report", "too_large", "unreadable", "not_held", "failed")
+
+#: The columns that say what a filer's file holds, without a report's body.
+_CN_LIGHT = ("document", "accession", "outcome", "fetched_at", "run_id", "pruned_at")
+
+
+@dg.asset(
+    partitions_def=cninfo_filers,
+    deps=[CNINFO_FILINGS],
+    backfill_policy=dg.BackfillPolicy.multi_run(CNINFO_FILERS_PER_RUN),
+    pool="sql",
+    group_name="segments",
+    kinds={"postgres"},
+    freshness_policy=FRESH_FLOOR,
+    metadata={"table": "market.security_segment"},
+    description=(
+        "Each CNINFO filer's annual reports in `security_filing`, and the segments each full "
+        "report's mandated tables state (`cninfo`)."
+    ),
+)
+def cninfo_segment(
+    context: AssetExecutionContext, postgres: Postgres, raw_store: RawStore
+) -> dg.MaterializeResult[None]:
+    """Per filer: the newest search's announcements into `security_filing`, then every due full
+    report raw holds, each read in its own child process (`cn_child`), one transaction per report.
+
+    A REPORT IS MARKED READ ONLY WHEN SOMETHING SETTLED HAPPENED TO IT: parsed, absent, too large or
+    unreadable. A report stage 1 did not fetch is left due, and a refusal never reaches here.
+    """
+    keys = list(context.partition_keys)
+    run_id = context.run.run_id
+    stats: Counter[str] = Counter({o: 0 for o in CNINFO_OUTCOMES})
+    errors: list[str] = []
+    with postgres.connect() as conn:
+        found = cn.filers(conn, keys)
+        known = fx.known_currencies(conn)
+        vocabulary = segments.vocabulary(conn)
+
+    for key in keys:
+        filer = found.get(key)
+        if filer is None:
+            stats["not_askable"] += 1
+            continue
+        light = raw_store.stored_rows_for(CNINFO_FILINGS, key, _CN_LIGHT)
+        if not light:
+            continue
+        stats["filers_held"] += 1
+        fetched_now = sorted(
+            {
+                str(r["accession"])
+                for r in light
+                if r.get("document") == "report" and r.get("run_id") == run_id
+            }
+        )
+        with postgres.connect() as conn:
+            searches = raw_store.stored_rows_where(
+                CNINFO_FILINGS, key, {"document": "announcements"}
+            )
+            newest = cn.newest_list(searches)
+            if newest is not None:
+                announced = cn.parse_announcements(bytes(newest["body"]))
+                with conn.cursor() as cur:
+                    listed = upsert(
+                        cur,
+                        "market.security_filing",
+                        cn.filing_rows(filer.security_ids, announced),
+                        conflict=["security_id", "accession_number"],
+                        update=[
+                            "report_type",
+                            "report_date",
+                            "filing_date",
+                            "report_url",
+                            "source_code",
+                            "is_xbrl",
+                        ],
+                    )
+                conn.commit()
+                stats["announcements"] += len(announced)
+                stats["filing_rows_changed"] += listed.changed or 0
+            due = cn.filings(conn, filer.security_ids, fetched_now)
+
+        with postgres.connect() as conn:
+            for filing in due:
+                stats["filings"] += 1
+                held = cn.held_report(light, filing.accession)
+                if held is None or held.pruned:
+                    stats["not_held"] += 1
+                    continue
+                facts: list[segments.SegmentFact] | None = None
+                outcome = {"absent": "no_report", "not_pdf": "no_report"}.get(
+                    held.outcome, held.outcome
+                )
+                if held.outcome == "answered":
+                    documents = raw_store.stored_rows_where(
+                        CNINFO_FILINGS, key, {"accession": filing.accession}
+                    )
+                    body = cn.report_body(documents, held)
+                    if body is None:
+                        stats["not_held"] += 1
+                        continue
+                    result = cn_child.read(body)
+                    if isinstance(result, cn_child.Unreadable):
+                        outcome = "unreadable"
+                        context.log.warning(
+                            "report %s of %s unreadable: %s", filing.accession, key, result.reason
+                        )
+                    else:
+                        facts = result.facts
+                        outcome = "read"
+                        stats["no_table"] += not facts
+                try:
+                    with conn.cursor() as cur:
+                        written = segment_tables.file_filing(
+                            cur,
+                            security_ids=filing.security_ids,
+                            accession=filing.accession,
+                            filed=filing.filing_date or date.min,
+                            facts=facts,
+                            source=cn.SOURCE,
+                            as_of=held.fetched_at,
+                            known_currencies=known,
+                            parser_version=vocabulary.parser_version,
+                        )
+                    conn.commit()
+                except Exception as exc:  # one report must not take the run's others with it
+                    conn.rollback()
+                    stats["failed"] += 1
+                    errors.append(f"{key} {filing.accession}: {type(exc).__name__}: {exc}"[:300])
+                    continue
+                stats.update(written)
+                stats[outcome] += 1
+
+    metadata = {
+        "filers_requested": len(keys),
+        "parser_version": vocabulary.parser_version,
+        "outcomes": sum(stats[o] for o in CNINFO_OUTCOMES),
+        **{
+            name: stats[name]
+            for name in (
+                "filers_held",
+                "not_askable",
+                "announcements",
+                "filing_rows_changed",
+                "filings",
+                *CNINFO_OUTCOMES,
+                "no_table",
+                "rows",
+                "changed",
+                "kept_by_newer",
+                "retracted",
+                "placed",
+                "unplaced",
+                "currency_unknown",
+                "stamped",
+            )
+        },
+    }
+    if errors:
+        raise dg.Failure(
+            description=f"{len(errors)} report(s) could not be written; first: {errors[0]}",
             metadata={**metadata, "first_error": errors[0], "last_error": errors[-1]},
         )
     return dg.MaterializeResult(metadata=metadata)

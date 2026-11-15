@@ -44,6 +44,10 @@ PROMOTION_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "3600"}
 #: hung run hold the `sec` pool into the next day's index.
 SEC_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 
+#: ONE CNINFO RUN: 25 searches and the reports due, bounded by its own 15-minute and 300 MB budget,
+#: then each report read in a child of its own. Thirty minutes is twice that budget.
+CNINFO_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
+
 #: ONE INSIDER DATA SET: one 8-14 MB zip (measured 2006q1-2026q1), read in 1.1-1.5 s, then a
 #: quarter's ~80-125 thousand rows written. Fifteen minutes.
 SEC_DATASET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "900"}

@@ -20,6 +20,7 @@ from muffin_ingest_dagster.defs.promotion.automation import PROBE_SCHEDULE
 from muffin_ingest_dagster.defs.promotion.raw import ProbeRun
 from muffin_ingest_dagster.defs.sec.automation import DATASET_SCHEDULE, INDEX_SCHEDULE
 from muffin_ingest_dagster.defs.sec.raw import Form4Run
+from muffin_ingest_dagster.defs.segments.raw import CninfoRun
 from muffin_ingest_dagster.lib import runtime
 from tests import loaded_defs
 
@@ -56,6 +57,9 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
 
     The SEC lanes are the fourth and fifth: a day's Form 4s at 5 a second, bounded by their own
     budget, and a quarter's data set of ~100,000 lines written in one transaction.
+
+    CNINFO is the sixth and seventh: a run's reports are bounded by their own budget and then each
+    read in a child, and retention rewrites files that can hold hundreds of megabytes.
     """
     limits = _limits()
     assert limits[SWEEP_SCHEDULE] == runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]
@@ -69,7 +73,14 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
         PROBE_SCHEDULE,
         INDEX_SCHEDULE,
         DATASET_SCHEDULE,
+        "cninfo_filers_floor",
+        "cninfo_retention",
     }
+    assert limits["cninfo_filers_floor"] == runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]
+    assert limits["cninfo_retention"] == runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]
+    assert float(runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * CninfoRun().budget_seconds, (
+        "below 2x the budget"
+    )
     others = {name: limit for name, limit in limits.items() if name not in long_lanes}
     assert set(others.values()) == {runtime.SHORT_RUN[MAX_RUNTIME_SECONDS_TAG]}, others
     assert float(runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 3 * 579, "below 3x the slowest run"

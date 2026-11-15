@@ -5,8 +5,12 @@ for every filer on every evaluation, never for the partitions a run wrote.
 """
 
 import dagster as dg
+from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import sec_segments
 
+from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION
+from muffin_ingest_dagster.defs.segments.raw import CNINFO_FILINGS
+from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 
 SEC_SEGMENT = dg.AssetKey("sec_segment")
@@ -39,4 +43,61 @@ def every_sec_filing_was_read(postgres: Postgres) -> dg.AssetCheckResult:
             else found.oldest_filed.isoformat(),
             "behind_the_parser": found.behind_the_parser,
         },
+    )
+
+
+CNINFO_SEGMENT = dg.AssetKey("cninfo_segment")
+
+#: How long a full report may sit in `security_filing` never read before the check counts it.
+CNINFO_UNREAD_AFTER_DAYS = 7
+
+
+@dg.asset_check(asset=CNINFO_SEGMENT, blocking=False)
+def every_cninfo_report_was_read(postgres: Postgres) -> dg.AssetCheckResult:
+    """No full annual report has been held a week and never read, and none is behind the parser.
+
+    A WARN, NOT AN ERROR, WHILE THE EDGE'S BACKLOG DRAINS: on 2026-11-15, 30,915 full reports were
+    unread, most for two months, and an ERROR from the first evaluation would sit red for the weeks
+    the drain takes, which is how a gate stops being read. It becomes an ERROR once the backlog is
+    drained (docs/deferred/2026-11-15-the-china-backlog-drains.md in the umbrella).
+    """
+    with postgres.connect() as conn:
+        found = cn.unread(conn, CNINFO_UNREAD_AFTER_DAYS)
+    return dg.AssetCheckResult(
+        passed=found.never_read == 0 and found.behind_the_parser == 0,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "never_read": found.never_read,
+            "securities": found.securities,
+            "behind_the_parser": found.behind_the_parser,
+        },
+    )
+
+
+@dg.asset_check(asset=CNINFO_FILINGS, blocking=False)
+def cninfo_reports_within_cap(
+    context: dg.AssetCheckExecutionContext, raw_store: RawStore
+) -> dg.AssetCheckResult:
+    """The reports held whole stay within the 5 GB cap (Phase 6 decision 4).
+
+    Retention prunes read reports every 15 minutes, and never an unread one, so the total can pass
+    the cap while a backfill fetches faster than runs read: a WARN up to half again over it, an
+    ERROR beyond, which is a retention that stopped or reports that fail to be read.
+    """
+    held = 0
+    count = 0
+    for key in context.instance.get_dynamic_partitions(CNINFO_FILER_PARTITION):
+        for row in raw_store.stored_rows_sized(
+            CNINFO_FILINGS, key, ("document", "outcome", "pruned_at")
+        ):
+            if row.get("document") == "report" and row.get("pruned_at") is None:
+                held += int(row.get("body_bytes", 0))
+                count += row.get("outcome") == "answered"
+    over = held > cn.CAP_BYTES
+    return dg.AssetCheckResult(
+        passed=not over,
+        severity=dg.AssetCheckSeverity.ERROR
+        if held > cn.CAP_BYTES * 3 // 2
+        else dg.AssetCheckSeverity.WARN,
+        metadata={"held_bytes": held, "reports_held": count, "cap_bytes": cn.CAP_BYTES},
     )
