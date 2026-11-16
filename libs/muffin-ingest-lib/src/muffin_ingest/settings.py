@@ -83,7 +83,8 @@ CACHE_LOCATIONS: dict[str, str] = {
     "sec-fts": "efts.sec.gov",
     "openfigi": "api.openfigi.com",
     "dart": "opendart.fss.or.kr",
-    "nse": "www.nseindia.com",
+    # NSE's API moved to `.in` (2026-11-16: `.com/api` answers 301); its archives serve both.
+    "nse": "www.nseindia.in",
     "nse-archives": "nsearchives.nseindia.com",
     "cninfo": "www.cninfo.com.cn",
     "cninfo-static": "static.cninfo.com.cn",

@@ -20,7 +20,7 @@ from muffin_ingest_dagster.defs.promotion.automation import PROBE_SCHEDULE
 from muffin_ingest_dagster.defs.promotion.raw import ProbeRun
 from muffin_ingest_dagster.defs.sec.automation import DATASET_SCHEDULE, INDEX_SCHEDULE
 from muffin_ingest_dagster.defs.sec.raw import Form4Run
-from muffin_ingest_dagster.defs.segments.raw import CninfoRun, DartRun
+from muffin_ingest_dagster.defs.segments.raw import CninfoRun, DartRun, NseRun
 from muffin_ingest_dagster.lib import runtime
 from tests import loaded_defs
 
@@ -63,6 +63,8 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
 
     DART is the eighth and ninth: its registry alone took 346 s from the node (2026-11-16), and a
     filer run's archives are bounded by their own budget, at up to 115 s each from outside Korea.
+
+    NSE is the tenth: 25 filers' results lists and their instances, bounded by their own budget.
     """
     limits = _limits()
     assert limits[SWEEP_SCHEDULE] == runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]
@@ -80,6 +82,7 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
         "cninfo_retention",
         "dart_corp_codes",
         "dart_filers_floor",
+        "nse_filers_floor",
     }
     assert limits["cninfo_filers_floor"] == runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]
     assert limits["cninfo_retention"] == runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]
@@ -92,6 +95,10 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
         "below 2x the budget"
     )
     assert float(runtime.DART_RUN[MAX_RUNTIME_SECONDS_TAG]) > 3 * 346, "below 3x the registry"
+    assert limits["nse_filers_floor"] == runtime.NSE_RUN[MAX_RUNTIME_SECONDS_TAG]
+    assert float(runtime.NSE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * NseRun().budget_seconds, (
+        "below 2x the budget"
+    )
     others = {name: limit for name, limit in limits.items() if name not in long_lanes}
     assert set(others.values()) == {runtime.SHORT_RUN[MAX_RUNTIME_SECONDS_TAG]}, others
     assert float(runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 3 * 579, "below 3x the slowest run"
