@@ -8,6 +8,7 @@ import dagster as dg
 #: THE NAMES ARE STATE (`tests/test_definitions_snapshot.py`): partition status is keyed on them.
 CNINFO_FILER_PARTITION = "cninfo_filer"
 DART_FILER_PARTITION = "dart_filer"
+NSE_FILER_PARTITION = "nse_filer"
 
 #: ONE KEY PER CNINFO ORG ID (`gssh0600900`), the company id CNINFO's search requires, which is the
 #: unit it is asked about: one search per company, then that company's reports. Keys are added by
@@ -29,9 +30,19 @@ dart_filers = dg.DynamicPartitionsDefinition(name=DART_FILER_PARTITION)
 #: budget long before ten filers' lists are a cost.
 DART_FILERS_PER_RUN = 10
 
-#: THE FLOOR, for CNINFO and DART alike: every filer is asked once in this many days, on a day its
-#: key's hash chooses (the edge re-walked CNINFO every 180 days and DART every 90). Annual reports
-#: land between March and April, so a report waits at most a month.
+
+#: ONE KEY PER NSE SYMBOL (`RELIANCE`), which NSE's results list requires: one list per company,
+#: then that company's instances. `security_nse_filer` maps the symbol by ISIN, and keys are added
+#: by `new_nse_filers` from `market.security_filer`.
+nse_filers = dg.DynamicPartitionsDefinition(name=NSE_FILER_PARTITION)
+
+#: HOW MANY FILERS ONE RUN COVERS. A results list answers in 0.2-0.3 s and an instance is 46-109 KB
+#: from a cache that keeps it a year (measured 2026-11-16), so 25 filers fit well inside a run.
+NSE_FILERS_PER_RUN = 25
+
+#: THE FLOOR, for CNINFO, DART and NSE alike: every filer is asked once in this many days, on a day
+#: its key's hash chooses (the edge re-walked CNINFO every 180 days, DART and NSE every 90). Annual
+#: reports land between March and May, so a report waits at most a month.
 FLOOR_DAYS = 30
 
 

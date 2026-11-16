@@ -17,6 +17,7 @@ from dagster._core.storage.tags import (
 )
 from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import dart as fd
+from muffin_ingest.facets import nse as fn
 from muffin_ingest.facets import sec_segments
 
 from muffin_ingest_dagster.defs.sec.partitions import (
@@ -28,6 +29,7 @@ from muffin_ingest_dagster.defs.sec.partitions import (
 from muffin_ingest_dagster.defs.segments.core import (
     cninfo_segment,
     dart_segment,
+    nse_segment,
     sec_segment,
     security_cninfo_filer,
     security_dart_filer,
@@ -37,22 +39,27 @@ from muffin_ingest_dagster.defs.segments.partitions import (
     CNINFO_FILERS_PER_RUN,
     DART_FILER_PARTITION,
     DART_FILERS_PER_RUN,
+    NSE_FILER_PARTITION,
+    NSE_FILERS_PER_RUN,
     cninfo_filers,
     dart_filers,
+    nse_filers,
     on_floor,
 )
 from muffin_ingest_dagster.defs.segments.raw import (
     CNINFO_FILINGS,
     DART_FILINGS,
+    NSE_FILINGS,
     raw_cninfo_filings,
     raw_cninfo_stock_list,
     raw_dart_corp_codes,
     raw_dart_filings,
+    raw_nse_filings,
     raw_sec_instance,
 )
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
-from muffin_ingest_dagster.lib.runtime import CNINFO_RUN, DART_RUN, SEC_RUN, SHORT_RUN
+from muffin_ingest_dagster.lib.runtime import CNINFO_RUN, DART_RUN, NSE_RUN, SEC_RUN, SHORT_RUN
 
 #: THE NAMES ARE STATE: a job's name keys its run history, a sensor's its cursor and status.
 SEC_SEGMENTS_JOB = "sec_segments"
@@ -406,4 +413,70 @@ def dart_filers_floor(context: dg.ScheduleEvaluationContext) -> list[dg.RunReque
             },
         )
         for keys in floor_chunks(grid, day, collected, DART_FILERS_PER_RUN)
+    ]
+
+
+# ── NSE (India) ────────────────────────────────────────────────────────────────────────────────
+#
+# NO REGISTRY HERE: `security_nse_filer` (the registries family, weekly) maps Indian equities to NSE
+# symbols by ISIN, and its `security_filer` rows are this grid's keys.
+
+NSE_SEGMENTS_JOB = "nse_segments"
+
+#: A filer's results list and instances, and their segments, in one run: stage 2 reads what raw
+#: holds, so an instance fetched is read before the run ends.
+nse_segments_job = dg.define_asset_job(
+    NSE_SEGMENTS_JOB,
+    selection=dg.AssetSelection.assets(raw_nse_filings, nse_segment),
+    partitions_def=nse_filers,
+    run_tags=NSE_RUN,
+)
+
+
+@dg.sensor(
+    minimum_interval_seconds=6 * 3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+    description="An NSE symbol an Indian equity holds becomes an NSE filer partition.",
+)
+def new_nse_filers(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:
+    """Keeps the grid in step with `security_filer`. ADDS KEYS AND REQUESTS NOTHING; a key is never
+    deleted (a company gone from NSE's list keeps its history)."""
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select distinct filer_id from market.security_filer where source_code = %s",
+            (fn.SOURCE,),
+        )
+        held = [str(r[0]) for r in cur.fetchall()]
+    existing = set(context.instance.get_dynamic_partitions(NSE_FILER_PARTITION))
+    new = sorted(k for k in held if k not in existing)
+    context.log.info("%s NSE filers held, %s new", len(held), len(new))
+    return dg.SensorResult(
+        run_requests=[],
+        dynamic_partitions_requests=[nse_filers.build_add_request(new)] if new else [],
+    )
+
+
+@dg.schedule(
+    job=nse_segments_job,
+    cron_schedule="20 8 * * *",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description="NSE filers on their 30-day floor, daily 08:20 UTC, outside the run windows.",
+)
+def nse_filers_floor(context: dg.ScheduleEvaluationContext) -> list[dg.RunRequest]:
+    """THE DAY IS IN EVERY RUN KEY, so a chunk is asked again on its next floor day. A filer never
+    collected is due on any day; the backlog of every filer is the operator's backfill."""
+    day = context.scheduled_execution_time.date()
+    grid = context.instance.get_dynamic_partitions(NSE_FILER_PARTITION)
+    collected = set(context.instance.get_materialized_partitions(NSE_FILINGS))
+    return [
+        dg.RunRequest(
+            run_key=f"{day.isoformat()}:{keys[0]}",
+            tags={
+                ASSET_PARTITION_RANGE_START_TAG: keys[0],
+                ASSET_PARTITION_RANGE_END_TAG: keys[-1],
+                **NSE_RUN,
+            },
+        )
+        for keys in floor_chunks(grid, day, collected, NSE_FILERS_PER_RUN)
     ]

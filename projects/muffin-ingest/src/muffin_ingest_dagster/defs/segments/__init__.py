@@ -9,6 +9,10 @@
   `raw_dart_*`, `security_dart_filer`, `dart_segment`
                       Korea: DART's registry, each filer's annual-report XBRL archives, their
                       segments (`dart`), through the same parser as SEC's.
+  `raw_nse_filings`, `nse_segment`
+                      India: each NSE filer's annual results and their XBRL instances, normalised
+                      (anonymous members named, the year told from the quarter) and read through
+                      the same parser (`nse`). The filers come from the registries family.
 
 One parser for every regulator (`muffin_ingest.facets.segments`, ported from the edge), driven by
 control tables. A filing is the unit of work and a filer is the partition: SEC alone has 226,000

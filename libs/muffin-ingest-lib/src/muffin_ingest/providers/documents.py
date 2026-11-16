@@ -110,7 +110,7 @@ def _get(url: str, *, provider: str, headers: dict[str, str], timeout_s: float) 
 def nse_equity_list(timeout_s: float = 30.0) -> Document:
     """NSE's published equity list. 2,570 rows, keyless, the join key for every Indian filer."""
     archives = settings.provider_base("nse-archives", "https://nsearchives.nseindia.com")
-    site = settings.provider_base("nse", "https://www.nseindia.com")
+    site = settings.provider_base("nse", "https://www.nseindia.in")
     return _get(
         f"{archives}/content/equities/EQUITY_L.csv",
         provider="nse",

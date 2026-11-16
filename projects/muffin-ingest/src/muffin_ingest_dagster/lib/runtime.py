@@ -53,6 +53,10 @@ CNINFO_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 #: 2026-11-16). Thirty minutes is twice the budget.
 DART_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 
+#: ONE NSE RUN: 25 filers' results lists (each behind a cookie handshake) and the instances due,
+#: bounded by its own 15-minute budget. Thirty minutes is twice that budget.
+NSE_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
+
 #: ONE INSIDER DATA SET: one 8-14 MB zip (measured 2006q1-2026q1), read in 1.1-1.5 s, then a
 #: quarter's ~80-125 thousand rows written. Fifteen minutes.
 SEC_DATASET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "900"}

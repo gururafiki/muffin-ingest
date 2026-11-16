@@ -7,6 +7,7 @@ for every filer on every evaluation, never for the partitions a run wrote.
 import dagster as dg
 from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import dart as fd
+from muffin_ingest.facets import nse as fn
 from muffin_ingest.facets import sec_segments
 
 from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION
@@ -119,6 +120,30 @@ def every_dart_filing_was_read(postgres: Postgres) -> dg.AssetCheckResult:
     443 the edge had found, 2026-11-16); an ERROR once they have."""
     with postgres.connect() as conn:
         found = fd.unread(conn, DART_UNREAD_AFTER_DAYS)
+    return dg.AssetCheckResult(
+        passed=found.never_read == 0 and found.behind_the_parser == 0,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "never_read": found.never_read,
+            "securities": found.securities,
+            "behind_the_parser": found.behind_the_parser,
+        },
+    )
+
+
+NSE_SEGMENT = dg.AssetKey("nse_segment")
+
+#: How long a result may sit in `security_filing` never read before the check counts it: a filer is
+#: visited on its 30-day floor, so a month and a week is a stopped lane.
+NSE_UNREAD_AFTER_DAYS = 37
+
+
+@dg.asset_check(asset=NSE_SEGMENT, blocking=False)
+def every_nse_filing_was_read(postgres: Postgres) -> dg.AssetCheckResult:
+    """No `.xml` result has been held past a floor cycle and never read, and none is behind the
+    parser."""
+    with postgres.connect() as conn:
+        found = fn.unread(conn, NSE_UNREAD_AFTER_DAYS)
     return dg.AssetCheckResult(
         passed=found.never_read == 0 and found.behind_the_parser == 0,
         severity=dg.AssetCheckSeverity.WARN,

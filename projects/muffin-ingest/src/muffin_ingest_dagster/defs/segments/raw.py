@@ -10,14 +10,17 @@ from dagster import AssetExecutionContext
 from muffin_ingest.facets import cn_pdf, sec_segments
 from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import dart as fd
-from muffin_ingest.providers import cninfo, dart, sec_edgar
+from muffin_ingest.facets import nse as fn
+from muffin_ingest.providers import cninfo, dart, nse, sec_edgar
 
 from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
 from muffin_ingest_dagster.defs.segments.partitions import (
     CNINFO_FILERS_PER_RUN,
     DART_FILERS_PER_RUN,
+    NSE_FILERS_PER_RUN,
     cninfo_filers,
     dart_filers,
+    nse_filers,
 )
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.io_managers import RawStore
@@ -650,6 +653,204 @@ def raw_dart_filings(
         }
     )
     stored = context.instance.get_materialized_partitions(DART_FILINGS)
+    return partitioned.by_partition(
+        context,
+        rows,
+        key=lambda row: placed[id(row)],
+        unchanged=[k for k in keys if k in stored],
+    )
+
+
+# ── NSE (India) ────────────────────────────────────────────────────────────────────────────────
+
+NSE_FILINGS = dg.AssetKey("raw_nse_filings")
+#: The registry asset that maps Indian equities to NSE symbols (the registries family).
+NSE_FILER = dg.AssetKey("security_nse_filer")
+
+
+class NseRun(dg.Config):
+    """What bounds an NSE run, and what an operator may ask beyond the queue."""
+
+    #: Filings to fetch again whatever their marks and raw say, by symbol
+    #: (`{"RELIANCE": ["https://nsearchives.nseindia.com/corporate/xbrl/INDAS_....xml"]}`).
+    reread: dict[str, list[str]] | None = None
+    #: Wall-clock budget.
+    budget_seconds: int = 900
+    #: Seconds between requests: NSE sits behind Akamai's bot management, and the edge asked six
+    #: companies every fifteen minutes.
+    pace_seconds: float = 1.0
+
+
+#: How a results list and an instance fetch can end. Each set partitions what it counts.
+NSE_LIST_OUTCOMES = (
+    "answered",
+    "absent",
+    "not_answer",
+    "refused",
+    "transport",
+    "unasked",
+    "not_askable",
+)
+NSE_INSTANCE_OUTCOMES = (
+    "answered",
+    "absent",
+    "not_answer",
+    "refused",
+    "transport",
+    "held_already",
+    "unasked",
+)
+
+
+@dg.asset(
+    partitions_def=nse_filers,
+    deps=[NSE_FILER],
+    backfill_policy=dg.BackfillPolicy.multi_run(NSE_FILERS_PER_RUN),
+    pool="nse",
+    io_manager_key="parquet_io",
+    group_name="segments",
+    kinds={"nse", "parquet"},
+    freshness_policy=FRESH_FLOOR,
+    metadata={"merge_on": list(fn.MERGE_ON), "compression": "zstd"},
+    description="Each NSE filer's annual results list and the instances not yet read.",
+)
+def raw_nse_filings(
+    context: AssetExecutionContext, config: NseRun, postgres: Postgres, raw_store: RawStore
+) -> Any:
+    """A results list per filer, then the instances due, in rounds across the run's filers.
+
+    DUE: every `.xml` result the list names, and every one `security_filing` already holds for the
+    filer's securities, that is not read at the current parser version and that raw does not hold.
+
+    THE OUTCOMES PARTITION WHAT THEY COUNT (`NSE_LIST_OUTCOMES` sums to `requested`,
+    `NSE_INSTANCE_OUTCOMES` to `instances_named`). A refusal (403, 429, 5xx, or a redirect, which
+    would leave the cache) stops the run and leaves the rest `unasked`.
+    """
+    keys = list(context.partition_keys)
+    run_id = context.run.run_id
+    reread = {k: {nse.canonical(x) for x in v} for k, v in (config.reread or {}).items()}
+    with postgres.connect() as conn:
+        found = fn.filers(conn, keys)
+    stats: Counter[str] = Counter(
+        {
+            **{f"list_{o}": 0 for o in NSE_LIST_OUTCOMES},
+            **{f"instance_{o}": 0 for o in NSE_INSTANCE_OUTCOMES},
+        }
+    )
+    rows: list[dict[str, Any]] = []
+    placed: dict[int, str] = {}
+    deadline = time.monotonic() + config.budget_seconds
+    stopped: str | None = None
+
+    listed: dict[str, list[fn.Filed]] = {}
+    for key in keys:
+        if key not in found:
+            stats["list_not_askable"] += 1
+            continue
+        if stopped is None and time.monotonic() >= deadline:
+            stopped = "the time budget is spent"
+        if stopped is not None:
+            stats["list_unasked"] += 1
+            continue
+        try:
+            answer = nse.filings(key)
+        except nse.NseRefused as exc:
+            stats["list_refused"] += 1
+            stopped = f"NSE refused us ({exc})"
+            continue
+        except nse.NseTransport:
+            stats["list_transport"] += 1
+            continue
+        row = fn.list_row(answer, run_id=run_id)
+        rows.append(row)
+        placed[id(row)] = key
+        stats[f"list_{row['outcome']}"] += 1
+        if row["outcome"] == "answered":
+            listed[key] = fn.parse_filings(answer.document.body) or []
+        time.sleep(config.pace_seconds)
+
+    with postgres.connect() as conn:
+        named = [f.link for filed in listed.values() for f in filed]
+        read = fn.read_already(conn, named)
+        stored_due = {
+            key: [f.accession for f in fn.filings(conn, found[key]) if f.due]
+            for key in keys
+            if key in found
+        }
+    queues: dict[str, list[str]] = {}
+    for key in keys:
+        if key not in found:
+            continue
+        newest_first = [
+            f.link
+            for f in sorted(listed.get(key, []), key=lambda f: f.period_end or "", reverse=True)
+            if f.link not in read
+        ]
+        wanted = list(
+            dict.fromkeys([*newest_first, *reversed(stored_due.get(key, [])), *reread.get(key, ())])
+        )
+        if not wanted:
+            continue
+        light = raw_store.stored_rows_for(
+            NSE_FILINGS, key, ("document", "accession", "outcome", "fetched_at", "run_id")
+        )
+        queue = []
+        for link in wanted:
+            held = fn.held_instance(light, link)
+            # A body that was not an instance settled nothing about the filing: asked again.
+            if (
+                held is not None
+                and held.outcome != "not_answer"
+                and link not in reread.get(key, ())
+            ):
+                stats["instance_held_already"] += 1
+            else:
+                queue.append(link)
+        queues[key] = queue
+
+    plan = _round_robin(queues)
+    stats["instances_named"] = stats["instance_held_already"] + len(plan)
+    for key, link in plan:
+        if stopped is None and time.monotonic() >= deadline:
+            stopped = "the time budget is spent"
+        if stopped is not None:
+            stats["instance_unasked"] += 1
+            continue
+        try:
+            answer = nse.instance(link)
+        except nse.NseRefused as exc:
+            stats["instance_refused"] += 1
+            stopped = f"NSE refused us ({exc})"
+            continue
+        except nse.NseTransport:
+            stats["instance_transport"] += 1
+            continue
+        row = fn.instance_row(answer, link=link, run_id=run_id)
+        rows.append(row)
+        placed[id(row)] = key
+        stats[f"instance_{row['outcome']}"] += 1
+        stats["bytes"] += len(answer.document.body)
+        time.sleep(config.pace_seconds)
+    if stopped is not None:
+        context.log.warning(
+            "%s; %s lists and %s instances unasked",
+            stopped,
+            stats["list_unasked"],
+            stats["instance_unasked"],
+        )
+
+    context.add_output_metadata(
+        {
+            "requested": len(keys),
+            "list_outcomes": sum(stats[f"list_{o}"] for o in NSE_LIST_OUTCOMES),
+            "instances_named": stats["instances_named"],
+            "instance_outcomes": sum(stats[f"instance_{o}"] for o in NSE_INSTANCE_OUTCOMES),
+            "bytes": stats["bytes"],
+            **{f"list_{o}": stats[f"list_{o}"] for o in NSE_LIST_OUTCOMES},
+            **{f"instance_{o}": stats[f"instance_{o}"] for o in NSE_INSTANCE_OUTCOMES},
+        }
+    )
+    stored = context.instance.get_materialized_partitions(NSE_FILINGS)
     return partitioned.by_partition(
         context,
         rows,

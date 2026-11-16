@@ -13,14 +13,17 @@ from dagster import AssetExecutionContext
 from muffin_ingest.facets import cn_child, fx, sec_segments, segments
 from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import dart as fd
+from muffin_ingest.facets import nse as fn
 from muffin_ingest.writers import upsert
 
 from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
 from muffin_ingest_dagster.defs.segments.partitions import (
     CNINFO_FILERS_PER_RUN,
     DART_FILERS_PER_RUN,
+    NSE_FILERS_PER_RUN,
     cninfo_filers,
     dart_filers,
+    nse_filers,
 )
 from muffin_ingest_dagster.defs.segments.raw import (
     CNINFO_FILINGS,
@@ -30,6 +33,7 @@ from muffin_ingest_dagster.defs.segments.raw import (
     FRESH_FLOOR,
     FRESH_TWO_WEEKS,
     FRESH_WEEK,
+    NSE_FILINGS,
     SEC_INSTANCE,
 )
 from muffin_ingest_dagster.lib import segment_tables
@@ -630,6 +634,183 @@ def dart_segment(
     if errors:
         raise dg.Failure(
             description=f"{len(errors)} report(s) could not be read; first: {errors[0]}",
+            metadata={**metadata, "first_error": errors[0], "last_error": errors[-1]},
+        )
+    return dg.MaterializeResult(metadata=metadata)
+
+
+# ── NSE (India) ────────────────────────────────────────────────────────────────────────────────
+
+#: How a due result can end in stage 2. They partition `filings`, so they sum to it. `standalone`
+#: is read and wanted nothing: every company files twice, and the consolidated filing is the one.
+NSE_OUTCOMES = ("read", "standalone", "no_instance", "not_answer", "not_held", "failed")
+
+_NSE_LIGHT = ("document", "accession", "outcome", "fetched_at", "run_id")
+
+
+@dg.asset(
+    partitions_def=nse_filers,
+    deps=[NSE_FILINGS],
+    backfill_policy=dg.BackfillPolicy.multi_run(NSE_FILERS_PER_RUN),
+    pool="sql",
+    group_name="segments",
+    kinds={"postgres"},
+    freshness_policy=FRESH_FLOOR,
+    metadata={"table": "market.security_segment"},
+    description=(
+        "Each NSE filer's annual results in `security_filing`, and the segments each consolidated "
+        "result's XBRL instance states (`nse`), normalised first."
+    ),
+)
+def nse_segment(
+    context: AssetExecutionContext, postgres: Postgres, raw_store: RawStore
+) -> dg.MaterializeResult[None]:
+    """Per filer: the newest list's `.xml` results into `security_filing`, then every due result
+    raw holds, normalised (`nse.normalise`) and read through the same parser as SEC's, one
+    transaction per result.
+
+    A RESULT IS MARKED READ ONLY WHEN SOMETHING SETTLED HAPPENED TO IT: parsed, standalone, or
+    absent (404). A result stage 1 did not fetch, or fetched as something that is not an instance,
+    is left due.
+    """
+    keys = list(context.partition_keys)
+    run_id = context.run.run_id
+    stats: Counter[str] = Counter({o: 0 for o in NSE_OUTCOMES})
+    errors: list[str] = []
+    with postgres.connect() as conn:
+        found = fn.filers(conn, keys)
+        known = fx.known_currencies(conn)
+        vocabulary = segments.vocabulary(conn)
+
+    for key in keys:
+        security_ids = found.get(key)
+        if security_ids is None:
+            stats["not_askable"] += 1
+            continue
+        light = raw_store.stored_rows_for(NSE_FILINGS, key, _NSE_LIGHT)
+        if not light:
+            continue
+        stats["filers_held"] += 1
+        fetched_now = sorted(
+            {
+                str(r["accession"])
+                for r in light
+                if r.get("document") == "instance" and r.get("run_id") == run_id
+            }
+        )
+        with postgres.connect() as conn:
+            newest = fn.newest_list(
+                raw_store.stored_rows_where(NSE_FILINGS, key, {"document": "filings"})
+            )
+            filed = fn.parse_filings(bytes(newest["body"])) or [] if newest is not None else []
+            if filed:
+                with conn.cursor() as cur:
+                    listed = upsert(
+                        cur,
+                        "market.security_filing",
+                        fn.filing_rows(security_ids, filed),
+                        conflict=["security_id", "accession_number"],
+                        update=[
+                            "report_type",
+                            "report_date",
+                            "filing_date",
+                            "report_url",
+                            "source_code",
+                            "is_xbrl",
+                        ],
+                    )
+                conn.commit()
+                stats["results_listed"] += len(filed)
+                stats["filing_rows_changed"] += listed.changed or 0
+            due = fn.filings(conn, security_ids, fetched_now)
+
+        with postgres.connect() as conn:
+            for filing in due:
+                stats["filings"] += 1
+                held = fn.held_instance(light, filing.accession)
+                if held is None:
+                    stats["not_held"] += 1
+                    continue
+                if held.outcome == "not_answer":
+                    stats["not_answer"] += 1
+                    continue
+                facts: list[segments.SegmentFact] | None = None
+                outcome = "no_instance"
+                try:
+                    if held.outcome == "answered":
+                        documents = raw_store.stored_rows_where(
+                            NSE_FILINGS, key, {"accession": filing.accession}
+                        )
+                        body = fn.instance_body(documents, filing.accession, held)
+                        if body is None:
+                            stats["not_held"] += 1
+                            continue
+                        try:
+                            normalised = fn.normalise(segments.text_of(body))
+                        except fn.NotConsolidated:
+                            outcome = "standalone"
+                        else:
+                            outcome = "read"
+                            stats["members_named"] += normalised.named
+                            stats["contexts_annualised"] += normalised.annualised
+                            facts = segments.segment_facts_from(
+                                normalised.xml,
+                                vocabulary.axes,
+                                vocabulary.concepts,
+                                vocabulary.roles,
+                            )
+                            stats["no_segments"] += not facts
+                    with conn.cursor() as cur:
+                        written = segment_tables.file_filing(
+                            cur,
+                            security_ids=filing.security_ids,
+                            accession=filing.accession,
+                            filed=filing.filing_date or date.min,
+                            facts=facts,
+                            source=fn.SOURCE,
+                            as_of=held.fetched_at,
+                            known_currencies=known,
+                            parser_version=vocabulary.parser_version,
+                        )
+                    conn.commit()
+                except Exception as exc:  # one result must not take the run's others with it
+                    conn.rollback()
+                    stats["failed"] += 1
+                    errors.append(f"{key} {filing.accession}: {type(exc).__name__}: {exc}"[:300])
+                    continue
+                stats.update(written)
+                stats[outcome] += 1
+
+    metadata = {
+        "filers_requested": len(keys),
+        "parser_version": vocabulary.parser_version,
+        "outcomes": sum(stats[o] for o in NSE_OUTCOMES),
+        **{
+            name: stats[name]
+            for name in (
+                "filers_held",
+                "not_askable",
+                "results_listed",
+                "filing_rows_changed",
+                "filings",
+                *NSE_OUTCOMES,
+                "no_segments",
+                "members_named",
+                "contexts_annualised",
+                "rows",
+                "changed",
+                "kept_by_newer",
+                "retracted",
+                "placed",
+                "unplaced",
+                "currency_unknown",
+                "stamped",
+            )
+        },
+    }
+    if errors:
+        raise dg.Failure(
+            description=f"{len(errors)} result(s) could not be read; first: {errors[0]}",
             metadata={**metadata, "first_error": errors[0], "last_error": errors[-1]},
         )
     return dg.MaterializeResult(metadata=metadata)
