@@ -12,13 +12,21 @@ import dagster as dg
 from dagster import AssetExecutionContext
 from muffin_ingest.facets import cn_child, fx, sec_segments, segments
 from muffin_ingest.facets import cninfo as cn
+from muffin_ingest.facets import dart as fd
 from muffin_ingest.writers import upsert
 
 from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
-from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILERS_PER_RUN, cninfo_filers
+from muffin_ingest_dagster.defs.segments.partitions import (
+    CNINFO_FILERS_PER_RUN,
+    DART_FILERS_PER_RUN,
+    cninfo_filers,
+    dart_filers,
+)
 from muffin_ingest_dagster.defs.segments.raw import (
     CNINFO_FILINGS,
     CNINFO_STOCK_LIST,
+    DART_CORP_CODES,
+    DART_FILINGS,
     FRESH_FLOOR,
     FRESH_TWO_WEEKS,
     FRESH_WEEK,
@@ -405,6 +413,223 @@ def cninfo_segment(
     if errors:
         raise dg.Failure(
             description=f"{len(errors)} report(s) could not be written; first: {errors[0]}",
+            metadata={**metadata, "first_error": errors[0], "last_error": errors[-1]},
+        )
+    return dg.MaterializeResult(metadata=metadata)
+
+
+# ── DART (Korea) ───────────────────────────────────────────────────────────────────────────────
+
+
+@dg.asset(
+    ins={"raw_dart_corp_codes": dg.AssetIn(key=DART_CORP_CODES)},
+    pool="sql",
+    group_name="segments",
+    kinds={"postgres"},
+    freshness_policy=FRESH_TWO_WEEKS,
+    metadata={"table": "market.security_filer"},
+    description="Each Korean equity's DART corp code, from DART's own registry.",
+)
+def security_dart_filer(
+    context: AssetExecutionContext, postgres: Postgres, raw_dart_corp_codes: list[dict[str, Any]]
+) -> dg.MaterializeResult[None]:
+    """Every Korean equity whose six-digit code the registry lists gets a filer row. A row is never
+    deleted here: a company missing from this week's registry keeps its history."""
+    archive = next(bytes(r["body"]) for r in raw_dart_corp_codes if r.get("body") is not None)
+    corp = fd.corp_codes(archive)
+    with postgres.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(fd.SECURITIES)
+            securities = [(str(sid), str(code)) for sid, code in cur.fetchall()]
+        rows = [
+            {"security_id": sid, "source_code": fd.SOURCE, "filer_id": corp[code]}
+            for sid, code in securities
+            if code in corp
+        ]
+        with conn.cursor() as cur:
+            written = upsert(
+                cur,
+                "market.security_filer",
+                rows,
+                conflict=["security_id", "source_code"],
+                update=["filer_id"],
+            )
+        conn.commit()
+    return dg.MaterializeResult(
+        metadata={
+            "listed": len(corp),
+            "securities": len(securities),
+            "mapped": len(rows),
+            "unmapped": len(securities) - len(rows),
+            "changed": -1 if written.changed is None else written.changed,
+        }
+    )
+
+
+#: What an annual report considered in a run came to. They sum to `filings`.
+#:   `read`         its instance was parsed, its rows written (or none) and marked;
+#:   `no_instance`  DART holds no archive (014) or the archive holds no instance: marked;
+#:   `too_large`    over the size gate: marked, unread;
+#:   `not_zip`      DART answered something else: left due, asked again;
+#:   `not_held`     stage 1 has not fetched it (refused or not asked yet): left due;
+#:   `failed`       the parse or the write raised: rolled back and left due.
+DART_OUTCOMES = ("read", "no_instance", "too_large", "not_zip", "not_held", "failed")
+
+#: The columns that say what a filer's file holds, without a document's body.
+_DART_LIGHT = ("document", "accession", "outcome", "fetched_at", "run_id")
+
+
+@dg.asset(
+    partitions_def=dart_filers,
+    deps=[DART_FILINGS],
+    backfill_policy=dg.BackfillPolicy.multi_run(DART_FILERS_PER_RUN),
+    pool="sql",
+    group_name="segments",
+    kinds={"postgres"},
+    freshness_policy=FRESH_FLOOR,
+    metadata={"table": "market.security_segment"},
+    description=(
+        "Each DART filer's annual reports in `security_filing`, and the segments each report's "
+        "XBRL instance states (`dart`)."
+    ),
+)
+def dart_segment(
+    context: AssetExecutionContext, postgres: Postgres, raw_store: RawStore
+) -> dg.MaterializeResult[None]:
+    """Per filer: the newest list's annual reports into `security_filing`, then every due report
+    raw holds, read through the same parser as SEC's, one transaction per report.
+
+    A REPORT IS MARKED READ ONLY WHEN SOMETHING SETTLED HAPPENED TO IT: parsed, absent or too
+    large. A report stage 1 did not fetch, or fetched as something unrecognisable, is left due.
+    """
+    keys = list(context.partition_keys)
+    run_id = context.run.run_id
+    stats: Counter[str] = Counter({o: 0 for o in DART_OUTCOMES})
+    errors: list[str] = []
+    with postgres.connect() as conn:
+        found = fd.filers(conn, keys)
+        known = fx.known_currencies(conn)
+        vocabulary = segments.vocabulary(conn)
+
+    for key in keys:
+        security_ids = found.get(key)
+        if security_ids is None:
+            stats["not_askable"] += 1
+            continue
+        light = raw_store.stored_rows_for(DART_FILINGS, key, _DART_LIGHT)
+        if not light:
+            continue
+        stats["filers_held"] += 1
+        fetched_now = sorted(
+            {
+                str(r["accession"])
+                for r in light
+                if r.get("document") == "instance" and r.get("run_id") == run_id
+            }
+        )
+        with postgres.connect() as conn:
+            pages = fd.newest_lists(
+                raw_store.stored_rows_where(DART_FILINGS, key, {"document": "filings"})
+            )
+            filed = [f for page in pages for f in fd.parse_filings(bytes(page["body"])).filed]
+            if pages:
+                with conn.cursor() as cur:
+                    listed = upsert(
+                        cur,
+                        "market.security_filing",
+                        fd.filing_rows(security_ids, filed),
+                        conflict=["security_id", "accession_number"],
+                        update=["report_type", "filing_date", "source_code", "is_xbrl"],
+                    )
+                conn.commit()
+                stats["annual_reports_listed"] += sum(f.is_annual for f in filed)
+                stats["filing_rows_changed"] += listed.changed or 0
+            due = fd.filings(conn, security_ids, fetched_now)
+
+        with postgres.connect() as conn:
+            for filing in due:
+                stats["filings"] += 1
+                held = fd.held_archive(light, filing.accession)
+                if held is None:
+                    stats["not_held"] += 1
+                    continue
+                if held.outcome == "not_zip":
+                    stats["not_zip"] += 1
+                    continue
+                facts: list[segments.SegmentFact] | None = None
+                outcome = {"absent": "no_instance"}.get(held.outcome, held.outcome)
+                try:
+                    if held.outcome == "answered":
+                        documents = raw_store.stored_rows_where(
+                            DART_FILINGS, key, {"accession": filing.accession}
+                        )
+                        archive = fd.archive_body(documents, held)
+                        if archive is None:
+                            stats["not_held"] += 1
+                            continue
+                        try:
+                            instance = fd.instance_of(archive)
+                        except fd.TooLarge:
+                            instance, outcome = None, "too_large"
+                        else:
+                            outcome = "read" if instance is not None else "no_instance"
+                        if instance is not None:
+                            facts = segments.segment_facts_from(
+                                segments.text_of(instance),
+                                vocabulary.axes,
+                                vocabulary.concepts,
+                                vocabulary.roles,
+                            )
+                            stats["no_segments"] += not facts
+                    with conn.cursor() as cur:
+                        written = segment_tables.file_filing(
+                            cur,
+                            security_ids=filing.security_ids,
+                            accession=filing.accession,
+                            filed=filing.filing_date or date.min,
+                            facts=facts,
+                            source=fd.SOURCE,
+                            as_of=held.fetched_at,
+                            known_currencies=known,
+                            parser_version=vocabulary.parser_version,
+                        )
+                    conn.commit()
+                except Exception as exc:  # one report must not take the run's others with it
+                    conn.rollback()
+                    stats["failed"] += 1
+                    errors.append(f"{key} {filing.accession}: {type(exc).__name__}: {exc}"[:300])
+                    continue
+                stats.update(written)
+                stats[outcome] += 1
+
+    metadata = {
+        "filers_requested": len(keys),
+        "parser_version": vocabulary.parser_version,
+        "outcomes": sum(stats[o] for o in DART_OUTCOMES),
+        **{
+            name: stats[name]
+            for name in (
+                "filers_held",
+                "not_askable",
+                "annual_reports_listed",
+                "filing_rows_changed",
+                "filings",
+                *DART_OUTCOMES,
+                "no_segments",
+                "rows",
+                "changed",
+                "kept_by_newer",
+                "retracted",
+                "placed",
+                "unplaced",
+                "currency_unknown",
+                "stamped",
+            )
+        },
+    }
+    if errors:
+        raise dg.Failure(
+            description=f"{len(errors)} report(s) could not be read; first: {errors[0]}",
             metadata={**metadata, "first_error": errors[0], "last_error": errors[-1]},
         )
     return dg.MaterializeResult(metadata=metadata)

@@ -9,10 +9,16 @@ import dagster as dg
 from dagster import AssetExecutionContext
 from muffin_ingest.facets import cn_pdf, sec_segments
 from muffin_ingest.facets import cninfo as cn
-from muffin_ingest.providers import cninfo, sec_edgar
+from muffin_ingest.facets import dart as fd
+from muffin_ingest.providers import cninfo, dart, sec_edgar
 
 from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
-from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILERS_PER_RUN, cninfo_filers
+from muffin_ingest_dagster.defs.segments.partitions import (
+    CNINFO_FILERS_PER_RUN,
+    DART_FILERS_PER_RUN,
+    cninfo_filers,
+    dart_filers,
+)
 from muffin_ingest_dagster.lib import partitioned
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
@@ -406,6 +412,244 @@ def raw_cninfo_filings(
         }
     )
     stored = context.instance.get_materialized_partitions(CNINFO_FILINGS)
+    return partitioned.by_partition(
+        context,
+        rows,
+        key=lambda row: placed[id(row)],
+        unchanged=[k for k in keys if k in stored],
+    )
+
+
+# ── DART (Korea) ───────────────────────────────────────────────────────────────────────────────
+
+DART_CORP_CODES = dg.AssetKey("raw_dart_corp_codes")
+DART_FILINGS = dg.AssetKey("raw_dart_filings")
+#: `market.security_filer` as `security_dart_filer` writes it: which corp code each equity has.
+DART_FILER = dg.AssetKey("security_dart_filer")
+
+
+@dg.asset(
+    pool="dart",
+    io_manager_key="parquet_io",
+    group_name="segments",
+    kinds={"dart", "parquet"},
+    freshness_policy=FRESH_TWO_WEEKS,
+    description="DART's company registry (`corpCode.xml`), whole: one ZIP.",
+)
+def raw_dart_corp_codes(context: AssetExecutionContext) -> list[dict[str, Any]]:
+    """One document, the whole registry (3.6 MB, ~6 minutes from the node). Anything but a ZIP fails
+    the run: an empty registry would read as every company gone."""
+    answer = dart.corp_codes()
+    kind = fd.classify(answer.document.body) if answer.status == 200 else None
+    if kind != "zip":
+        raise dg.Failure(
+            f"DART's registry answered HTTP {answer.status} ({kind}): "
+            f"{answer.document.body[:120]!r}"
+        )
+    context.add_output_metadata({"bytes": len(answer.document.body)})
+    return [
+        {
+            **answer.document.as_row(context.run.run_id),
+            "document": "corpCode.xml",
+            "http_status": answer.status,
+        }
+    ]
+
+
+class DartRun(dg.Config):
+    """What bounds a DART run, and what an operator may ask beyond the queue."""
+
+    #: Filings to fetch again whatever their marks and raw say, by corp code
+    #: (`{"00126380": ["20260310002820"]}`).
+    reread: dict[str, list[str]] | None = None
+    #: Wall-clock budget. A cold archive takes 70-100 s from the node.
+    budget_seconds: int = 900
+    #: Stop asking for archives once the run holds this many bytes (median ~1 MB, the gate 24 MB).
+    budget_bytes: int = 300_000_000
+    #: Seconds between requests.
+    pace_seconds: float = 0.2
+
+
+#: How a filing list and an archive fetch can end. Each set partitions what it counts.
+LIST_OUTCOMES = ("answered", "absent", "refused", "transport", "unasked", "not_askable")
+ARCHIVE_OUTCOMES = (
+    "answered",
+    "absent",
+    "too_large",
+    "not_zip",
+    "refused",
+    "transport",
+    "held_already",
+    "unasked",
+)
+
+#: The most list pages asked of one filer in a run. Samsung's eleven years are 47 filings, one page
+#: of 100; a filer past 300 is no company this lane serves.
+MAX_LIST_PAGES = 3
+
+
+@dg.asset(
+    partitions_def=dart_filers,
+    deps=[DART_FILER],
+    backfill_policy=dg.BackfillPolicy.multi_run(DART_FILERS_PER_RUN),
+    pool="dart",
+    io_manager_key="parquet_io",
+    group_name="segments",
+    kinds={"dart", "parquet"},
+    freshness_policy=FRESH_FLOOR,
+    # ONE DOCUMENT PER ROW GROUP (muffin-ingest#177): a filer's file holds every archive fetched
+    # for it, a megabyte each.
+    metadata={"merge_on": list(fd.MERGE_ON), "compression": "zstd", "row_group_rows": 1},
+    description="Each DART filer's periodic filings and the annual-report archives not yet read.",
+)
+def raw_dart_filings(
+    context: AssetExecutionContext, config: DartRun, postgres: Postgres, raw_store: RawStore
+) -> Any:
+    """A filing list per filer, then the archives due, in rounds across the run's filers.
+
+    DUE: every annual report the list names, and every one `security_filing` already holds for the
+    filer's securities, that is not read at the current parser version and that raw does not hold.
+
+    THE OUTCOMES PARTITION WHAT THEY COUNT (`LIST_OUTCOMES` sums to `requested`,
+    `ARCHIVE_OUTCOMES` to `archives_named`). DART refusing in its body (`020`, its daily limit) or
+    in its status line stops the run and leaves the rest `unasked`.
+    """
+    keys = list(context.partition_keys)
+    run_id = context.run.run_id
+    reread = {k: set(v) for k, v in (config.reread or {}).items()}
+    with postgres.connect() as conn:
+        found = fd.filers(conn, keys)
+    stats: Counter[str] = Counter(
+        {
+            **{f"list_{o}": 0 for o in LIST_OUTCOMES},
+            **{f"archive_{o}": 0 for o in ARCHIVE_OUTCOMES},
+        }
+    )
+    rows: list[dict[str, Any]] = []
+    placed: dict[int, str] = {}
+    deadline = time.monotonic() + config.budget_seconds
+    stopped: str | None = None
+
+    listed: dict[str, list[fd.Filed]] = {}
+    for key in keys:
+        if key not in found:
+            stats["list_not_askable"] += 1
+            continue
+        if stopped is None and time.monotonic() >= deadline:
+            stopped = "the time budget is spent"
+        if stopped is not None:
+            stats["list_unasked"] += 1
+            continue
+        page, pages, outcome = 1, 1, "answered"
+        filed: list[fd.Filed] = []
+        while page <= min(pages, MAX_LIST_PAGES):
+            try:
+                answer = dart.filings(key, page)
+            except dart.DartRefused as exc:
+                outcome, stopped = "refused", f"DART refused us ({exc})"
+                break
+            except dart.DartTransport:
+                outcome = "transport"
+                break
+            row = fd.list_row(answer, page=page, run_id=run_id)
+            rows.append(row)
+            placed[id(row)] = key
+            if row["outcome"] != "answered":
+                outcome = row["outcome"]
+                if outcome == "refused":
+                    status = fd.parse_filings(answer.document.body).status
+                    stopped = f"DART refused us in its body (status {status or 'unreadable'})"
+                break
+            parsed = fd.parse_filings(answer.document.body)
+            filed.extend(parsed.filed)
+            pages = max(parsed.total_pages, 1)
+            page += 1
+            time.sleep(config.pace_seconds)
+        stats[f"list_{outcome}"] += 1
+        if outcome == "answered":
+            listed[key] = filed
+
+    with postgres.connect() as conn:
+        named = [f.rcept_no for filed in listed.values() for f in filed if f.is_annual]
+        read = fd.read_already(conn, named)
+        stored_due = {
+            key: [f.accession for f in fd.filings(conn, found[key]) if f.due]
+            for key in keys
+            if key in found
+        }
+    queues: dict[str, list[str]] = {}
+    for key in keys:
+        if key not in found:
+            continue
+        newest_first = [
+            f.rcept_no
+            for f in sorted(listed.get(key, []), key=lambda f: f.filed or "", reverse=True)
+            if f.is_annual and f.rcept_no not in read
+        ]
+        wanted = list(
+            dict.fromkeys([*newest_first, *reversed(stored_due.get(key, [])), *reread.get(key, ())])
+        )
+        if not wanted:
+            continue
+        light = raw_store.stored_rows_for(
+            DART_FILINGS, key, ("document", "accession", "outcome", "fetched_at", "run_id")
+        )
+        queue = []
+        for rcept in wanted:
+            held = fd.held_archive(light, rcept)
+            # A body that was neither an archive nor DART saying no is asked again: it settled
+            # nothing about the filing.
+            if held is not None and held.outcome != "not_zip" and rcept not in reread.get(key, ()):
+                stats["archive_held_already"] += 1
+            else:
+                queue.append(rcept)
+        queues[key] = queue
+
+    plan = _round_robin(queues)
+    stats["archives_named"] = stats["archive_held_already"] + len(plan)
+    for key, rcept in plan:
+        if stopped is None and time.monotonic() >= deadline:
+            stopped = "the time budget is spent"
+        if stopped is None and stats["bytes"] >= config.budget_bytes:
+            stopped = "the byte budget is spent"
+        if stopped is not None:
+            stats["archive_unasked"] += 1
+            continue
+        try:
+            answer = dart.instance(rcept)
+        except dart.DartRefused as exc:
+            stats["archive_refused"] += 1
+            stopped = f"DART refused us ({exc})"
+            continue
+        except dart.DartTransport:
+            stats["archive_transport"] += 1
+            continue
+        row = fd.archive_row(answer, rcept_no=rcept, run_id=run_id)
+        rows.append(row)
+        placed[id(row)] = key
+        stats[f"archive_{row['outcome']}"] += 1
+        stats["bytes"] += len(answer.document.body)
+        time.sleep(config.pace_seconds)
+    if stopped is not None:
+        context.log.warning(
+            "%s; %s lists and %s archives unasked",
+            stopped,
+            stats["list_unasked"],
+            stats["archive_unasked"],
+        )
+
+    context.add_output_metadata(
+        {
+            "requested": len(keys),
+            "list_outcomes": sum(stats[f"list_{o}"] for o in LIST_OUTCOMES),
+            "archives_named": stats["archives_named"],
+            "archive_outcomes": sum(stats[f"archive_{o}"] for o in ARCHIVE_OUTCOMES),
+            "bytes": stats["bytes"],
+            **{f"list_{o}": stats[f"list_{o}"] for o in LIST_OUTCOMES},
+            **{f"archive_{o}": stats[f"archive_{o}"] for o in ARCHIVE_OUTCOMES},
+        }
+    )
+    stored = context.instance.get_materialized_partitions(DART_FILINGS)
     return partitioned.by_partition(
         context,
         rows,

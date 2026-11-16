@@ -16,6 +16,7 @@ from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_START_TAG,
 )
 from muffin_ingest.facets import cninfo as cn
+from muffin_ingest.facets import dart as fd
 from muffin_ingest.facets import sec_segments
 
 from muffin_ingest_dagster.defs.sec.partitions import (
@@ -26,24 +27,32 @@ from muffin_ingest_dagster.defs.sec.partitions import (
 )
 from muffin_ingest_dagster.defs.segments.core import (
     cninfo_segment,
+    dart_segment,
     sec_segment,
     security_cninfo_filer,
+    security_dart_filer,
 )
 from muffin_ingest_dagster.defs.segments.partitions import (
     CNINFO_FILER_PARTITION,
     CNINFO_FILERS_PER_RUN,
+    DART_FILER_PARTITION,
+    DART_FILERS_PER_RUN,
     cninfo_filers,
+    dart_filers,
     on_floor,
 )
 from muffin_ingest_dagster.defs.segments.raw import (
     CNINFO_FILINGS,
+    DART_FILINGS,
     raw_cninfo_filings,
     raw_cninfo_stock_list,
+    raw_dart_corp_codes,
+    raw_dart_filings,
     raw_sec_instance,
 )
 from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
-from muffin_ingest_dagster.lib.runtime import CNINFO_RUN, SEC_RUN, SHORT_RUN
+from muffin_ingest_dagster.lib.runtime import CNINFO_RUN, DART_RUN, SEC_RUN, SHORT_RUN
 
 #: THE NAMES ARE STATE: a job's name keys its run history, a sensor's its cursor and status.
 SEC_SEGMENTS_JOB = "sec_segments"
@@ -199,13 +208,15 @@ def new_cninfo_filers(context: dg.SensorEvaluationContext, postgres: Postgres) -
     )
 
 
-def floor_chunks(grid: Sequence[str], day: date, collected: set[str]) -> list[list[str]]:
-    """The `CNINFO_FILERS_PER_RUN`-aligned chunks holding a filer whose floor day it is, or one
-    never collected. Aligned to grid positions, so run keys stay stable as the grid only appends."""
+def floor_chunks(
+    grid: Sequence[str], day: date, collected: set[str], width: int = CNINFO_FILERS_PER_RUN
+) -> list[list[str]]:
+    """The `width`-aligned chunks holding a filer whose floor day it is, or one never collected.
+    Aligned to grid positions, so run keys stay stable as the grid only appends."""
     position = {k: n for n, k in enumerate(grid)}
     due = {k for k in grid if on_floor(k, day) or k not in collected}
-    found = sorted({position[k] // CNINFO_FILERS_PER_RUN for k in due})
-    return [list(grid[c * CNINFO_FILERS_PER_RUN : (c + 1) * CNINFO_FILERS_PER_RUN]) for c in found]
+    found = sorted({position[k] // width for k in due})
+    return [list(grid[c * width : (c + 1) * width]) for c in found]
 
 
 @dg.schedule(
@@ -310,3 +321,89 @@ def cninfo_retention_job() -> None:
 )
 def cninfo_retention(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())
+
+
+# ── DART (Korea) ───────────────────────────────────────────────────────────────────────────────
+#
+# SHIPS STOPPED, as CNINFO did: the edge's `kr-filings` writes the same filings until it is
+# retired. `new_dart_filers` alone runs, because it asks DART nothing.
+
+DART_REGISTRY_JOB = "dart_registry"
+DART_SEGMENTS_JOB = "dart_segments"
+
+#: One six-minute request and one upsert (`DART_RUN`, not `SHORT_RUN`: the registry alone is 346 s).
+dart_registry_job = dg.define_asset_job(
+    DART_REGISTRY_JOB,
+    selection=dg.AssetSelection.assets(raw_dart_corp_codes, security_dart_filer),
+    run_tags=DART_RUN,
+)
+
+#: A filer's list and archives, and their segments, in one run: stage 2 reads what raw holds, so an
+#: archive fetched is read before the run ends.
+dart_segments_job = dg.define_asset_job(
+    DART_SEGMENTS_JOB,
+    selection=dg.AssetSelection.assets(raw_dart_filings, dart_segment),
+    partitions_def=dart_filers,
+    run_tags=DART_RUN,
+)
+
+
+@dg.schedule(
+    job=dart_registry_job,
+    cron_schedule="50 7 * * 1",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description="DART's registry, Mondays 07:50 UTC: the corp code of every Korean equity.",
+)
+def dart_corp_codes(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    day = context.scheduled_execution_time.date().isoformat()
+    return dg.RunRequest(run_key=day)
+
+
+@dg.sensor(
+    minimum_interval_seconds=6 * 3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+    description="A corp code a Korean equity holds becomes a DART filer partition.",
+)
+def new_dart_filers(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:
+    """Keeps the grid in step with `security_filer`. ADDS KEYS AND REQUESTS NOTHING; a key is never
+    deleted (a company gone from the registry keeps its history)."""
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select distinct filer_id from market.security_filer where source_code = %s",
+            (fd.SOURCE,),
+        )
+        held = [str(r[0]) for r in cur.fetchall()]
+    existing = set(context.instance.get_dynamic_partitions(DART_FILER_PARTITION))
+    new = sorted(k for k in held if k not in existing)
+    context.log.info("%s DART filers held, %s new", len(held), len(new))
+    return dg.SensorResult(
+        run_requests=[],
+        dynamic_partitions_requests=[dart_filers.build_add_request(new)] if new else [],
+    )
+
+
+@dg.schedule(
+    job=dart_segments_job,
+    cron_schedule="5 8 * * *",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description="DART filers on their 30-day floor, daily 08:05 UTC, outside the run windows.",
+)
+def dart_filers_floor(context: dg.ScheduleEvaluationContext) -> list[dg.RunRequest]:
+    """THE DAY IS IN EVERY RUN KEY, so a chunk is asked again on its next floor day. A filer never
+    collected is due on any day; the backlog of every filer is the operator's backfill."""
+    day = context.scheduled_execution_time.date()
+    grid = context.instance.get_dynamic_partitions(DART_FILER_PARTITION)
+    collected = set(context.instance.get_materialized_partitions(DART_FILINGS))
+    return [
+        dg.RunRequest(
+            run_key=f"{day.isoformat()}:{keys[0]}",
+            tags={
+                ASSET_PARTITION_RANGE_START_TAG: keys[0],
+                ASSET_PARTITION_RANGE_END_TAG: keys[-1],
+                **DART_RUN,
+            },
+        )
+        for keys in floor_chunks(grid, day, collected, DART_FILERS_PER_RUN)
+    ]
