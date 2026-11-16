@@ -623,7 +623,7 @@ def parse_segment_page(
 
 #: A minus sign set as an item of its own.
 _MINUS = ("-", "\uff0d", "\u2014", "\u2013")  # -, full-width, em and en dash
-#: How close two items must be to be one figure: flush, as measured (0.0 pt).
+#: How close two items must be to be one figure: flush, either side (Yunda's gaps are ±0.06 pt).
 _FLUSH = 1.0
 
 
@@ -648,7 +648,7 @@ def _joined(line: list[TextItem]) -> list[TextItem]:
         text = item.s.strip()
         if prev is not None and prev.end is not None and _NUMERIC.match(text):
             before = prev.s.strip()
-            if 0.0 <= item.x - prev.end <= _FLUSH and (
+            if abs(item.x - prev.end) <= _FLUSH and (
                 before in _MINUS
                 or (
                     _NUMERIC.match(before)
