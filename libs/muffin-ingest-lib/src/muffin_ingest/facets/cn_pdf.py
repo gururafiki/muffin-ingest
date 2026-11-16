@@ -17,12 +17,13 @@ THE TEXT ITEMS. The edge read pdf.js's `getTextContent` items. `page_items` rebu
 pdfium's characters with pdf.js's own rules (through pypdfium2, a pdfplumber dependency already
 installed), close enough that 91% of the edge's rows came back identical before the fixes below.
 
-NOT A LINE-FOR-LINE PORT, by decision (2026-11-15). Golden parity showed the edge wrong for 138 of
-the 516 reports it read: a money cell set on two lines kept only its last line, the explanation and
-the next section were read as rows, the sales-model table was read into the geography table, a total
-row was stored as a segment, and a margin was read as a cost where the cost cell was empty. Each is
-fixed here, and every report the edge read is read again by this reader, so all China segments come
-from one. What the edge stored that this reader does not reproduce is classified, never assumed:
+NOT A LINE-FOR-LINE PORT, by decision (2026-11-15). Golden parity over 716 reports (2026-11-16)
+found 355 of the 516 the edge read carrying at least one defect: a 万元 table stored as yuan
+(73 reports), total rows stored as segments (118), the sales-model table read as rows (131), a
+money cell set on two lines kept as its last line (fragments in 47, names glued or cut in 119),
+a margin read as money (20). Each is fixed here, the table is read across the page break (256 of
+537 tables run onto the next page), and every report the edge read is read again by this reader,
+so all China segments come from one. Every difference from the edge is classified, never assumed:
 docs/specs/2026-11-09-segments-and-regulators.md (step 4) in the umbrella.
 """
 
@@ -55,6 +56,12 @@ _COMPLETE = re.compile(r"^-?\d{1,3}(?:,\d{3})*\.\d{2}$")
 _PREFIX = re.compile(r"^-?(?:\d{1,3}(?:,\d{3})*(?:,\d{0,2}|\.\d?)?)?$")
 #: An item that can be part of a money cell at all.
 _NUMERIC = re.compile(r"^-?[\d,.]+$")
+#: A figure printed to one decimal: whole (`62,389.8`, a trailing zero dropped), or the first part
+#: of a cell wrapped after its first decimal.
+_ONE_DECIMAL = re.compile(r"^-?\d{1,3}(?:,\d{3})*\.\d$")
+#: Money printed to the fen anywhere on a page (a comma group, so no percentage).
+_MONEY_TO_THE_FEN = re.compile(r"^-?\d{1,3}(?:,\d{3})+\.\d{2}$")
+_DIGITS = re.compile(r"^\d+$")
 #: THE UNIT THE TABLE STATES. The edge assumed 元 throughout; measured 2026-11-15, 华微电子 states
 #: its table in 万元, so its 75,846.29 is 758,462,900 yuan and was stored ten thousand times too
 #: small, in the right currency, looking ordinary. The last statement above or inside a table holds;
@@ -72,8 +79,11 @@ _SCALE = {
 #: A total row restates the rows above it; kept, it would be summed as a segment beside its parts.
 _TOTAL = re.compile(r"(合计|小计|总计)$")
 #: A row that is part of the row above it (`其中：自产金`), and one deducted (`减：内部抵销数`).
+#: A deduction's `减：` is where its name starts wherever it falls: 江苏凤凰 sets a cost-only
+#: line, `合同履约成本`, in the cell above `减：合并抵消数`, and the name read
+#: `合同履约成本减：合并抵消数`.
 _OF_WHICH = re.compile(r"^其中\s*[:：]")
-_LESS = re.compile(r"^减\s*[:：]\s*")
+_LESS = re.compile(r"减\s*[:：]\s*")
 
 #: The three mandated tables and the axis each becomes. The axis is the Chinese heading, prefixed,
 #: so it cannot drift with a translation; it lands in `security_segment.axis`.
@@ -92,9 +102,13 @@ COST_HDR = "营业成本"
 #: the unparsed sales-model table (`主营业务分销售模式情况`, whose 直销/经销 are not regions)
 #: were read as rows of the last table: a paragraph became a member name, and a production volume
 #: its revenue.
-_TABLE_ENDS = re.compile(
-    r"说明|产销量|成本分析|主营业务分销售模式|^\s*[（(]\s*[0-9一二三四五六七八九十]+\s*[)）]"
-)
+_TABLE_ENDS = re.compile(r"说明|产销量|成本分析|主营业务分销售模式")
+#: A numbered line: the next section's heading, or a row the filer numbers (广州发展 FY2025 lists
+#: `(1)燃煤发电及供热业务`, `(2)天然气发电及供热业务`, `(3)能源物流业务`). Only a heading ends the
+#: table, and the difference is the cell: a row's holds its revenue (`_is_a_row`).
+_NUMBERED = re.compile(r"^\s*[（(]\s*[0-9一二三四五六七八九十]+\s*[)）]\s*")
+#: The tallest cell a numbered row can have: four wrapped name lines at 11 pt, with margins.
+_CELL_HEIGHT = 60.0
 
 #: How far the page scan goes. The mandated table is in 管理层讨论与分析; measured on page 13, 23
 #: and (Canadian Solar's 327-page report) 68. A bound is still right: its cost falls on every report
@@ -128,6 +142,9 @@ class CnSegmentRow:
     #: and "" for one whose whole is not a row of the table (it follows a dropped subtotal, or
     #: heads the table).
     parent: str | None = None
+    #: A grand total the table states (`合计`, `总计`): never a fact, it is what a split is
+    #: reconciled against.
+    stated_total: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +175,9 @@ def _number(text: str) -> float:
 
 #: Two complete money cells in one item: the first ends at its two decimals, the next starts there.
 _TWO_CELLS = re.compile(r"^(-?[\d,]+\.\d{2})(\s*)(-?\d[\d,]*\.\d{1,2})$")
+#: Two cells a space apart, where the space marks the split and the first may be one decimal into
+#: being set: 彤程's `2,320,408,095.5 1,751,224,956.7` ends page 22, both cells completed on 23.
+_SPACED_CELLS = re.compile(r"^(-?[\d,]+\.\d{1,2})(\s+)(-?\d[\d,]*\.\d{1,2})$")
 #: A name and the money cell after it in one item: 汾酒's `食品制造业 38,592,734,473.12`.
 _NAME_THEN_CELL = re.compile(r"^(.*\D)(\s+)(-?\d{1,3}(?:,\d{3})+\.\d{1,2})$")
 
@@ -171,7 +191,7 @@ def _split_cells(item: TextItem) -> list[TextItem]:
     text = item.s.strip()
     if item.end is None or item.end <= item.x:
         return [item]
-    match = _TWO_CELLS.match(text) or _NAME_THEN_CELL.match(text)
+    match = _TWO_CELLS.match(text) or _SPACED_CELLS.match(text) or _NAME_THEN_CELL.match(text)
     if match is None:
         return [item]
     first, gap, second = match.groups()
@@ -291,7 +311,7 @@ def parse_segment_page(
         sorted(v, key=lambda i: i.x) for _, v in sorted(buckets.items(), key=lambda kv: -kv[0])
     ]
 
-    tables: list[tuple[list[_Row], list[tuple[float, str]], float]] = []
+    tables: list[tuple[list[_Row], list[tuple[float, str]], float, int]] = []
     name_x = 0.0
     rows: list[_Row] = []
     names: list[tuple[float, str]] = []
@@ -302,31 +322,91 @@ def parse_segment_page(
     top: float | None = None
     #: The row just emitted is still owed its cost (its cell is being set).
     owed = False
+    #: The unit in force when the open table's heading was read.
+    opened_at = scale
+    #: The axes whose table header has been read: each is read once.
+    read: set[str] = set()
 
     def close() -> None:
         nonlocal rows, names, rev, cost, cost_held, top, owed
         if rows or names:
-            tables.append((rows, names, name_x))
+            tables.append((rows, names, name_x, opened_at))
         rows, names = [], []
         rev, cost = _Column(), _Column()
         cost_held, top, owed = None, None, False
 
     heights = [sum(i.y for i in line) / len(line) for line in lines]
+    to_the_fen = any(_MONEY_TO_THE_FEN.match(i.s.strip()) for i in items)
+
+    def column(n: int, lo: float, hi: float) -> list[str]:
+        return [i.s.strip() for i in lines[n] if lo < _end(i) <= hi and _NUMERIC.match(i.s.strip())]
+
+    def settle(fragments: list[str], k: int, lo: float, hi: float) -> list[str]:
+        """A one-decimal figure, given its second decimal when it is whole: the next fragment in
+        its column is not bare digits continuing it (云天励飞 prints `62,389.8` beside
+        `53,608.12`), or nothing follows on a page printing no money to the fen (中海油服's
+        百万元 table, `14,898.0`). At the foot of a page that does, it stays incomplete: 彤程's
+        `2,320,408,095.5` ends page 22 and its `5` opens page 23."""
+        out = []
+        for fragment in fragments:
+            if _ONE_DECIMAL.match(fragment):
+                following = next(
+                    (c for n in range(k + 1, len(lines)) if (c := column(n, lo, hi))), []
+                )
+                if following and _DIGITS.match(following[0]):
+                    out.append(fragment)
+                elif following or not to_the_fen:
+                    out.append(fragment + "0")
+                else:
+                    out.append(fragment)
+            else:
+                out.append(fragment)
+        return out
+
+    def is_a_row(k: int) -> bool:
+        """A numbered line is a row when its cell holds a revenue figure: on the line itself
+        (`(3)能源物流业务`), or between the borders around it across the name column (广州发展's
+        `(1)燃煤发电及` is 6.8 pt above its figures, in a cell 27.8 pt tall). A heading sits between
+        two tables, where no figure is, or in no cell a row could fill."""
+        if column(k, name_end, rev_end):
+            return True
+        borders = [r.y for r in rules if r.x0 <= name_x <= r.x1]
+        above = [b for b in borders if b > heights[k]]
+        below = [b for b in borders if b < heights[k]]
+        if not above or not below:
+            return False
+        lo, hi = max(below), min(above)
+        return hi - lo <= _CELL_HEIGHT and any(
+            lo < heights[n] < hi and column(n, name_end, rev_end) for n in range(len(lines))
+        )
+
     for k, line in enumerate(lines):
         joined = "".join(i.s for i in line)
         y = heights[k]
         unit = _UNIT.search(joined)
         if unit is not None:
             scale = _SCALE[unit.group(1)]
-        table = next((a for heading, a in CN_TABLES if heading in joined), None)
+        heading = next((h for h, _ in CN_TABLES if h in joined), None)
+        table = None if heading is None else dict(CN_TABLES)[heading]
+        if table is not None and table in read and joined.strip().endswith(heading or ""):
+            # The heading of a table already read is another year's: 厦门钨业 restates 2024 on
+            # the page after its 2025 tables (`2024 年（调整后）`, `2024 年（调整前）`), and
+            # nothing after it is this year's. A table counts once its header is read, so a
+            # section title naming it first (`(1). 主营业务分行业情况`) does not; and only a line
+            # ending with the heading is one (`主营业务分行业情况的说明` is not).
+            close()
+            break
         if table is not None:
             close()
             axis = table
+            opened_at = scale
             name_end = rev_end = cost_end = 0.0
             continue
         if not axis:
             continue
-        if rev_end and _TABLE_ENDS.search(joined):
+        if rev_end and (
+            _TABLE_ENDS.search(joined) or (_NUMBERED.match(joined) and not is_a_row(k))
+        ):
             close()
             axis = ""
             continue
@@ -336,6 +416,7 @@ def parse_segment_page(
         cost_h = next((i for i in line if _labelled(i, COST_HDR)), None)
         if name_h is not None and rev_h is not None and cost_h is not None:
             close()
+            read.add(axis)
             name_end, rev_end = rev_h.x, cost_h.x
             name_x = (name_h.x + _end(name_h)) / 2
             # The header is often set on several lines, labels centred in their cells: 嘉泽's
@@ -364,16 +445,8 @@ def parse_segment_page(
         here = [s for s in (i.s.strip() for i in line if _end(i) <= name_end) if s]
         if here and not _PAGE_NUMBER.match("".join(here)):
             names.append((y, "".join(here)))
-        in_rev = [
-            i.s.strip()
-            for i in line
-            if name_end < _end(i) <= rev_end and _NUMERIC.match(i.s.strip())
-        ]
-        in_cost = [
-            i.s.strip()
-            for i in line
-            if rev_end < _end(i) <= cost_end and _NUMERIC.match(i.s.strip())
-        ]
+        in_rev = settle(column(k, name_end, rev_end), k, name_end, rev_end)
+        in_cost = settle(column(k, rev_end, cost_end), k, rev_end, cost_end)
         if (in_rev or in_cost) and top is None:
             top = y
         cost_value = cost.take(in_cost)
@@ -405,7 +478,7 @@ def parse_segment_page(
     close()
 
     out: list[CnSegmentRow] = []
-    for table_rows, name_lines, x in tables:
+    for table_rows, name_lines, x, table_scale in tables:
         borders = sorted({round(r.y, 1) for r in rules if r.x0 <= x <= r.x1})
         headings: list[tuple[float, str]] = []
         for y, text in name_lines:
@@ -420,7 +493,8 @@ def parse_segment_page(
             (tidy_member_name("".join(t for _, t in sorted(r.names, key=lambda n: -n[0]))), r)
             for r in table_rows
         ]
-        out.extend(_nested(_without_restated_totals([(n, r) for n, r in named if n], headings)))
+        kept = _without_restated_totals([(n, r) for n, r in named if n], headings)
+        out.extend(_nested(kept, step=0.01 * table_scale))
     return out
 
 
@@ -479,7 +553,7 @@ def _without_restated_totals(
             )
         floor = row.bottom
         if _OF_WHICH.match(name):
-            part = CnSegmentRow(row.axis, name, row.revenue, row.cost, parent=parent or "")
+            part = CnSegmentRow(row.axis, _label(name), row.revenue, row.cost, parent=parent or "")
             out.append(part)
             since.append(part)
             above.append(part)
@@ -487,7 +561,7 @@ def _without_restated_totals(
         total = _TOTAL.search(name)
         if total is None:
             revenue, cost = row.revenue, row.cost
-            less = _LESS.match(name)
+            less = _LESS.search(name)
             if less is not None:
                 name = name[less.end() :].strip() or name
                 revenue = -abs(revenue)
@@ -511,6 +585,8 @@ def _without_restated_totals(
                 r if r.parent not in (None, "") else replace(r, parent=run_heading) for r in run
             )
             above = [r for r in above if r not in run] + [heading]
+        elif not group and name.endswith(("合计", "总计")):
+            out.append(CnSegmentRow(row.axis, name, row.revenue, row.cost, stated_total=True))
         elif group and not (restates_since or restates_above):
             # A named total restating nothing is its group's own row: 中信建投's `境外小计`, and
             # 哈投's `热电业务合计` printed above its parts (which `_nested` then gives it).
@@ -545,11 +621,15 @@ _MAX_CHILDREN = 15
 
 
 def _label(name: str) -> str:
-    """A member's name without the colon a heading-style label ends with (`证券业：`)."""
-    return name.rstrip(":：").strip() or name
+    """A member's name without the colon a heading-style label ends with (`证券业：`), the number
+    a filer gives its rows (`(1)燃煤发电及供热业务`) or the `其中：` a first part carries
+    (中远海控's `其中：美洲地区`, its other regions unlabelled): the name is the upsert key, the
+    parent says what `其中` said, and a row numbered or labelled one year and not the next is the
+    same business."""
+    return _NUMBERED.sub("", _OF_WHICH.sub("", name.rstrip(":："))).strip() or name
 
 
-def _nested(rows: list[CnSegmentRow]) -> list[CnSegmentRow]:
+def _nested(rows: list[CnSegmentRow], step: float = 0.01) -> list[CnSegmentRow]:
     """Rows that sum to the row above them, as that row's children.
 
     MEASURED 2026-11-15: 13 of 349 reports with a table nest one level in it, the parent row first
@@ -569,13 +649,15 @@ def _nested(rows: list[CnSegmentRow]) -> list[CnSegmentRow]:
     out = list(rows)
     for i in reversed(range(len(out))):  # the inner level first: 哈投 nests twice
         head = out[i]
-        if not head.revenue:
+        if not head.revenue or head.stated_total:
             continue
         total = 0.0
         taken: list[int] = []
         inside: set[str] = set()
         for k in range(i + 1, len(out)):
             part = out[k]
+            if part.stated_total:
+                break
             if part.parent in inside:  # a part of a part: counted in its parent already
                 continue
             if part.parent not in (None, "", head.name) or len(taken) == _MAX_CHILDREN:
@@ -583,7 +665,10 @@ def _nested(rows: list[CnSegmentRow]) -> list[CnSegmentRow]:
             total += part.revenue
             taken.append(k)
             inside.add(part.name)
-            if round(total, 2) == round(head.revenue, 2) and (
+            # Each printed figure is rounded to its last digit (`step`: a fen, or 0.01 万元), so
+            # the parts may miss their parent by half a step each: 中国电影's regions 1-7 sum to
+            # 4,746,459,154.20 under `一、国内` 4,746,459,154.21.
+            if abs(total - head.revenue) <= step * (len(taken) + 1) / 2 + 1e-6 and (
                 len(taken) >= 2 or (part.revenue == head.revenue and part.cost == head.cost)
             ):
                 for t in taken:
@@ -677,8 +762,40 @@ def fiscal_year_end_from(text: str) -> str | None:
     return None
 
 
+#: How close a split must come to its total. The tables are stated to the fen, and a 万元 table to
+#: 0.01 万元 a cell (100 yuan), so rounding is at most a few thousand yuan; SEC's 0.5% let five of
+#: 1225177612's six products, 18,395.9 m, pass for its stated 18,386.3 m. 0.01% refuses that and
+#: leaves room for the rounding of a 20-row 万元 table of 100 m yuan (10,000 against ~2,000).
+TOLERANCE_FRACTION = 0.0001
+
 #: `营业收入` and `营业成本` are the two metrics these tables carry.
 _METRICS = (("revenue", "revenue"), ("cost", "cost_of_revenue"))
+
+
+def _merged(rows: Sequence[CnSegmentRow]) -> list[CnSegmentRow]:
+    """Rows naming one member twice under one parent, as one row carrying their sum.
+
+    1225263103's product table lists 肝病用药, 心脑血管用药 and `其他` (the drugs under its
+    manufacturing), then 医药流通业, 化妆品业 and `其他` (the company's other business), all at one
+    level: the six reconcile to the industry table's 8,969,064,200.00, and the segment key (axis,
+    member, parent) cannot hold two `其他`. Their sum keeps the split whole. A cost is summed only
+    when both rows state one. A stated total is never merged: it is no member."""
+    out: list[CnSegmentRow] = []
+    held: dict[tuple[str, str | None, str], int] = {}
+    for r in rows:
+        key = (r.axis, r.parent, r.name)
+        if r.stated_total or key not in held:
+            if not r.stated_total:
+                held[key] = len(out)
+            out.append(r)
+            continue
+        first = out[held[key]]
+        out[held[key]] = replace(
+            first,
+            revenue=round(first.revenue + r.revenue, 2),
+            cost=None if first.cost is None or r.cost is None else round(first.cost + r.cost, 2),
+        )
+    return out
 
 
 def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[SegmentFact]:
@@ -696,10 +813,14 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
     the table's level in partition 0, outside the target.
     """
     period_start = f"{int(period_ending[:4])}-01-01"
+    rows = _merged(rows)
     by_axis: dict[str, list[CnSegmentRow]] = {}
     under: dict[tuple[str, str], list[CnSegmentRow]] = {}
     orphans: list[CnSegmentRow] = []
+    stated = [round(r.revenue, 2) for r in rows if r.stated_total]
     for row in rows:
+        if row.stated_total:
+            continue
         if row.parent is None:
             by_axis.setdefault(row.axis, []).append(row)
         elif row.parent == "":
@@ -709,10 +830,15 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
     # Every figure is stated to the fen, so their sum is too: 8,419,394,281.72, not the float
     # 8419394281.719998 that `reconciled_to` would otherwise carry.
     totals = [round(_add_in_order(r.revenue for r in rs), 2) for rs in by_axis.values()]
-    # The total the most tables agree on, the largest of those: 哈投's geography runs onto the next
-    # page, and its partial sum (2.79 bn) outran the 2.72 bn its industry and product tables both
-    # state. With no two tables agreeing, the largest, as before.
-    target = max(totals, key=lambda t: (totals.count(t), t)) if totals else 0.0
+    # THE TOTAL THE FILING STATES, the largest grand total (`合计`, `总计`) on the page: a
+    # partial table's sum is no total (哈投's geography runs onto the next page, 2.79 bn against the
+    # 2.72 bn `总计`), nor is one table detailing a part (1225011770's product and geography tables
+    # both cover only steel, 37.24 bn, against the industry `合计` of 57.86 bn). With no total
+    # stated, the total most tables agree on, the largest of those, else the largest.
+    if stated:
+        target = max(stated)
+    else:
+        target = max(totals, key=lambda t: (totals.count(t), t)) if totals else 0.0
 
     def facts(
         r: CnSegmentRow, parent: str | None, against: float, partition: int
@@ -740,13 +866,17 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
 
     out: list[SegmentFact] = []
     for rs in by_axis.values():
-        parts = assign_partitions([(f"cninfo:{r.name}", r.revenue) for r in rs], target)
+        parts = assign_partitions(
+            [(f"cninfo:{r.name}", r.revenue) for r in rs], target, TOLERANCE_FRACTION
+        )
         for r in rs:
             out.extend(facts(r, None, target, parts.get(f"cninfo:{r.name}", 0)))
     for (axis, parent), rs in under.items():
         whole = next((r.revenue for r in by_axis.get(axis, []) if r.name == parent), 0.0)
         parts = (
-            assign_partitions([(f"cninfo:{r.name}", r.revenue) for r in rs], whole)
+            assign_partitions(
+                [(f"cninfo:{r.name}", r.revenue) for r in rs], whole, TOLERANCE_FRACTION
+            )
             if whole > 0
             else {}
         )
@@ -757,13 +887,94 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
     return out
 
 
+#: A page number alone on its line at the foot of a page: `18 / 259`, `- 10 -`, `17`.
+_FOLIO = re.compile(r"^[-\u2013\u2014\s]*\d{1,4}(?:\s*/\s*\d{1,4})?[-\u2013\u2014\s]*$")
+#: How far up from the bottom of the page a folio is looked for.
+_FOOT = 100.0
+#: The space left between the table page's lowest line and the next page's highest, read as one.
+_PAGE_GAP = 14.0
+
+
+def join_pages(
+    first: Sequence[TextItem],
+    first_rules: Sequence[Rule],
+    second: Sequence[TextItem],
+    second_rules: Sequence[Rule],
+) -> tuple[list[TextItem], list[Rule]]:
+    """The table page and the page after it, read as one page: the second set below the first.
+
+    A TABLE RUNS ONTO THE NEXT PAGE IN HALF THE REPORTS. Measured 2026-11-16 over the 537 golden
+    reports with a table page: in 256 the next page opens with money figures before any heading or
+    prose. 上海隧道's geography table ends page 17 at 56,324,226,895.94 and page 18 opens with
+    `澳门 1,253,524,048.26`, which brings it to the industry table's 57,577,750,944.20; read one
+    page at a time, a partial table is either refused or, with no other table to disagree, served
+    as a whole split (the edge served 广州发展's first three industries so). One stream also joins a
+    cell the page break splits (彤程's `2,320,408,095.5` and `5`), places a total on the second
+    page against rows on the first, and reads a table that only starts on the second page.
+
+    What repeats on every page goes: the second page's running header, which sits where the
+    first's does, its underline among the rules, and each page's folio. A table that has ended by
+    then ends the stream's reading of it as before (`_TABLE_ENDS`).
+
+    A ROW THE BREAK CUTS IS ONE CELL AGAIN. 彤程's `特种橡胶助剂` and the first part of its figures
+    are in page 22's last cell, `行业` and the rest in page 23's first, and a name goes to the row
+    whose cell holds it: the cell's half on page 22 holds no row's last line, so the name was
+    `行业`. When the table runs to the foot of the first page, the border closing it bounds the
+    break, not a row, and goes: with the border opening the second page when that one has nothing
+    above it, or alone when the second page opens with figures above its first border (彤程 draws
+    none over the cut row's remainder). Only figures: a page opening with prose keeps the border,
+    or a paragraph's last line would join the last row's name."""
+    if not second:
+        return list(first), list(first_rules)
+
+    def folio(item: TextItem, page: Sequence[TextItem]) -> bool:
+        """A page number: matching, near the foot, and alone on its line. A table's numbered row
+        set near the foot is not (1225121079's `7` and `、华南区` are one line, page 13)."""
+        return (
+            item.y < _FOOT
+            and _FOLIO.match(item.s) is not None
+            and not any(o is not item and abs(o.y - item.y) < 3.0 for o in page)
+        )
+
+    on_first = {(i.s.strip(), round(i.x), round(i.y)) for i in first}
+    ruled = {(round(r.y), round(r.x0), round(r.x1)) for r in first_rules}
+    head = [i for i in first if not folio(i, first)]
+    tail = [
+        i
+        for i in second
+        if not folio(i, second) and (i.s.strip(), round(i.x), round(i.y)) not in on_first
+    ]
+    tail_rules = [r for r in second_rules if (round(r.y), round(r.x0), round(r.x1)) not in ruled]
+    if not tail:
+        return head, list(first_rules)
+    head_rules = list(first_rules)
+    closing = min(head_rules, key=lambda r: r.y, default=None)
+    if closing is not None and all(i.y > closing.y for i in head):
+        opening = max(tail_rules, key=lambda r: r.y, default=None)
+        above = [i for i in tail if opening is None or i.y > opening.y]
+        if not above and opening is not None:
+            head_rules.remove(closing)
+            tail_rules.remove(opening)
+        elif any(_NUMERIC.match(i.s.strip()) for i in above) and not any(
+            _TABLE_ENDS.search(i.s) or any(h in i.s for h, _ in CN_TABLES) for i in above
+        ):
+            head_rules.remove(closing)
+    low = min([i.y for i in head] + [r.y for r in head_rules], default=_FOOT)
+    high = max([i.y for i in tail] + [r.y for r in tail_rules])
+    shift = low - _PAGE_GAP - high
+    return (
+        [*head, *(TextItem(i.s, i.x, i.y + shift, i.end) for i in tail)],
+        [*head_rules, *(Rule(r.y + shift, r.x0, r.x1) for r in tail_rules)],
+    )
+
+
 def segment_facts_from_pdf(
     body: bytes,
     scan_pages: int = SCAN_PAGES,
     items_of: Callable[[object, int], list[TextItem]] | None = None,
 ) -> CnParseResult:
-    """Read one annual report: the period from the first page stating it, the table from the first
-    page carrying the industry heading. Stops there, as the edge did."""
+    """Read one annual report: the period from the first page stating it, the tables from the first
+    page carrying the industry heading, read with the page after it (`join_pages`)."""
     import pypdfium2 as pdfium
 
     read_items = items_of or page_items
@@ -779,7 +990,15 @@ def segment_facts_from_pdf(
             if CN_TABLES[0][0] not in text:
                 carried = unit_stated_last(items, carried)
                 continue
-            rows = parse_segment_page(items, page_rules(document, index), carried)
+            rules = page_rules(document, index)
+            if index + 1 < len(document):
+                items, rules = join_pages(
+                    items,
+                    rules,
+                    read_items(document, index + 1),
+                    page_rules(document, index + 1),
+                )
+            rows = parse_segment_page(items, rules, carried)
             if not rows or period is None:
                 return CnParseResult([], index + 1, period)
             return CnParseResult(facts_from_rows(rows, period), index + 1, period)

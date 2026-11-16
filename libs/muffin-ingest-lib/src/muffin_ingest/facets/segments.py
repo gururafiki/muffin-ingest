@@ -346,14 +346,16 @@ TOLERANCE_FRACTION = 0.005
 TOLERANCE_FLOOR = 1.0
 
 
-def _tolerance(total: float) -> float:
+def _tolerance(total: float, fraction: float = TOLERANCE_FRACTION) -> float:
     """`Math.max(1, Math.abs(total) * 0.005)`, which is NaN for a NaN total, as in JS."""
     if math.isnan(total):
         return math.nan
-    return max(TOLERANCE_FLOOR, abs(total) * TOLERANCE_FRACTION)
+    return max(TOLERANCE_FLOOR, abs(total) * fraction)
 
 
-def assign_partitions(members: Sequence[tuple[str, float]], total: float) -> dict[str, int]:
+def assign_partitions(
+    members: Sequence[tuple[str, float]], total: float, fraction: float = TOLERANCE_FRACTION
+) -> dict[str, int]:
     """(member code, value) pairs -> partition per member: 1..n for each maximal split that sums to
     `total`, 0 for whatever is left.
 
@@ -364,12 +366,15 @@ def assign_partitions(members: Sequence[tuple[str, float]], total: float) -> dic
     member ({iPhone, iPad, Mac, Wearables, Service}): neither "prefer extension members" nor "take
     the deepest" survives it. The filing states its own consolidated figure, so the answer is local:
     a partition is a maximal set of members summing to it, numbered in the order found.
+
+    `fraction` is how close is close enough. XBRL facts are rounded to millions, hence 0.5%; a
+    CNINFO table is stated to the fen, and passes its own (`cn_pdf.TOLERANCE_FRACTION`).
     """
     out = {code: 0 for code, _ in members}
     if not members or not math.isfinite(total):
         return out
     # The common case by far: one clean split and no subtotals.
-    tol = _tolerance(total)
+    tol = _tolerance(total, fraction)
     sum_all = _add_up(value for _, value in members)
     if abs(sum_all - total) <= tol:
         for code, _ in members:
@@ -381,7 +386,7 @@ def assign_partitions(members: Sequence[tuple[str, float]], total: float) -> dic
     remaining = list(members)
     partition = 0
     while remaining:
-        best = _max_subset_summing_to(remaining, total)
+        best = _max_subset_summing_to(remaining, total, fraction)
         if best is None:
             break
         partition += 1
@@ -406,7 +411,9 @@ def _is_generated(member_code: str) -> bool:
     return _GENERATED.search(member_code) is not None
 
 
-def _max_subset_summing_to(members: Sequence[tuple[str, float]], target: float) -> list[int] | None:
+def _max_subset_summing_to(
+    members: Sequence[tuple[str, float]], target: float, fraction: float = TOLERANCE_FRACTION
+) -> list[int] | None:
     """Indices of the largest subset summing to `target`, or None. Bounded by `MAX_MEMBERS`.
 
     The edge enumerated every mask from 1 upwards and kept the first with the most members, then the
@@ -421,7 +428,7 @@ def _max_subset_summing_to(members: Sequence[tuple[str, float]], target: float) 
         g = 1 if _is_generated(code) else 0
         sums += [s + value for s in sums]
         generated += [x + g for x in generated]
-    tol = _tolerance(target)
+    tol = _tolerance(target, fraction)
     qualifying = [mask for mask in range(1, 1 << n) if not abs(sums[mask] - target) > tol]
     if not qualifying:
         return None

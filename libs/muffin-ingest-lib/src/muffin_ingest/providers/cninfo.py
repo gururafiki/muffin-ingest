@@ -42,7 +42,7 @@ ANNUAL_CATEGORY = "category_ndbg_szsh"
 
 #: One page, as the edge asked. 19 of 24 companies sampled hold more than 30 announcements in the
 #: category (Yangtze 61), so the years before ~2016 are not asked for; widening is a decision of its
-#: own (docs/deferred/2026-11-15-cninfo-reads-only-the-newest-page.md).
+#: own (docs/deferred/2026-11-15-cninfo-reads-only-the-newest-search-page.md).
 PAGE_SIZE = 30
 
 #: Sent with the announcement search: a re-walk asks the same body, and the `cninfo` location keeps
@@ -192,7 +192,7 @@ def announcements(code: str, org_id: str, page: int = 1, timeout_s: float = 30.0
 
 def report_fetch_url(public_url: str) -> str:
     """The stored link is the PUBLIC host (a reader's browser opens it); the fetch goes through the
-    cache, where an immutable report is kept a year."""
+    cache, which serves a report it holds and stores none (`NOT_STORED`)."""
     if not public_url.startswith(STATIC_ORIGIN + "/"):
         raise ValueError(f"not a CNINFO report link: {public_url!r}")
     return f"{_base('cninfo-static')}/{public_url[len(STATIC_ORIGIN) + 1 :]}"

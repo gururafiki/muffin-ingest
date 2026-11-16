@@ -15,11 +15,17 @@ Read as lines that yields the segment `行业` ("industry") beside the right num
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 
 import pytest
 
 from muffin_ingest.facets import cn_child, cn_pdf
 from muffin_ingest.facets.cn_pdf import CnSegmentRow, TextItem
+
+
+def segments(items: list[TextItem], rules: list[cn_pdf.Rule] | None = None) -> list[CnSegmentRow]:
+    """The rows a page yields, less the grand totals it states (kept as `stated_total` rows)."""
+    return [r for r in cn_pdf.parse_segment_page(items, rules or []) if not r.stated_total]
 
 
 def it(s: str, x: float, y: float) -> TextItem:
@@ -407,7 +413,7 @@ NORD = [
 
 
 def test_a_cell_may_break_anywhere_and_is_read_whole_and_a_total_is_not_a_segment() -> None:
-    assert [(r.name, r.revenue, r.cost) for r in cn_pdf.parse_segment_page(NORD)] == [
+    assert [(r.name, r.revenue, r.cost) for r in segments(NORD)] == [
         ("电子信息材料", 6745344486.37, 6229790215.73),
         ("电线电缆", 315802261.25, 285057241.44),
         ("发电及储能", 59507780.23, 34281472.09),
@@ -514,7 +520,7 @@ def test_a_subtotal_with_no_rows_of_its_own_is_its_groups_row() -> None:
     for n, (name, revenue) in enumerate(rows):
         y = 700.0 - 16 * n
         items += [it(name, 95.5, y), TextItem(f"{revenue:,.2f}", 160.0, y, 245.0)]
-    got = [(r.name, r.revenue) for r in cn_pdf.parse_segment_page(items)]
+    got = [(r.name, r.revenue) for r in segments(items)]
     assert got == [
         ("北京市", 1989033455.58), ("上海市", 1151931187.35), ("广东省", 657646433.32),
         ("其他地区", 3571109438.88), ("公司本部", 14460433593.98), ("境外", 1491560351.62),
@@ -545,14 +551,25 @@ def test_a_deduction_is_negative_and_the_lines_sum_to_the_stated_total() -> None
         ("印刷业务", 580295041.63), ("报媒", 174882851.54), ("其他", 88744226.63),
         ("小计", 12222732795.17), ("减：内部抵销数", 3803338513.45), ("合计", 8419394281.72),
     ]  # fmt: skip
+    joined = cn_pdf._without_restated_totals(
+        [
+            (
+                "合同履约成本减：合并抵消数",
+                cn_pdf._Row("cninfo:分地区", 3107286261.47, None, 1.0, 1.0, []),
+            )
+        ]
+    )
+    assert [(r.name, r.revenue) for r in joined] == [("合并抵消数", -3107286261.47)]
     for deduction in (3803338513.45, -3803338513.45):
-        rows = cn_pdf.parse_segment_page(
+        parsed = cn_pdf.parse_segment_page(
             _table([*printed[:7], ("减：内部抵销数", deduction), printed[8]])
         )
+        rows = [r for r in parsed if not r.stated_total]
         assert [r.name for r in rows][-1] == "内部抵销数"
         assert rows[-1].revenue == -3803338513.45
         assert abs(sum(r.revenue for r in rows) - 8419394281.72) < 0.01
-        facts = cn_pdf.facts_from_rows(rows, "2025-12-31")
+        assert [(r.name, r.revenue) for r in parsed if r.stated_total] == [("合计", 8419394281.72)]
+        facts = cn_pdf.facts_from_rows(parsed, "2025-12-31")
         assert {f.reconciled_to for f in facts} == {8419394281.72}
         assert all(f.partition_id == 1 for f in facts)
 
@@ -561,7 +578,7 @@ def test_an_of_which_row_is_a_level_below_the_row_above_it() -> None:
     """`其中：` rows are part of the row above them. Flat, the table summed them twice, the 合计
     that restates the real rows no longer matched (and was kept as a segment), and one table naming
     `其中：手续费及佣金收入` under two parents gave two rows one key."""
-    rows = cn_pdf.parse_segment_page(
+    parsed = cn_pdf.parse_segment_page(
         _table(
             [
                 ("证券业务", 900.0),
@@ -572,23 +589,24 @@ def test_an_of_which_row_is_a_level_below_the_row_above_it() -> None:
             ]
         )
     )
+    rows = [r for r in parsed if not r.stated_total]
     assert [(r.name, r.parent) for r in rows] == [
         ("证券业务", None),
-        ("其中：佣金", "证券业务"),
+        ("佣金", "证券业务"),
         ("期货业务", None),
-        ("其中：佣金", "期货业务"),
+        ("佣金", "期货业务"),
     ]
     facts = {
         (f.parent_member, f.member_code): f
-        for f in cn_pdf.facts_from_rows(rows, "2025-12-31")
+        for f in cn_pdf.facts_from_rows(parsed, "2025-12-31")
         if f.metric_code == "revenue"
     }
     top = facts[(None, "cninfo:证券业务")]
     assert top.reconciled_to == 1000.0 and top.partition_id == 1
-    child = facts[("cninfo:证券业务", "cninfo:其中：佣金")]
+    child = facts[("cninfo:证券业务", "cninfo:佣金")]
     assert child.parent_axis == child.axis == "cninfo:分行业"
     assert child.reconciled_to == 900.0 and child.partition_id == 0  # part of its parent, not all
-    assert facts[("cninfo:期货业务", "cninfo:其中：佣金")].reconciled_to == 100.0
+    assert facts[("cninfo:期货业务", "cninfo:佣金")].reconciled_to == 100.0
 
 
 def test_an_of_which_row_whose_whole_is_not_a_row_is_kept_in_no_split_and_no_sum() -> None:
@@ -607,21 +625,21 @@ def test_an_of_which_row_whose_whole_is_not_a_row_is_kept_in_no_split_and_no_sum
         )
     )
     assert [(r.name, r.parent) for r in rows] == [
-        ("其中：电力", ""),
+        ("电力", ""),
         ("华东", None),
         ("华南", None),
-        ("其中：沪", ""),
+        ("沪", ""),
     ]
     facts = {f.member_code: f for f in cn_pdf.facts_from_rows(rows, "2025-12-31")}
     assert facts["cninfo:华东"].reconciled_to == 100.0 and facts["cninfo:华东"].partition_id == 1
-    for orphan in ("cninfo:其中：电力", "cninfo:其中：沪"):
+    for orphan in ("cninfo:电力", "cninfo:沪"):
         assert facts[orphan].partition_id == 0 and facts[orphan].parent_member is None
 
 
 def test_an_of_which_row_under_a_subtotal_kept_as_its_group_belongs_to_that_group() -> None:
     """中信建投's `境外小计` is the only row 境外 has (境内小计 before it ends 境内's rows), so
     it is kept as 境外, and the `其中：` under it is 境外's; a 合计 between ends the group."""
-    rows = cn_pdf.parse_segment_page(
+    parsed = cn_pdf.parse_segment_page(
         _table(
             [
                 ("北京", 1989033455.58),
@@ -634,12 +652,13 @@ def test_an_of_which_row_under_a_subtotal_kept_as_its_group_belongs_to_that_grou
             ]
         )
     )
+    rows = [r for r in parsed if not r.stated_total]
     assert [(r.name, r.parent) for r in rows] == [
         ("北京", None),
         ("上海", None),
         ("境外", None),
-        ("其中：香港", "境外"),
-        ("其中：澳门", ""),
+        ("香港", "境外"),
+        ("澳门", ""),
     ]
 
 
@@ -673,13 +692,13 @@ def test_rows_summing_to_the_row_above_them_are_its_parts() -> None:
     ship, port = "集装箱航运业务", "码头业务"
     assert _tree(rows) == [
         (ship, None),
-        ("其中：美洲地区", ship),
+        ("美洲地区", ship),
         ("欧洲地区", ship),
         ("亚太地区", ship),
         ("中国大陆", ship),
         ("其他国际地区", ship),
         (port, None),
-        ("其中：欧洲地区", port),
+        ("欧洲地区", port),
         ("亚太地区", port),
         ("中国大陆", port),
         ("其他国际地区", port),
@@ -694,7 +713,7 @@ def test_a_named_total_above_its_parts_is_their_parent_and_parts_nest_two_deep()
     """哈投 FY2025 page 21 prints each group's total FIRST (`热电业务合计`) and `总计` last; under
     证券业务 each business is itself the sum of its fees and interest. Dropped as a total, the group
     left its parts at the table's level."""
-    rows = cn_pdf.parse_segment_page(
+    parsed = cn_pdf.parse_segment_page(
         _table(
             [
                 ("热电业务合计", 1616772729.24),
@@ -712,14 +731,15 @@ def test_a_named_total_above_its_parts_is_their_parent_and_parts_nest_two_deep()
             ]
         )
     )
+    rows = [r for r in parsed if not r.stated_total]
     assert _tree(rows) == [
         ("热电业务", None),
-        ("其中：电力", "热电业务"),
+        ("电力", "热电业务"),
         ("热力", "热电业务"),
         ("建材", "热电业务"),
         ("证券业务", None),
         ("经纪业务", "证券业务"),
-        ("其中：佣金", "经纪业务"),
+        ("佣金", "经纪业务"),
         ("利息收入", "经纪业务"),
         ("信用业务", "证券业务"),
         ("利息收入", "信用业务"),
@@ -887,6 +907,440 @@ def test_a_row_named_as_a_heading_with_figures_loses_only_the_colon() -> None:
     """湘财's industry table states `证券业：` with its figures in the same row."""
     rows = cn_pdf.parse_segment_page(_table([("证券业：", 2011976952.75), ("贸易", 276748571.11)]))
     assert [r.name for r in rows] == ["证券业", "贸易"]
+
+
+def test_two_rows_naming_one_member_under_one_parent_are_one_member_with_their_sum() -> None:
+    """1225263103 FY2025: the product table lists `其他` twice at one level (drugs, then the
+    company's other business). The key cannot hold both, and the six lines reconcile only with
+    both, so they are one `其他` carrying the sum; a cost only when both rows state one."""
+    rows = [
+        CnSegmentRow("cninfo:分行业", "医药制造业", 4441368300.00, 1000.0),
+        CnSegmentRow("cninfo:分行业", "医药流通业", 3755237000.00, 1000.0),
+        CnSegmentRow("cninfo:分行业", "化妆品业", 566784300.00, 1000.0),
+        CnSegmentRow("cninfo:分行业", "其他", 205752600.00, 1000.0),
+        CnSegmentRow("cninfo:分产品", "肝病用药", 4267666600.00, 1000.0),
+        CnSegmentRow("cninfo:分产品", "心脑血管用药", 115427300.00, 1000.0),
+        CnSegmentRow("cninfo:分产品", "其他", 58274400.00, 300.0),
+        CnSegmentRow("cninfo:分产品", "医药流通业", 3755237000.00, 1000.0),
+        CnSegmentRow("cninfo:分产品", "化妆品业", 566784300.00, 1000.0),
+        CnSegmentRow("cninfo:分产品", "其他", 205752600.00, 200.0),
+    ]
+    facts = cn_pdf.facts_from_rows(rows, "2025-12-31")
+    other = [
+        (f.metric_code, f.value, f.partition_id)
+        for f in facts
+        if f.axis == "cninfo:分产品" and f.member_code == "cninfo:其他"
+    ]
+    assert other == [("revenue", 264027000.0, 1), ("cost_of_revenue", 500.0, 1)]
+    assert {f.partition_id for f in facts} == {1}
+    no_cost = [*rows[:9], replace(rows[9], cost=None)]
+    merged = [
+        f for f in cn_pdf.facts_from_rows(no_cost, "2025-12-31") if f.member_code == "cninfo:其他"
+    ]
+    assert [(f.axis, f.metric_code) for f in merged] == [
+        ("cninfo:分行业", "revenue"),
+        ("cninfo:分行业", "cost_of_revenue"),
+        ("cninfo:分产品", "revenue"),
+    ]
+    # Under different parents they are different members, and nothing is merged.
+    nested = [replace(rows[6], parent="医药制造业"), replace(rows[9], parent=None)]
+    assert len(cn_pdf._merged(nested)) == 2
+
+
+def test_a_heading_read_again_is_another_year_s_table_and_ends_the_reading() -> None:
+    """厦门钨业 FY2025 prints its 2025 tables on page 41 and, on page 42, 2024's restated under
+    the same headings. Read with the next page, they were a second set of this year's rows."""
+    restated = [
+        it("主营业务分行业情况", 271.4, 400.0),
+        it("分行业", 103.3, 380.0),
+        it("营业收入", 172.6, 380.0),
+        it("营业成本", 257.7, 380.0),
+        it("钨钼", 95.5, 360.0),
+        TextItem("16,754,700,008.91", 160.0, 360.0, 245.0),
+        # and the rest of that year after it, whatever this year printed
+        it("主营业务分地区情况", 271.4, 340.0),
+        it("分地区", 103.3, 320.0),
+        it("营业收入", 172.6, 320.0),
+        it("营业成本", 257.7, 320.0),
+        it("国内", 95.5, 300.0),
+        TextItem("16,754,700,008.91", 160.0, 300.0, 245.0),
+    ]
+    rows = segments([*_table([("钨钼等有色金属", 19632101618.50)]), *restated])
+    assert [(r.name, r.revenue) for r in rows] == [("钨钼等有色金属", 19632101618.50)]
+    # A table counts once its header is read: 1225022492 titles its section `(1). 主营业务分行业
+    # 情况` above the table's own heading. And an explanation naming a table is no heading: it
+    # follows each table there, and the next table is still this year's.
+    titled = [it("(1). 主营业务分行业情况", 170.1, 780.0), *_table([("投资类业务", 1554440867.45)])]
+    explained = [
+        it("主营业务分行业情况的说明", 165.4, 560.0),
+        it("主营业务分产品情况", 271.4, 540.0),
+        it("分产品", 103.3, 520.0),
+        it("营业收入", 172.6, 520.0),
+        it("营业成本", 257.7, 520.0),
+        it("资管", 95.5, 500.0),
+        TextItem("476,869,479.14", 160.0, 500.0, 245.0),
+    ]
+    assert [(r.axis, r.name) for r in segments([*titled, *explained])] == [
+        ("cninfo:分行业", "投资类业务"),
+        ("cninfo:分产品", "资管"),
+    ]
+
+
+def test_a_row_numbered_beside_the_foot_is_not_a_page_number() -> None:
+    """1225121079 FY2025 page 13: `7、华南区` is two items, `7` and `、华南区`, on a line near the
+    foot. `7` matches a folio and lost the row its number: only a folio alone on its line goes."""
+    first = [
+        it("主营业务分地区情况", 271.4, 300.0),
+        it("分地区", 103.3, 280.0),
+        it("营业收入", 172.6, 280.0),
+        it("营业成本", 257.7, 280.0),
+        TextItem("7", 95.5, 80.0, 100.8),
+        it("、华南区", 100.8, 80.0),
+        TextItem("749,334,430.96", 160.0, 80.0, 245.0),
+        TextItem("13", 295.0, 40.0, 305.0),
+    ]
+    items, _ = cn_pdf.join_pages(first, [], [it("说明", 95.5, 760.0)], [])
+    assert [i.s for i in items].count("7") == 1
+    assert "13" not in [i.s for i in items]
+
+
+def test_the_target_is_the_largest_total_the_page_states() -> None:
+    """1225011770 FY2025: the product and geography tables detail only steel and agree on 37.24 bn;
+    the industry table covers the company and states 合计 57.86 bn. 1225177612: the product split
+    (18.65 bn, before eliminations) out-sums the industry table, whose 合计 states 18.39 bn. The
+    filing's own total decides, as SEC's consolidated figure does."""
+    steel = [
+        CnSegmentRow("cninfo:分行业", "钢铁制造与销售", 37242455260.03, None),
+        CnSegmentRow("cninfo:分行业", "焦炭", 20615878850.30, None),
+        CnSegmentRow("cninfo:分行业", "合计", 57858334110.33, None, stated_total=True),
+        CnSegmentRow("cninfo:分产品", "专用板材", 21901783230.50, None),
+        CnSegmentRow("cninfo:分产品", "特钢长材", 15340672029.53, None),
+        CnSegmentRow("cninfo:分产品", "合计", 37242455260.03, None, stated_total=True),
+        CnSegmentRow("cninfo:分地区", "国内", 32180885137.10, None),
+        CnSegmentRow("cninfo:分地区", "国外", 5061570122.93, None),
+    ]
+    facts = cn_pdf.facts_from_rows(steel, "2025-12-31")
+    assert {f.reconciled_to for f in facts} == {57858334110.33}
+    assert {f.axis: f.partition_id for f in facts if f.axis == "cninfo:分行业"} == {
+        "cninfo:分行业": 1
+    }
+    assert {f.partition_id for f in facts if f.axis != "cninfo:分行业"} == {0}
+    assert not any(f.member_code == "cninfo:合计" for f in facts)
+
+
+def test_a_split_reconciles_to_the_fen_not_to_half_a_percent() -> None:
+    """1225177612 FY2025: five of six products sum to 18,395.9 m against the stated 18,386.3 m, a
+    coincidence 0.05% off that SEC's 0.5% tolerance placed as a split. A 万元 table's rounding,
+    100 yuan a cell, still reconciles."""
+    products = [
+        ("纯碱", 3799632317.89),
+        ("粘胶短纤维", 10209472004.91),
+        ("聚氯乙烯树脂", 1887422654.18),
+        ("电", 254781812.44),
+        ("蒸汽", 1036340080.26),
+        ("烧碱", 1463052917.56),
+    ]
+    rows = [CnSegmentRow("cninfo:分产品", n, v, None) for n, v in products]
+    rows.append(CnSegmentRow("cninfo:分行业", "合计", 18386277345.79, None, stated_total=True))
+    assert {f.partition_id for f in cn_pdf.facts_from_rows(rows, "2025-12-31")} == {0}
+    # 20 万元 rows each rounded to 0.01 万元 (100 yuan), 1,900 yuan short of a 100 m total.
+    rounded = [CnSegmentRow("cninfo:分地区", f"地区{n}", 4999900.0, None) for n in range(19)]
+    rounded.append(CnSegmentRow("cninfo:分地区", "地区19", 5000000.0, None))
+    rounded.append(CnSegmentRow("cninfo:分地区", "合计", 100000000.0, None, stated_total=True))
+    assert {f.partition_id for f in cn_pdf.facts_from_rows(rounded, "2025-12-31")} == {1}
+
+
+def test_parts_may_miss_their_parent_by_the_rounding_of_each_printed_figure() -> None:
+    """中国电影 FY2025 page 26: regions 1-7 sum to 4,746,459,154.20 under `一、国内`
+    4,746,459,154.21, every cell rounded to the fen. A 万元 table rounds to 0.01 万元 (100 yuan)."""
+    regions = [216723199.73, 1073539126.98, 458385896.69, 1668144878.66, 242297794.84,
+               338033826.34, 749334430.96]  # fmt: skip
+    rows = [CnSegmentRow("cninfo:分地区", "一、国内", 4746459154.21, None)]
+    rows += [CnSegmentRow("cninfo:分地区", f"{n + 1}、区", v, None) for n, v in enumerate(regions)]
+    assert [r.parent for r in cn_pdf._nested(rows)][1:] == ["一、国内"] * 7
+    # Off by more than the rounding allows: no parts.
+    off = [*rows[:1], *(replace(r, revenue=r.revenue + 0.01) for r in rows[1:])]
+    assert all(r.parent is None for r in cn_pdf._nested(off))
+
+    # In 万元 a figure is printed to 0.01 万元, 100 yuan, so it is off by at most 50, and a parent
+    # with two parts by 150: 100 short is rounding, 200 short is not.
+    def wan(short: float) -> list[CnSegmentRow]:
+        return [
+            CnSegmentRow("cninfo:分行业", "合并", 30000.0, None),
+            CnSegmentRow("cninfo:分行业", "甲", 10000.0, None),
+            CnSegmentRow("cninfo:分行业", "乙", 20000.0 - short, None),
+        ]
+
+    assert [r.parent for r in cn_pdf._nested(wan(100.0), step=100.0)] == [None, "合并", "合并"]
+    assert [r.parent for r in cn_pdf._nested(wan(200.0), step=100.0)] == [None, None, None]
+    assert [r.parent for r in cn_pdf._nested(wan(100.0), step=0.01)] == [None, None, None]
+
+
+def test_a_table_s_unit_sets_how_far_its_parts_may_round() -> None:
+    """The step reaches the nesting from the page: in a 万元 table 1.00 + 1.99 under 3.00 is 100
+    yuan short, within the rounding of three figures printed to 0.01 万元."""
+    items = [
+        TextItem("单位：万元", 400.0, 760.0, 450.0),
+        *_table([("合并", 3.00), ("甲", 1.00), ("乙", 1.99)]),
+    ]
+    assert [(r.name, r.parent) for r in segments(items)] == [
+        ("合并", None),
+        ("甲", "合并"),
+        ("乙", "合并"),
+    ]
+
+
+def _rows_of(
+    cells: list[tuple[str, str, str]], extra: list[TextItem] | None = None
+) -> list[TextItem]:
+    """A one-table page with each row's name, revenue cell and cost cell as printed."""
+    items = [
+        it("主营业务分行业情况", 271.4, 755.0),
+        it("分行业", 103.3, 728.6),
+        it("营业收入", 172.6, 728.6),
+        it("营业成本", 257.7, 728.6),
+        *(extra or []),
+    ]
+    for n, (name, revenue, cost) in enumerate(cells):
+        y = 700.0 - 16 * n
+        items += [it(name, 95.5, y), TextItem(revenue, 160.0, y, 245.0)]
+        items.append(TextItem(cost, 250.0, y, 320.0))
+    return items
+
+
+def test_a_figure_with_one_decimal_is_whole_unless_the_next_line_continues_it() -> None:
+    """云天励飞 FY2025 page 41 (万元) drops trailing zeros: `62,389.8` beside `53,608.12`. Read as
+    unfinished, 华南's cost `52,781.7` waited and took 华东's `35,812.07`. A wrapped cell's
+    continuation is bare digits in the same column on the next line."""
+    rows = segments(
+        _rows_of(
+            [
+                ("华南", "83,824.73", "52,781.7"),
+                ("华东", "40,152.03", "35,812.07"),
+                ("消费级", "62,389.8", "53,830.34"),
+                ("西南", "7,166.29", "6,490.64"),
+            ]
+        )
+    )
+    assert [(r.name, r.revenue, r.cost) for r in rows] == [
+        ("华南", 83824.73, 52781.70),
+        ("华东", 40152.03, 35812.07),
+        ("消费级", 62389.80, 53830.34),
+        ("西南", 7166.29, 6490.64),
+    ]
+    wrapped = _rows_of(
+        [("甲", "1,234.5", "1,000.00"), ("", "6", ""), ("乙", "2,000.00", "1,500.00")]
+    )
+    assert [(r.name, r.revenue) for r in segments(wrapped)] == [("甲", 1234.56), ("乙", 2000.0)]
+
+
+def test_a_one_decimal_figure_ending_the_page_is_whole_only_on_a_page_printed_so() -> None:
+    """中海油服 FY2025 page 16 states every figure to one decimal (百万元), its last row at the foot
+    of the page. 彤程 ends page 22 on `2,320,408,095.5` beside money printed to the fen elsewhere:
+    its `5` opens page 23, so that cell is left unfinished rather than read as .50."""
+    cnooc = _rows_of([("钻井服务", "14,898.0", "12,767.7"), ("船舶服务", "5,198.1", "4,899.1")])
+    assert [(r.name, r.revenue, r.cost) for r in segments(cnooc)] == [
+        ("钻井服务", 14898.0, 12767.7),
+        ("船舶服务", 5198.1, 4899.1),
+    ]
+    elsewhere = [TextItem("232,511,791.93", 300.0, 790.0, 360.0)]
+    tongcheng = _rows_of([("特种橡胶助剂", "2,320,408,095.5", "1,751,224,956.7")], elsewhere)
+    assert segments(tongcheng) == []
+
+
+#: 广州发展 FY2025 page 18 (元): rows the filer numbers, two of their names wrapped around figures
+#: set 6.8 pt below the first line, each row between drawn borders.
+GUANGZHOU = [
+    it("主营业务分行业情况", 248.0, 187.2),
+    it("毛利率", 322.2, 166.2),
+    it("分行业", 52.8, 159.5),
+    it("营业收入", 140.6, 159.5),
+    it("营业成本", 243.5, 159.5),
+    it("比上年增", 360.2, 159.5),
+    it("(1)燃煤发电及", 31.4, 131.8),
+    TextItem("4,349,947,127.70", 122.9, 125.0, 206.7),
+    TextItem("3,731,967,878.88", 227.3, 125.0, 311.2),
+    TextItem("14.21", 327.6, 125.0, 353.7),
+    it("供热业务", 31.4, 118.1),
+    it("(2)天然气发电", 31.4, 104.0),
+    TextItem("3,204,831,500.79", 122.9, 97.2, 206.7),
+    TextItem("2,773,644,846.63", 227.3, 97.2, 311.2),
+    it("及供热业务", 31.4, 90.4),
+    it("(3)能源物流业务", 31.4, 76.2),
+    TextItem("29,485,020,343.45", 117.6, 76.2, 206.7),
+    TextItem("29,159,979,509.93", 222.0, 76.2, 311.1),
+]
+GUANGZHOU_BORDERS = [cn_pdf.Rule(y, 25.3, 565.4) for y in (198.0, 183.9, 142.6, 114.8, 87.1, 73.1)]
+
+
+def test_a_numbered_row_is_a_row_and_a_numbered_heading_ends_the_table() -> None:
+    """A numbered line ended the table, so 广州发展's yielded nothing: `(1)燃煤发电及` is a row,
+    told from the next section's heading by its cell, which holds its revenue. The heading below
+    sits under the table's last border, 68 pt above the next one, and the figure set there belongs
+    to whatever follows it."""
+    after = [
+        it("（4）主要销售客户", 89.9, 62.0),
+        it("甲", 31.4, 40.0),
+        TextItem("1,000,000.00", 122.9, 40.0, 206.7),
+    ]
+    rows = segments([*GUANGZHOU, *after], [*GUANGZHOU_BORDERS, cn_pdf.Rule(5.0, 25.3, 565.4)])
+    assert [(r.name, r.revenue, r.cost) for r in rows] == [
+        ("燃煤发电及供热业务", 4349947127.70, 3731967878.88),
+        ("天然气发电及供热业务", 3204831500.79, 2773644846.63),
+        ("能源物流业务", 29485020343.45, 29159979509.93),
+    ]
+    # A heading in a gap no taller than a row is still told by its figures: the next table's top
+    # border is 43 pt below, and the figures under it are outside the heading's band.
+    tight = [*GUANGZHOU_BORDERS, cn_pdf.Rule(30.0, 25.3, 565.4), cn_pdf.Rule(10.0, 25.3, 565.4)]
+    after[1:] = [it("甲", 31.4, 20.0), TextItem("1,000,000.00", 122.9, 20.0, 206.7)]
+    assert [r.name for r in segments([*GUANGZHOU, *after], tight)] == [
+        "燃煤发电及供热业务",
+        "天然气发电及供热业务",
+        "能源物流业务",
+    ]
+    # With no borders drawn, a numbered line is a row only when its figures are on it.
+    flat = [
+        i
+        for i in GUANGZHOU
+        if i.s not in ("供热业务", "及供热业务", "(2)天然气发电") and not i.s.startswith("(1)")
+    ]
+    flat += [it("(1)燃煤发电", 31.4, 125.0), it("(2)天然气发电", 31.4, 97.2)]
+    assert [r.name for r in segments(flat)] == ["燃煤发电", "天然气发电", "能源物流业务"]
+
+
+HEADER = TextItem("2025年年度报告", 223.4, 790.0, 396.8)
+UNDERLINE = cn_pdf.Rule(786.1, 89.8, 530.5)
+
+
+def _border(*ys: float) -> list[cn_pdf.Rule]:
+    return [cn_pdf.Rule(y, 83.7, 537.3) for y in ys]
+
+
+#: 彤程 FY2025 page 22: the industry table's first row is cut by the page break, its name and the
+#: first part of each figure (two cells in one run, a space apart) in the page's last cell.
+TONGCHENG_FOOT = [
+    HEADER,
+    it("主营业务分行业情况", 269.0, 122.5),
+    it("分行业", 105.2, 101.6),
+    it("营业收入", 165.8, 101.6),
+    it("营业成本", 237.6, 101.6),
+    it("毛利率（%）", 295.8, 101.6),
+    it("特种橡胶助剂", 90.4, 80.8),
+    TextItem("2,320,408,095.5 1,751,224,956.7", 153.0, 81.4, 295.1),
+    TextItem("22 / 259", 295.0, 63.1, 325.0),
+]
+#: Page 23: the rest of the cut row above the first border, then the next row.
+TONGCHENG_HEAD = [
+    HEADER,
+    TextItem("5", 216.0, 760.0, 221.2),
+    TextItem("2", 290.0, 760.0, 295.3),
+    it("行业", 90.4, 759.8),
+    it("电子材料行业", 90.4, 741.5),
+    TextItem("985,615,772.46", 155.6, 742.0, 221.1),
+    TextItem("704,568,590.39", 229.6, 742.0, 295.1),
+    TextItem("23 / 259", 295.0, 63.1, 325.0),
+]
+TONGCHENG_ROWS = [
+    ("特种橡胶助剂行业", 2320408095.55, 1751224956.72),
+    ("电子材料行业", 985615772.46, 704568590.39),
+]
+
+
+def _joined(
+    head: list[TextItem],
+    head_rules: list[cn_pdf.Rule],
+    tail: list[TextItem],
+    tail_rules: list[cn_pdf.Rule],
+) -> list[tuple[str, float, float | None]]:
+    items, rules = cn_pdf.join_pages(head, head_rules, tail, tail_rules)
+    return [(r.name, r.revenue, r.cost) for r in segments(items, rules)]
+
+
+def test_a_table_the_page_break_cuts_is_read_whole() -> None:
+    """上海隧道 FY2025: the geography table ends page 17 at 56.32 bn and page 18 opens with `澳门
+    1,253,524,048.26`, completing it at the industry table's 57.58 bn. Read alone, page 17's
+    partial table was the only total it had. Here the second page also states the 合计."""
+    first = [
+        HEADER,
+        it("主营业务分行业情况", 271.4, 300.0),
+        it("分行业", 103.3, 280.0),
+        it("营业收入", 172.6, 280.0),
+        it("营业成本", 257.7, 280.0),
+        it("上海", 95.5, 120.0),
+        TextItem("100.00", 160.0, 120.0, 245.0),
+        it("浙江", 95.5, 104.0),
+        TextItem("200.00", 160.0, 104.0, 245.0),
+        TextItem("17 / 259", 295.0, 63.1, 325.0),
+    ]
+    second = [
+        HEADER,
+        it("澳门", 95.5, 754.4),
+        TextItem("300.00", 160.0, 754.4, 245.0),
+        it("合计", 95.5, 738.4),
+        TextItem("600.00", 160.0, 738.4, 245.0),
+        it("（2）产销量情况分析表", 89.9, 700.0),
+        it("江苏", 95.5, 680.0),
+        TextItem("1,000.00", 160.0, 680.0, 245.0),
+        TextItem("18 / 259", 295.0, 63.1, 325.0),
+    ]
+    pages = {0: first, 1: second}
+    result = cn_pdf.segment_facts_from_pdf(_blank_pages(2), items_of=lambda _d, i: pages[i])
+    assert result.page == 1
+    assert [(f.member_code, f.value, f.partition_id, f.reconciled_to) for f in result.facts] == [
+        ("cninfo:上海", 100.0, 1, 600.0),
+        ("cninfo:浙江", 200.0, 1, 600.0),
+        ("cninfo:澳门", 300.0, 1, 600.0),
+    ]
+    # What repeats on every page is not read twice, and no folio is.
+    items, rules = cn_pdf.join_pages(first, [UNDERLINE], second, [UNDERLINE])
+    assert [i.s for i in items].count(HEADER.s) == 1
+    assert not [i.s for i in items if "/ 259" in i.s]
+    assert rules == [UNDERLINE]
+
+
+def test_a_row_the_page_break_cuts_is_one_row_with_its_whole_name() -> None:
+    """彤程 FY2025: `特种橡胶助剂` and `2,320,408,095.5 1,751,224,956.7` end page 22 in a drawn
+    cell; `行业`, `5` and `2` open page 23 above its first border. The cell the break closed goes,
+    so the name is whole; and two cells a space apart split even one decimal into being set."""
+    assert _joined(
+        TONGCHENG_FOOT, _border(119.2, 91.4, 77.4), TONGCHENG_HEAD, _border(756.0, 728.2)
+    ) == (TONGCHENG_ROWS)
+    # A second page that draws the cut row's cell its own top border: both borders go.
+    assert (
+        _joined(
+            TONGCHENG_FOOT, _border(119.2, 91.4, 77.4), TONGCHENG_HEAD, _border(768.0, 756.0, 728.2)
+        )
+        == TONGCHENG_ROWS
+    )
+
+
+def test_a_page_opening_with_prose_keeps_the_border_the_table_ended_on() -> None:
+    """A paragraph's last line set in the name column above the second page's first border is no
+    part of a name: only figures there say a row was cut."""
+    foot = [
+        *TONGCHENG_FOOT[:6],
+        it("橡胶助剂", 90.4, 80.8),
+        TextItem("2,320,408,095.55 1,751,224,956.72", 153.0, 81.4, 295.1),
+    ]
+    head = [it("补偿。", 90.4, 770.0), *TONGCHENG_HEAD[4:]]
+    assert _joined(foot, _border(119.2, 91.4, 77.4), head, _border(756.0, 728.2)) == [
+        ("橡胶助剂", 2320408095.55, 1751224956.72),
+        ("电子材料行业", 985615772.46, 704568590.39),
+    ]
+
+
+def test_a_stated_total_ends_a_run_of_parts() -> None:
+    """Rows after a `合计` are never parts of a row before it: here 50 + 30 + 20 would make
+    `合计`, 华东 and 华南 the parts of 全国 if the total did not close the run."""
+    rows = cn_pdf._nested(
+        [
+            CnSegmentRow("cninfo:分地区", "全国", 100.0, None),
+            CnSegmentRow("cninfo:分地区", "合计", 50.0, None, stated_total=True),
+            CnSegmentRow("cninfo:分地区", "华东", 30.0, None),
+            CnSegmentRow("cninfo:分地区", "华南", 20.0, None),
+        ]
+    )
+    assert [r.parent for r in rows] == [None, None, None, None]
 
 
 def test_the_target_is_the_total_most_tables_agree_on() -> None:
