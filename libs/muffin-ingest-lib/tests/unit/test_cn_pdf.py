@@ -1536,3 +1536,280 @@ def test_text_and_rules_drawn_outside_their_clip_are_not_on_the_page() -> None:
         document.close()
     assert [i.s for i in items] == ["Seen", "Inside"]
     assert [round(r.y) for r in rules] == [20]
+
+
+# --- Shenzhen's `营业收入构成` table -------------------------------------------------------------
+#
+# MEASURED 2026-11-16: the Dagster drain's first runs read rows from 0 of 562 Shenzhen reports,
+# against 61 of 163 Shanghai ones. Shenzhen prints no mandated heading; its split is one table,
+# `营业收入构成`, with the company's total first and a row per group (`分行业`, `分产品`, `分地区`,
+# `分销售模式`) over its members, the amount and its share of revenue for each year, and no cost.
+# Every fixture below is the geometry pdfium gives for a real report (x where an item starts, `end`
+# where it ends, y its baseline), cut to the lines each rule is about.
+
+
+def at(s: str, x: float, end: float, y: float) -> TextItem:
+    return TextItem(s, x, y, end)
+
+
+def _composition_header(y: float) -> list[TextItem]:
+    """9900000141 FY2022 (page 16): the heading, the unit, the years and the column labels."""
+    return [
+        at("（", 56, 65, y),
+        at("1", 66, 71, y),
+        at("）", 71, 80, y),
+        at("营业收入构成", 83, 139, y),
+        at("单位：元", 494, 530, y - 27),
+        at("2022", 235, 252, y - 45.7),
+        at("年", 253, 262, y - 45.7),
+        at("2021", 390, 408, y - 45.7),
+        at("年", 409, 418, y - 45.7),
+        at("同比增减", 494, 530, y - 55.3),
+        at("金额", 202, 220, y - 64.9),
+        at("占营业收入比重", 256, 319, y - 64.9),
+        at("金额", 357, 375, y - 64.9),
+        at("占营业收入比重", 413, 476, y - 64.9),
+    ]
+
+
+def _composition_row(name: str, amount: str, x: float, y: float) -> list[TextItem]:
+    """A member's line: its name, this year's amount (ending at 246), and the other columns."""
+    return [
+        at(name, 62, 62 + 9 * len(name), y),
+        at(amount, x, 246, y),
+        at("12.34%", 294, 320, y),
+        at("1,000,000.00", 341, 401, y),
+        at("5.17%", 450, 477, y),
+        at("10.63%", 509, 536, y),
+    ]
+
+
+ZHONGHUAN = [
+    *_composition_header(678.5),
+    *_composition_row("营业收入合计", "19,450,638,161.91", 181, 594.4),
+    at("分行业", 62, 89, 575.2),
+    *_composition_row("光伏产品", "12,592,573,895.18", 181, 557.2),
+    *_composition_row("磁性材料", "4,203,950,982.71", 186, 542.2),
+    *_composition_row("锂电池", "1,561,369,295.11", 186, 527.2),
+    *_composition_row("器件", "720,697,317.94", 192, 511.5),
+    *_composition_row("其他", "372,046,670.97", 192, 496.5),
+    at("分地区", 62, 89, 383.7),
+    *_composition_row("境内", "8,111,418,840.95", 186, 366.2),
+    *_composition_row("境外", "11,193,276,049.60", 181, 351.2),
+    *_composition_row("其他业务收入", "145,943,271.36", 192, 335.6),
+]
+
+#: What follows the groups: the sales-model group (直销 and 分销 are channels, not regions), then
+#: the next section, whose table carries `分行业` rows of its own under `营业收入`/`营业成本`.
+AFTER_THE_GROUPS = [
+    at("分销售模式", 62, 107, 318.8),
+    *_composition_row("直销", "13,015,039,304.28", 181, 301.4),
+    *_composition_row("分销", "6,435,598,857.63", 186, 285.8),
+    at("（2）占公司营业收入或营业利润10%以上的行业、产品、地区、销售模式的情况", 56, 385, 256.4),
+    at("单位：元", 494, 530, 211.9),
+    at("营业收入", 147, 183, 184.3),
+    at("营业成本", 231, 267, 184.3),
+    at("毛利率", 305, 332, 184.3),
+    at("分行业", 62, 89, 156.1),
+    at("光伏产品", 62, 98, 138.1),
+    at("12,592,573,895.18", 136, 200, 138.1),
+    at("10,721,147,446.83", 222, 286, 138.1),
+]
+
+
+def test_shenzhen_s_composition_table_is_read_group_by_group() -> None:
+    rows = cn_pdf.parse_segment_page([*ZHONGHUAN, *AFTER_THE_GROUPS], composition=True)
+    assert [(r.axis, r.name, r.revenue, r.cost, r.stated_total) for r in rows] == [
+        ("cninfo:营业收入构成", "营业收入合计", 19450638161.91, None, True),
+        ("cninfo:分行业", "光伏产品", 12592573895.18, None, False),
+        ("cninfo:分行业", "磁性材料", 4203950982.71, None, False),
+        ("cninfo:分行业", "锂电池", 1561369295.11, None, False),
+        ("cninfo:分行业", "器件", 720697317.94, None, False),
+        ("cninfo:分行业", "其他", 372046670.97, None, False),
+        ("cninfo:分地区", "境内", 8111418840.95, None, False),
+        ("cninfo:分地区", "境外", 11193276049.60, None, False),
+        ("cninfo:分地区", "其他业务收入", 145943271.36, None, False),
+    ]
+    # The mandated reader reads none of it: without the composition reading, nothing changes.
+    assert cn_pdf.parse_segment_page([*ZHONGHUAN, *AFTER_THE_GROUPS]) == []
+
+
+def test_each_composition_group_is_a_split_of_the_company_s_total() -> None:
+    rows = cn_pdf.parse_segment_page(ZHONGHUAN, composition=True)
+    facts = cn_pdf.facts_from_rows(rows, "2022-12-31")
+    assert {f.axis for f in facts} == {"cninfo:分行业", "cninfo:分地区"}
+    assert all(f.metric_code == "revenue" and f.currency == "CNY" for f in facts)
+    assert all(f.partition_id == 1 and f.reconciled_to == 19450638161.91 for f in facts)
+
+
+def test_the_composition_table_ends_at_the_notice_before_the_quarterly_table() -> None:
+    """With no sales-model group, the industry-disclosure notice and a quarterly table follow the
+    last group (9900000382 FY2025, page 29): its `营业收入` row would be a region."""
+    quarterly = [
+        at("公司需遵守《深圳证券交易所上市公司自律监管指引第 3 号——行业信息披露》", 57, 516, 289.1),
+        at("单位：元", 493, 529, 271.1),
+        at("营业收入", 62, 98, 214.3),
+        at("416,640,093.59", 160, 246, 214.3),
+    ]
+    rows = cn_pdf.parse_segment_page([*ZHONGHUAN, *quarterly], composition=True)
+    assert rows[-1].name == "其他业务收入" and len(rows) == 9
+
+
+def test_a_composition_header_may_set_its_share_label_over_two_lines() -> None:
+    """9900003427 FY2024 (page 17): `占营业收入` 6 pt above `金额`, `比重` 6 pt below. The amount
+    column ends where the share label starts, or the share (95.97%) would be read beside it."""
+    items = [
+        at("（1） 营业收入构成", 57, 151, 558.8),
+        at("占营业收入", 249, 294, 499.0),
+        at("占营业收入", 411, 456, 499.0),
+        at("金额", 184, 202, 493.0),
+        at("金额", 344, 362, 493.0),
+        at("比重", 262, 280, 487.0),
+        at("比重", 424, 442, 487.0),
+        at("营业收入合计", 68, 122, 470.7),
+        at("23,881,680,710.28", 158, 234, 470.7),
+        at("100%", 280, 298, 470.7),
+        at("分行业", 68, 95, 454.5),
+        at("集成电路封装测试", 68, 140, 440.1),
+        at("22,918,526,750.91", 158, 234, 440.1),
+        at("95.97%", 271, 298, 440.1),
+        at("21,134,845,804.57", 321, 397, 440.1),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 23881680710.28),
+        ("集成电路封装测试", 22918526750.91),
+    ]
+
+
+def test_a_group_label_centred_across_the_table_opens_its_group() -> None:
+    """9900003433 FY2023 (page 20) centres `分行业` and `分产品` at x 283, in the share column.
+    Read only in the name column, the groups never opened and no row had an axis to go to."""
+    items = [
+        at("（1） 营业收入构成", 90, 181, 611.9),
+        at("金额", 163, 183, 546.8),
+        at("占营业收入比重", 220, 289, 546.8),
+        at("营业收入合计", 65, 125, 526.8),
+        at("3,852,339,560.06", 137, 211, 526.8),
+        at("分行业", 283, 313, 506.7),
+        at("流体机械", 65, 105, 486.7),
+        at("3,800,531,840.49", 137, 211, 486.7),
+        at("98.66%", 259, 292, 486.7),
+        at("加工制造业", 65, 115, 466.6),
+        at("51,807,719.57", 150, 211, 466.6),
+        at("分产品", 283, 313, 446.6),
+        at("压缩机（组）", 65, 125, 426.5),
+        at("1,946,583,539.68", 137, 211, 426.5),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.axis, r.name) for r in rows if not r.stated_total] == [
+        ("cninfo:分行业", "流体机械"),
+        ("cninfo:分行业", "加工制造业"),
+        ("cninfo:分产品", "压缩机（组）"),
+    ]
+
+
+def test_an_elimination_s_sign_is_read_wherever_it_is_set() -> None:
+    """Measured 2026-11-16, two ways a negative amount is printed, both read as positive at first:
+    9900009032 FY2024 sets the sign flush against the figure as an item of its own (it fell into
+    the name, `合并抵消-`), and 9900004624 FY2023 sets it on a line of its own above a cell wrapped
+    over three lines. An empty cell's dash beside its name is no sign: that row has no amount, and
+    its name is no neighbour's."""
+    flush = [
+        at("（1） 营业收入构成", 57, 151, 600.0),
+        at("金额", 165, 183, 566.5),
+        at("占营业收入比重", 225, 288, 566.5),
+        at("营业收入合计", 57, 111, 549.2),
+        at("114,601,056,662.29", 138, 210, 549.2),
+        at("分地区", 57, 84, 376.7),
+        at("华南地区", 57, 93, 359.3),
+        at("67,393,687,661.28", 143, 210, 359.3),
+        at("华东地区", 57, 93, 342.2),
+        at("16,343,599,813.21", 143, 210, 342.2),
+        at("华北地区", 57, 93, 324.9),
+        at("27,435,014,704.38", 143, 210, 324.9),
+        at("华中地区", 57, 93, 307.6),
+        at("30,865,136,138.53", 143, 210, 307.6),
+        at("境外地区", 57, 93, 290.3),
+        at("14,339,378,668.54", 143, 210, 290.3),
+        at("合并抵消", 57, 93, 273.2),
+        at("-", 140, 143, 273.2),
+        at("41,775,760,323.65", 143, 210, 273.2),
+        at("-", 261, 264, 273.2),
+        at("36.45%", 264, 292, 273.2),
+    ]
+    rows = cn_pdf.parse_segment_page(flush, composition=True)
+    assert rows[-1].name == "合并抵消" and rows[-1].revenue == -41775760323.65
+    facts = cn_pdf.facts_from_rows(rows, "2024-12-31")
+    # The regions reconcile to the company's total only less the elimination.
+    assert all(f.partition_id == 1 for f in facts)
+
+    wrapped = [
+        at("（1） 营业收入构成", 57, 151, 650.0),
+        at("金额", 163, 181, 623.9),
+        at("占营业收入比重", 221, 284, 623.9),
+        at("65,577,042,044.", 139, 207, 609.5),
+        at("营业收入合计", 57, 111, 603.6),
+        at("04", 198, 207, 597.5),
+        at("分地区", 56.8, 83.8, 234.5),
+        at("65,796,402,937.", 139.0, 206.5, 220.1),
+        at("国内收入", 56.8, 92.8, 214.1),
+        at("100.33%", 255.4, 287.0, 214.1),
+        at("14", 197.6, 206.6, 208.1),
+        at("6,368,311,293.9", 139.0, 206.5, 195.9),
+        at("国外收入", 56.8, 92.8, 189.9),
+        at("4", 202.0, 206.5, 183.9),
+        at("-", 202.0, 206.5, 171.6),
+        at("-", 362.6, 367.1, 171.6),
+        at("合并抵消", 56.8, 92.8, 159.6),
+        at("6,587,672,187.0", 139.0, 206.5, 159.6),
+        at("-10.04%", 255.4, 287.0, 159.6),
+        at("4", 202.0, 206.5, 147.6),
+        # A business with no revenue this year: a dash in its amount cell, beside its name.
+        at("停产业务", 56.8, 92.8, 135.0),
+        at("-", 202.0, 206.5, 135.0),
+        at("1,000.00", 330.0, 367.1, 135.0),
+        at("其他", 56.8, 74.8, 122.0),
+        at("5,000.00", 180.0, 206.5, 122.0),
+    ]
+    rows = cn_pdf.parse_segment_page(wrapped, composition=True)
+    assert [(r.name, r.revenue) for r in rows if not r.stated_total] == [
+        ("国内收入", 65796402937.14),
+        ("国外收入", 6368311293.94),
+        ("合并抵消", -6587672187.04),
+        ("其他", 5000.00),
+    ]
+
+
+def test_the_composition_table_is_read_only_where_no_mandated_heading_is_printed() -> None:
+    """A report printing a mandated table is read from it, exactly as before; one printing none is
+    read from its composition table, found past a page that only mentions it in prose."""
+    prose = [
+        TextItem("2022年年度报告", 200.0, 790.0, 300.0),
+        TextItem("报告期内公司营业收入构成未发生重大变化。", 60.0, 500.0, 420.0),
+    ]
+    pages = {0: prose, 1: ZHONGHUAN}
+    result = cn_pdf.segment_facts_from_pdf(_blank_pages(2), items_of=lambda _d, i: pages[i])
+    assert result.page == 2 and result.period_ending == "2022-12-31"
+    assert len([f for f in result.facts if f.axis == "cninfo:分行业"]) == 5
+
+    mandated = [TextItem("2022年年度报告", 200.0, 790.0, 300.0), *YANGTZE]
+    pages = {0: ZHONGHUAN, 1: mandated}
+    result = cn_pdf.segment_facts_from_pdf(_blank_pages(2), items_of=lambda _d, i: pages[i])
+    assert result.page == 2
+    assert {f.member_code for f in result.facts} == {
+        "cninfo:境内水电行业",
+        "cninfo:其他行业",
+        "cninfo:光伏组件",
+    }
+
+
+def test_a_composition_heading_read_again_is_another_year_s_table() -> None:
+    restated = [
+        *_composition_header(250.0),
+        *_composition_row("营业收入合计", "12,607,410,411.09", 181, 170.0),
+        at("分行业", 62, 89, 150.0),
+        *_composition_row("光伏产品", "6,499,472,478.03", 186, 130.0),
+    ]
+    rows = cn_pdf.parse_segment_page([*ZHONGHUAN, *restated], composition=True)
+    assert [r.name for r in rows][-1] == "其他业务收入" and len(rows) == 9

@@ -97,6 +97,44 @@ NAME_HDR = ("分行业", "分产品", "分地区")
 REV_HDR = "营业收入"
 COST_HDR = "营业成本"
 
+#: SHENZHEN'S FORM: ONE TABLE, `营业收入构成` ("revenue composition"). Measured 2026-11-16 in the
+#: Dagster drain's first runs: 0 of 562 Shenzhen reports gave rows, against 61 of 163 Shanghai
+#: ones, and 11 of 12 sampled Shenzhen reports carry this table instead of the mandated headings.
+#: 1,105 of the 2,173 CNINFO filers are Shenzhen's. Its layout, read off the PDFs:
+#:   `（1） 营业收入构成`, a unit line, `2025 年 | 2024 年`, then
+#:   `金额 | 占营业收入比重 | 金额 | 占营业收入比重 | 同比增减`,
+#:   `营业收入合计` (the company's total), then `分行业`, `分产品`, `分地区` and often
+#:   `分销售模式`, each a row of its own over its members.
+#: Revenue only (no cost column), and the total is CONSOLIDATED revenue, which each group states in
+#: full. Read only when a report carries no mandated heading, so every report the mandated tables
+#: are read from is read exactly as before.
+COMPOSITION = "营业收入构成"
+#: The table's heading as a line of its own (`（1） 营业收入构成`), never a phrase in prose.
+_COMPOSITION_HEADING = re.compile(
+    r"^\s*(?:[（(]\s*[0-9一二三四五六七八九十]+\s*[)）]|[0-9一二三四五六七八九十]+\s*[、.\uff0e])?"
+    r"\s*营业收入构成\s*[:：]?\s*$"
+)
+#: The rows before the table's first group: its `营业收入合计`, the company's revenue. Never a
+#: fact; it is what every group is reconciled against.
+_COMPOSITION_AXIS = "cninfo:营业收入构成"
+#: The groups, each a row of its own with no figures. `分销售模式` (直销/经销 are channels, not
+#: regions) ends the reading, as `主营业务分销售模式` ends the mandated tables. Measured over 44
+#: Shenzhen reports: 分行业 55, 分产品 50, 分地区 33, 分销售模式 25, and no other group label.
+GROUPS: dict[str, str | None] = {
+    "分行业": "cninfo:分行业",
+    "分产品": "cninfo:分产品",
+    "分地区": "cninfo:分地区",
+    "分销售模式": None,
+}
+#: The amount column's label; the share column's (`占营业收入比重`, often set as `占营业收入` over
+#: `比重`) starts where the amount column ends.
+AMOUNT_HDR = "金额"
+SHARE_HDR = "占营业收入"
+#: What ends the table besides `_TABLE_ENDS`: the next section (`占公司营业收入或营业利润10%
+#: 以上的…`), the industry-disclosure notice before the quarterly table (`公司需遵守《深圳证券
+#: 交易所…》`), and a new unit line, which opens another table.
+_COMPOSITION_ENDS = re.compile(r"占公司营业收入|公司需遵守|单位\s*[:：]")
+
 #: WHAT ENDS A TABLE. The edge kept reading until the next mandated heading, so the explanation
 #: under the tables (`…情况的说明`), the next numbered section (`（2）产销量情况分析表`) and
 #: the unparsed sales-model table (`主营业务分销售模式情况`, whose 直销/经销 are not regions)
@@ -276,9 +314,15 @@ _NAME_REACH = 24.0
 
 
 def parse_segment_page(
-    items: Sequence[TextItem], rules: Sequence[Rule] = (), scale: int = 1
+    items: Sequence[TextItem],
+    rules: Sequence[Rule] = (),
+    scale: int = 1,
+    composition: bool = False,
 ) -> list[CnSegmentRow]:
-    """Rebuild the mandated tables from one page's positioned text.
+    """Rebuild the mandated tables from one page's positioned text, or with `composition` the
+    Shenzhen `营业收入构成` table (`COMPOSITION`), read with the same machinery: its amount column
+    is the revenue column, it has no cost column, and its group rows (`GROUPS`) open each table.
+    Without `composition` nothing of that reading runs, so the mandated tables read as before.
 
     AN ITEM IS PLACED IN A COLUMN BY WHERE IT ENDS, between where two header labels START. A money
     cell is right-aligned, so where it starts depends on its length (中免's 17-digit revenue starts
@@ -310,6 +354,8 @@ def parse_segment_page(
     lines = [
         sorted(v, key=lambda i: i.x) for _, v in sorted(buckets.items(), key=lambda kv: -kv[0])
     ]
+    if composition:
+        lines = [_signed(line) for line in lines]
 
     tables: list[tuple[list[_Row], list[tuple[float, str]], float, int]] = []
     name_x = 0.0
@@ -326,14 +372,19 @@ def parse_segment_page(
     opened_at = scale
     #: The axes whose table header has been read: each is read once.
     read: set[str] = set()
+    #: Reading the composition table (from its heading until it ends), and whether its header has
+    #: been read (a second heading after it is another year's table).
+    composing = composed = False
+    #: The next revenue completed is negative: its sign was set on a line of its own.
+    negate = False
 
     def close() -> None:
-        nonlocal rows, names, rev, cost, cost_held, top, owed
+        nonlocal rows, names, rev, cost, cost_held, top, owed, negate
         if rows or names:
             tables.append((rows, names, name_x, opened_at))
         rows, names = [], []
         rev, cost = _Column(), _Column()
-        cost_held, top, owed = None, None, False
+        cost_held, top, owed, negate = None, None, False, False
 
     heights = [sum(i.y for i in line) / len(line) for line in lines]
     to_the_fen = any(_MONEY_TO_THE_FEN.match(i.s.strip()) for i in items)
@@ -402,16 +453,71 @@ def parse_segment_page(
             opened_at = scale
             name_end = rev_end = cost_end = 0.0
             continue
+        if composition and _COMPOSITION_HEADING.match(joined):
+            close()
+            if composed:
+                break  # another year's table, as for a mandated heading read twice
+            axis, composing = _COMPOSITION_AXIS, True
+            opened_at = scale
+            name_end = rev_end = cost_end = name_x = 0.0
+            continue
         if not axis:
             continue
         if rev_end and (
-            _TABLE_ENDS.search(joined) or (_NUMBERED.match(joined) and not is_a_row(k))
+            _TABLE_ENDS.search(joined)
+            or (composing and _COMPOSITION_ENDS.search(joined))
+            or (_NUMBERED.match(joined) and not is_a_row(k))
         ):
             close()
             axis = ""
+            composing = False
             continue
 
-        name_h = next((i for i in line if i.s.strip() in NAME_HDR), None)
+        if composing:
+            if not rev_end:
+                # The amount column's label, and the share column's beside it, which a narrow
+                # table sets over two lines (`占营业收入` 6 pt above `金额`, `比重` 6 pt below).
+                amount_h = next((i for i in line if i.s.strip() == AMOUNT_HDR), None)
+                if amount_h is None:
+                    continue
+                share = [
+                    i.x
+                    for n in range(max(0, k - 3), min(len(lines), k + 4))
+                    if abs(heights[n] - y) <= 15
+                    for i in lines[n]
+                    if i.s.strip().startswith(SHARE_HDR) and i.x > amount_h.x
+                ]
+                if share:
+                    close()
+                    composed = True
+                    name_end, rev_end = amount_h.x, min(share)
+                    cost_end = rev_end  # no cost column
+                continue
+            # A group row is the label alone on its line, wherever it is set: in the name column,
+            # or centred across the table (9900003433's `分行业` at x 283).
+            label = _label(tidy_member_name("".join(i.s for i in line)))
+            if label in GROUPS:
+                close()
+                group = GROUPS[label]
+                axis = group or ""
+                composing = group is not None
+                continue
+            if not name_x:
+                first = next((i for i in line if _end(i) <= name_end and i.s.strip()), None)
+                if first is not None:
+                    name_x = (first.x + _end(first)) / 2
+            # A NEGATIVE CELL SET ON SEVERAL LINES CAN CARRY ITS SIGN ON A LINE OF ITS OWN:
+            # 9900004624's `合并抵消` is `-` / `6,587,672,187.0` / `4`, the minus at the cell's
+            # right edge on a line holding nothing else of the row (its share, -10.04%, is on the
+            # figure's line). An empty cell's dash is on its row's line, beside the name: that row
+            # has no revenue this year, and its name is no other row's.
+            in_amount = [i for i in line if name_end < _end(i) <= rev_end]
+            if len(in_amount) == 1 and in_amount[0].s.strip() in _MINUS and not rev.open:
+                if any(_end(i) <= name_end for i in line):
+                    continue
+                negate = True
+
+        name_h = None if composing else next((i for i in line if i.s.strip() in NAME_HDR), None)
         rev_h = next((i for i in line if _labelled(i, REV_HDR)), None)
         cost_h = next((i for i in line if _labelled(i, COST_HDR)), None)
         if name_h is not None and rev_h is not None and cost_h is not None:
@@ -461,6 +567,8 @@ def parse_segment_page(
         revenue = rev.take(in_rev)
         if revenue is None:
             continue
+        if negate:
+            revenue, negate = -abs(revenue), False
         rows.append(
             _Row(
                 axis=axis,
@@ -493,8 +601,48 @@ def parse_segment_page(
             (tidy_member_name("".join(t for _, t in sorted(r.names, key=lambda n: -n[0]))), r)
             for r in table_rows
         ]
+        if table_rows and table_rows[0].axis == _COMPOSITION_AXIS:
+            # The composition table's own total (`营业收入合计`), above its first group: what
+            # each group is a split of. A row there that is no total belongs to no group.
+            out.extend(
+                CnSegmentRow(r.axis, n, r.revenue, None, stated_total=True)
+                for n, r in named
+                if _TOTAL.search(n)
+            )
+            continue
         kept = _without_restated_totals([(n, r) for n, r in named if n], headings)
         out.extend(_nested(kept, step=0.01 * table_scale))
+    return out
+
+
+#: A minus sign set as an item of its own.
+_MINUS = ("-", "\uff0d", "\u2014", "\u2013")  # -, full-width, em and en dash
+#: How close a minus must be to the figure after it to be its sign: flush, as measured (0.0 pt).
+_SIGN_GAP = 1.0
+
+
+def _signed(line: list[TextItem]) -> list[TextItem]:
+    """A line with each minus sign set flush against a figure joined to it.
+
+    MEASURED 2026-11-16 ON THE COMPOSITION TABLES: an elimination row prints its sign as an item of
+    its own, flush against the figure (9900009032's `合并抵消` `-`@140-143 then
+    `41,775,760,323.65`@143-210). Read apart, the sign was an empty cell and the figure positive,
+    or the sign fell in the name column and the member was named `合并抵消-`; either way the
+    elimination was added where the filing subtracts it, and the geography split could not
+    reconcile. An empty cell's dash stands alone, apart from any figure, and stays."""
+    out: list[TextItem] = []
+    for item in line:
+        prev = out[-1] if out else None
+        if (
+            prev is not None
+            and prev.s.strip() in _MINUS
+            and prev.end is not None
+            and 0.0 <= item.x - prev.end <= _SIGN_GAP
+            and _NUMERIC.match(item.s.strip())
+        ):
+            out[-1] = TextItem("-" + item.s.strip(), prev.x, item.y, item.end)
+            continue
+        out.append(item)
     return out
 
 
@@ -968,40 +1116,72 @@ def join_pages(
     )
 
 
+def _composition_heading_on(items: Sequence[TextItem]) -> bool:
+    """Whether a page sets `营业收入构成` as a heading line of its own. A page mentioning it in
+    prose is not where the table is, and reading the table from the page before its own would
+    miss a table that runs onto the page after."""
+    buckets: dict[int, list[TextItem]] = {}
+    for item in items:
+        buckets.setdefault(_js_round(item.y / 3), []).append(item)
+    return any(
+        _COMPOSITION_HEADING.match("".join(i.s for i in sorted(line, key=lambda i: i.x)))
+        for line in buckets.values()
+    )
+
+
 def segment_facts_from_pdf(
     body: bytes,
     scan_pages: int = SCAN_PAGES,
     items_of: Callable[[object, int], list[TextItem]] | None = None,
 ) -> CnParseResult:
     """Read one annual report: the period from the first page stating it, the tables from the first
-    page carrying the industry heading, read with the page after it (`join_pages`)."""
+    page carrying the industry heading, read with the page after it (`join_pages`).
+
+    A report carrying no mandated heading is read from its `营业收入构成` table (`COMPOSITION`):
+    Shenzhen's form, and the only split most Shenzhen reports state. Never both: the mandated
+    tables win wherever they are printed, so a report read from them is read exactly as before.
+    The phrase also appears in prose, so each page carrying it is tried in order until one holds
+    the table."""
     import pypdfium2 as pdfium
 
     read_items = items_of or page_items
     document = pdfium.PdfDocument(body)
     try:
+
+        def joined(index: int, items: list[TextItem]) -> tuple[list[TextItem], list[Rule]]:
+            rules = page_rules(document, index)
+            if index + 1 < len(document):
+                return join_pages(
+                    items, rules, read_items(document, index + 1), page_rules(document, index + 1)
+                )
+            return items, rules
+
         period: str | None = None
         carried = 1  # the unit the previous page stated last
+        #: Pages carrying the composition heading's words, with the unit in force above each.
+        candidates: list[tuple[int, int]] = []
         for index in range(min(scan_pages, len(document))):
             items = read_items(document, index)
             text = "".join(i.s for i in items)
             if period is None:
                 period = fiscal_year_end_from(text)
             if CN_TABLES[0][0] not in text:
+                if COMPOSITION in text and _composition_heading_on(items):
+                    candidates.append((index, carried))
                 carried = unit_stated_last(items, carried)
                 continue
-            rules = page_rules(document, index)
-            if index + 1 < len(document):
-                items, rules = join_pages(
-                    items,
-                    rules,
-                    read_items(document, index + 1),
-                    page_rules(document, index + 1),
-                )
-            rows = parse_segment_page(items, rules, carried)
+            rows = parse_segment_page(*joined(index, items), carried)
             if not rows or period is None:
                 return CnParseResult([], index + 1, period)
             return CnParseResult(facts_from_rows(rows, period), index + 1, period)
+        for index, unit in candidates:
+            rows = parse_segment_page(
+                *joined(index, read_items(document, index)), unit, composition=True
+            )
+            if rows:
+                if period is None:
+                    return CnParseResult([], index + 1, period)
+                return CnParseResult(facts_from_rows(rows, period), index + 1, period)
         return CnParseResult([], None, period)
     finally:
         document.close()
