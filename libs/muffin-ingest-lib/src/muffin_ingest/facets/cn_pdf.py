@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import ctypes
 import re
+import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
@@ -109,9 +110,11 @@ COST_HDR = "营业成本"
 #: full. Read only when a report carries no mandated heading, so every report the mandated tables
 #: are read from is read exactly as before.
 COMPOSITION = "营业收入构成"
-#: The table's heading as a line of its own (`（1） 营业收入构成`), never a phrase in prose.
+#: The table's heading as a line of its own (`（1） 营业收入构成`), never a phrase in prose. The
+#: numbering may be incomplete: 9900000621 sets its `（` a few points off the line, 9900003921 its
+#: `1` (`（ ） 营业收入构成`).
 _COMPOSITION_HEADING = re.compile(
-    r"^\s*(?:[（(]\s*[0-9一二三四五六七八九十]+\s*[)）]|[0-9一二三四五六七八九十]+\s*[、.\uff0e])?"
+    r"^\s*(?:[（(]?\s*[0-9一二三四五六七八九十]*\s*[)）]|[0-9一二三四五六七八九十]+\s*[、.\uff0e])?"
     r"\s*营业收入构成\s*[:：]?\s*$"
 )
 #: The rows before the table's first group: its `营业收入合计`, the company's revenue. Never a
@@ -126,10 +129,13 @@ GROUPS: dict[str, str | None] = {
     "分地区": "cninfo:分地区",
     "分销售模式": None,
 }
-#: The amount column's label; the share column's (`占营业收入比重`, often set as `占营业收入` over
-#: `比重`) starts where the amount column ends.
+#: A note after a group's label: 9900002724 prints `分销售模式（统计数据仅包含机械制造业务）`.
+_GROUP_NOTE = re.compile(r"\s*[（(][^（()）]*[)）]\s*$")
+#: The amount column's label. The share column's label starts where the amount column ends: set
+#: whole (`占营业收入比重`) or over two lines (`占营业收入`/`比重`, `占营业收`/`入比重`,
+#: `占营业`/`收入比重`).
 AMOUNT_HDR = "金额"
-SHARE_HDR = "占营业收入"
+SHARE_HDR = "占营业"
 #: What ends the table besides `_TABLE_ENDS`: the next section (`占公司营业收入或营业利润10%
 #: 以上的…`), the industry-disclosure notice before the quarterly table (`公司需遵守《深圳证券
 #: 交易所…》`), and a new unit line, which opens another table.
@@ -355,7 +361,7 @@ def parse_segment_page(
         sorted(v, key=lambda i: i.x) for _, v in sorted(buckets.items(), key=lambda kv: -kv[0])
     ]
     if composition:
-        lines = [_signed(line) for line in lines]
+        lines = [_joined(line) for line in lines]
 
     tables: list[tuple[list[_Row], list[tuple[float, str]], float, int]] = []
     name_x = 0.0
@@ -495,7 +501,7 @@ def parse_segment_page(
                 continue
             # A group row is the label alone on its line, wherever it is set: in the name column,
             # or centred across the table (9900003433's `分行业` at x 283).
-            label = _label(tidy_member_name("".join(i.s for i in line)))
+            label = _GROUP_NOTE.sub("", _label(tidy_member_name("".join(i.s for i in line))))
             if label in GROUPS:
                 close()
                 group = GROUPS[label]
@@ -617,31 +623,41 @@ def parse_segment_page(
 
 #: A minus sign set as an item of its own.
 _MINUS = ("-", "\uff0d", "\u2014", "\u2013")  # -, full-width, em and en dash
-#: How close a minus must be to the figure after it to be its sign: flush, as measured (0.0 pt).
-_SIGN_GAP = 1.0
+#: How close two items must be to be one figure: flush, as measured (0.0 pt).
+_FLUSH = 1.0
 
 
-def _signed(line: list[TextItem]) -> list[TextItem]:
-    """A line with each minus sign set flush against a figure joined to it.
+def _joined(line: list[TextItem]) -> list[TextItem]:
+    """A line with each figure set in pieces joined into one item.
 
-    MEASURED 2026-11-16 ON THE COMPOSITION TABLES: an elimination row prints its sign as an item of
-    its own, flush against the figure (9900009032's `合并抵消` `-`@140-143 then
-    `41,775,760,323.65`@143-210). Read apart, the sign was an empty cell and the figure positive,
-    or the sign fell in the name column and the member was named `合并抵消-`; either way the
-    elimination was added where the filing subtracts it, and the geography split could not
-    reconcile. An empty cell's dash stands alone, apart from any figure, and stays."""
+    MEASURED 2026-11-16 ON THE COMPOSITION TABLES, two ways a figure arrives in pieces, each piece
+    flush against the next:
+    - AN ELIMINATION'S SIGN AS AN ITEM OF ITS OWN (9900009032's `合并抵消`: `-`@140-143 then
+      `41,775,760,323.65`@143-210). Read apart, the sign was an empty cell and the figure positive,
+      or the sign fell in the name column and the member was named `合并抵消-`; either way the
+      elimination was added where the filing subtracts it.
+    - EVERY DIGIT GROUP AS AN ITEM (9900002261, Yunda: `48` `,` `543` `,` `032` `,` `234` `.` `43`).
+      A cell is placed by where it ends, and the first groups end left of the amount label, so
+      they were read as part of the name and the amount as 32,234.43.
+
+    Only pieces that still make a figure join, so a cell beside its neighbour stays two. An empty
+    cell's dash stands alone, apart from any figure, and stays."""
     out: list[TextItem] = []
     for item in line:
         prev = out[-1] if out else None
-        if (
-            prev is not None
-            and prev.s.strip() in _MINUS
-            and prev.end is not None
-            and 0.0 <= item.x - prev.end <= _SIGN_GAP
-            and _NUMERIC.match(item.s.strip())
-        ):
-            out[-1] = TextItem("-" + item.s.strip(), prev.x, item.y, item.end)
-            continue
+        text = item.s.strip()
+        if prev is not None and prev.end is not None and _NUMERIC.match(text):
+            before = prev.s.strip()
+            if 0.0 <= item.x - prev.end <= _FLUSH and (
+                before in _MINUS
+                or (
+                    _NUMERIC.match(before)
+                    and (_PREFIX.match(before + text) or _COMPLETE.match(before + text))
+                )
+            ):
+                joined = ("-" if before in _MINUS else before) + text
+                out[-1] = TextItem(joined, prev.x, item.y, item.end)
+                continue
         out.append(item)
     return out
 
@@ -1242,7 +1258,7 @@ def page_items(document: object, index: int) -> list[TextItem]:
             nonlocal run_key
             text = "".join(run)
             if text.strip():
-                items.append(TextItem(s=text, x=run_x, y=run_y, end=end_x))
+                items.append(TextItem(s=_ideographs(text), x=run_x, y=run_y, end=end_x))
             run.clear()
             run_key = None
 
@@ -1316,6 +1332,21 @@ def page_items(document: object, index: int) -> list[TextItem]:
     finally:
         textpage.close()
         page.close()
+
+
+#: The Kangxi radicals and the CJK radicals supplement.
+_RADICAL = re.compile(r"[\u2e80-\u2fdf]")
+
+
+def _ideographs(text: str) -> str:
+    """Text with each radical drawn for an ideograph read as that ideograph.
+
+    MEASURED 2026-11-16: some reports' fonts map common characters to the Kangxi radicals block, so
+    9900002701 draws `营业收⼊构成` (U+2F0A for 入) and `⾏业` (U+2F8F for 行), and neither the
+    table's heading nor its labels were found. NFKC maps each radical to its ideograph; it is
+    applied to those blocks alone, because it would also turn full-width brackets and colons into
+    ASCII, changing member names read before. No row the golden reports stored held a radical."""
+    return _RADICAL.sub(lambda m: unicodedata.normalize("NFKC", m.group()), text)
 
 
 def _object_key(

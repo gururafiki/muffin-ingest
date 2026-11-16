@@ -1813,3 +1813,81 @@ def test_a_composition_heading_read_again_is_another_year_s_table() -> None:
     ]
     rows = cn_pdf.parse_segment_page([*ZHONGHUAN, *restated], composition=True)
     assert [r.name for r in rows][-1] == "其他业务收入" and len(rows) == 9
+
+
+def test_a_figure_set_one_digit_group_at_a_time_is_one_figure() -> None:
+    """9900002261 FY2024 (Yunda, page 25) sets every digit group as an item of its own. A cell is
+    placed by where it ends, and `48`, `,` and `543` end left of the amount label: the first groups
+    were read as part of the name and the company's revenue as 32,234.43."""
+
+    def groups(parts: list[tuple[str, float, float]], y: float) -> list[TextItem]:
+        return [at(s, x, end, y) for s, x, end in parts]
+
+    yunda = [
+        at("（1） 营业收入构成", 57, 152, 654.5),
+        at("金额", 168, 186, 600.6),
+        at("占营业收入比重", 228, 291, 600.6),
+        at("营业收入合计", 62, 116, 584.4),
+        *groups(
+            [("48", 139, 148), (",", 148, 153), ("543", 153, 166), (",", 166, 171),
+             ("032", 171, 184), (",", 184, 189), ("234", 189, 202), (".", 202, 207),
+             ("43", 207, 216), ("100", 274, 288), ("%", 288, 292)],
+            584.4,
+        ),
+        at("分行业", 62, 89, 568.0),
+        at("快递服务收入", 62, 116, 553.8),
+        *groups(
+            [("47", 139, 148), (",", 148, 153), ("887", 153, 166), (",", 166, 171),
+             ("143", 171, 184), (",", 184, 189), ("764", 189, 202), (".", 202, 207),
+             ("48", 207, 216), ("98", 265, 274), (".", 274, 279), ("65", 279, 288)],
+            553.8,
+        ),
+    ]  # fmt: skip
+    rows = cn_pdf.parse_segment_page(yunda, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 48543032234.43),
+        ("快递服务收入", 47887143764.48),
+    ]
+    # Two cells a column apart stay two: only pieces that still make one figure join.
+    apart = cn_pdf._joined([at("1,000.00", 150, 186, 1.0), at("2,000.00", 186.5, 220, 1.0)])
+    assert [i.s for i in apart] == ["1,000.00", "2,000.00"]
+
+
+def test_composition_headings_and_labels_as_reports_actually_set_them() -> None:
+    """The heading's numbering incomplete (9900003921 `（ ） 营业收入构成`), the share label split
+    `占营业收`/`入比重` (9900004142, page 23), and the sales-model group with a note after it
+    (9900002724: `分销售模式（统计数据仅包含机械制造业务）`), whose 直销/经销/OEM were read into
+    the geography."""
+    items = [
+        at("（", 57, 66, 523.5),
+        at("） 营业收入构成", 70, 136, 523.5),
+        at("占营业收", 300, 336, 468.4),
+        at("金额", 233, 251, 462.4),
+        at("入比重", 305, 332, 456.4),
+        at("营业收入合计", 62, 116, 438.2),
+        at("2,820,493,237.55", 222, 285, 438.2),
+        at("100%", 320, 341, 438.2),
+        at("分地区", 62, 89, 418.1),
+        at("境内", 62, 80, 398.0),
+        at("2,805,952,645.98", 222, 285, 398.0),
+        at("99.48%", 313, 341, 398.0),
+        at("境外", 62, 80, 380.0),
+        at("14,540,591.57", 235, 285, 380.0),
+        at("分销售模式（统计数据仅包含机械制造业务）", 62, 242, 360.0),
+        at("直销", 62, 80, 345.0),
+        at("1,634,724,265.57", 222, 285, 345.0),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.axis, r.name, r.revenue) for r in rows] == [
+        ("cninfo:营业收入构成", "营业收入合计", 2820493237.55),
+        ("cninfo:分地区", "境内", 2805952645.98),
+        ("cninfo:分地区", "境外", 14540591.57),
+    ]
+
+
+def test_a_radical_drawn_for_an_ideograph_is_read_as_the_ideograph() -> None:
+    """9900002701 FY2023's fonts draw `营业收⼊构成` (U+2F0A for 入) and `⾏业` (U+2F8F for 行):
+    neither the heading nor a label could be found. Only the radical blocks are mapped; full-width
+    brackets and colons, which member names carry, are left as printed."""
+    assert cn_pdf._ideographs("营业收⼊构成") == "营业收入构成"
+    assert cn_pdf._ideographs("⾏业（含其他）：") == "行业（含其他）："
