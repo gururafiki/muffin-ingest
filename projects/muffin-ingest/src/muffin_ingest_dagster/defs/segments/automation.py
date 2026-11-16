@@ -7,6 +7,7 @@ read one queue.
 """
 
 from collections.abc import Mapping, Sequence
+from datetime import UTC, date, datetime
 
 import dagster as dg
 from dagster._core.storage.dagster_run import NOT_FINISHED_STATUSES
@@ -14,6 +15,7 @@ from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_END_TAG,
     ASSET_PARTITION_RANGE_START_TAG,
 )
+from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import sec_segments
 
 from muffin_ingest_dagster.defs.sec.partitions import (
@@ -22,10 +24,26 @@ from muffin_ingest_dagster.defs.sec.partitions import (
     cik_key,
     sec_filers,
 )
-from muffin_ingest_dagster.defs.segments.core import sec_segment
-from muffin_ingest_dagster.defs.segments.raw import raw_sec_instance
+from muffin_ingest_dagster.defs.segments.core import (
+    cninfo_segment,
+    sec_segment,
+    security_cninfo_filer,
+)
+from muffin_ingest_dagster.defs.segments.partitions import (
+    CNINFO_FILER_PARTITION,
+    CNINFO_FILERS_PER_RUN,
+    cninfo_filers,
+    on_floor,
+)
+from muffin_ingest_dagster.defs.segments.raw import (
+    CNINFO_FILINGS,
+    raw_cninfo_filings,
+    raw_cninfo_stock_list,
+    raw_sec_instance,
+)
+from muffin_ingest_dagster.lib.io_managers import RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
-from muffin_ingest_dagster.lib.runtime import SEC_RUN
+from muffin_ingest_dagster.lib.runtime import CNINFO_RUN, SEC_RUN, SHORT_RUN
 
 #: THE NAMES ARE STATE: a job's name keys its run history, a sensor's its cursor and status.
 SEC_SEGMENTS_JOB = "sec_segments"
@@ -117,3 +135,178 @@ def sec_instances_due(
         ],
         cursor=str(wave),
     )
+
+
+# ── CNINFO (China) ─────────────────────────────────────────────────────────────────────────────
+#
+# EVERYTHING HERE SHIPS STOPPED, as the SEC lane did: the edge's `cn-filings` and
+# `security-cn-segments` read the same queue until they are retired, and two writers never read
+# one queue. `new_cninfo_filers` alone runs, because it asks CNINFO nothing.
+
+CNINFO_REGISTRY_JOB = "cninfo_registry"
+CNINFO_SEGMENTS_JOB = "cninfo_segments"
+CNINFO_RETENTION_JOB = "cninfo_retention"
+
+cninfo_registry_job = dg.define_asset_job(
+    CNINFO_REGISTRY_JOB,
+    selection=dg.AssetSelection.assets(raw_cninfo_stock_list, security_cninfo_filer),
+    # Two list requests and one upsert: a short job.
+    run_tags=SHORT_RUN,
+)
+
+#: A filer's search and reports, and their segments, in one run: stage 2 reads what raw holds, so a
+#: report fetched is read before the run ends.
+cninfo_segments_job = dg.define_asset_job(
+    CNINFO_SEGMENTS_JOB,
+    selection=dg.AssetSelection.assets(raw_cninfo_filings, cninfo_segment),
+    partitions_def=cninfo_filers,
+    run_tags=CNINFO_RUN,
+)
+
+
+@dg.schedule(
+    job=cninfo_registry_job,
+    cron_schedule="20 7 * * 1",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description="CNINFO's stock lists, Mondays 07:20 UTC: the org id of every A-share.",
+)
+def cninfo_stock_lists(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    day = context.scheduled_execution_time.date().isoformat()
+    return dg.RunRequest(run_key=day)
+
+
+@dg.sensor(
+    minimum_interval_seconds=6 * 3600,
+    default_status=dg.DefaultSensorStatus.RUNNING,
+    description="An org id an A-share holds becomes a CNINFO filer partition.",
+)
+def new_cninfo_filers(context: dg.SensorEvaluationContext, postgres: Postgres) -> dg.SensorResult:
+    """Keeps the grid in step with `security_filer`. ADDS KEYS AND REQUESTS NOTHING; a key is never
+    deleted (a company gone from the lists keeps its history)."""
+    with postgres.connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            "select distinct filer_id from market.security_filer where source_code = %s",
+            (cn.SOURCE,),
+        )
+        held = [str(r[0]) for r in cur.fetchall()]
+    existing = set(context.instance.get_dynamic_partitions(CNINFO_FILER_PARTITION))
+    new = sorted(k for k in held if k not in existing)
+    context.log.info("%s CNINFO filers held, %s new", len(held), len(new))
+    return dg.SensorResult(
+        run_requests=[],
+        dynamic_partitions_requests=[cninfo_filers.build_add_request(new)] if new else [],
+    )
+
+
+def floor_chunks(grid: Sequence[str], day: date, collected: set[str]) -> list[list[str]]:
+    """The `CNINFO_FILERS_PER_RUN`-aligned chunks holding a filer whose floor day it is, or one
+    never collected. Aligned to grid positions, so run keys stay stable as the grid only appends."""
+    position = {k: n for n, k in enumerate(grid)}
+    due = {k for k in grid if on_floor(k, day) or k not in collected}
+    found = sorted({position[k] // CNINFO_FILERS_PER_RUN for k in due})
+    return [list(grid[c * CNINFO_FILERS_PER_RUN : (c + 1) * CNINFO_FILERS_PER_RUN]) for c in found]
+
+
+@dg.schedule(
+    job=cninfo_segments_job,
+    cron_schedule="35 7 * * *",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description="CNINFO filers on their 30-day floor, daily 07:35 UTC, outside the run windows.",
+)
+def cninfo_filers_floor(context: dg.ScheduleEvaluationContext) -> list[dg.RunRequest]:
+    """THE DAY IS IN EVERY RUN KEY, so a chunk is asked again on its next floor day. A filer never
+    collected is due on any day; the backlog of every filer is the operator's backfill."""
+    day = context.scheduled_execution_time.date()
+    grid = context.instance.get_dynamic_partitions(CNINFO_FILER_PARTITION)
+    collected = set(context.instance.get_materialized_partitions(CNINFO_FILINGS))
+    return [
+        dg.RunRequest(
+            run_key=f"{day.isoformat()}:{keys[0]}",
+            tags={
+                ASSET_PARTITION_RANGE_START_TAG: keys[0],
+                ASSET_PARTITION_RANGE_END_TAG: keys[-1],
+                **CNINFO_RUN,
+            },
+        )
+        for keys in floor_chunks(grid, day, collected)
+    ]
+
+
+#: The columns retention reads of each stored row, without a body.
+_HELD = ("document", "accession", "outcome", "pruned_at")
+
+
+@dg.op(pool="cninfo", description="Drops the bodies of read CNINFO reports (Phase 6 decision 4).")
+def prune_cninfo_reports(
+    context: dg.OpExecutionContext, postgres: Postgres, raw_store: RawStore
+) -> None:
+    """Every read report older than 30 days, then read ones oldest-read first while the reports held
+    whole exceed 5 GB (`cn.choose_prunes`). HOLDS THE `cninfo` POOL, as stage 1 does, so it never
+    rewrites a filer's file while a run is merging into it."""
+    grid = context.instance.get_dynamic_partitions(CNINFO_FILER_PARTITION)
+    stored: list[tuple[str, str, int]] = []
+    for key in grid:
+        for row in raw_store.stored_rows_sized(CNINFO_FILINGS, key, _HELD):
+            if (
+                row.get("document") == "report"
+                and row.get("outcome") == "answered"
+                and row.get("pruned_at") is None
+                and row.get("body_bytes", 0) > 0
+            ):
+                stored.append((key, str(row["accession"]), int(row["body_bytes"])))
+    with postgres.connect() as conn:
+        read = cn.read_at(conn, [url for _, url, _ in stored])
+    held = [cn.HeldReport(key, url, size, read.get(url)) for key, url, size in stored]
+    now = datetime.now(UTC)
+    chosen = cn.choose_prunes(held, now=now)
+    by_key: dict[str, set[tuple[str, str]]] = {}
+    for h in chosen:
+        by_key.setdefault(h.key, set()).add(("report", h.url))
+    pruned = sum(
+        raw_store.prune_bodies(
+            CNINFO_FILINGS, key, rows, ("document", "accession"), pruned_at=now.isoformat()
+        )
+        for key, rows in by_key.items()
+    )
+    total = sum(h.bytes for h in held)
+    freed = sum(h.bytes for h in chosen)
+    context.log.info(
+        "%s reports held whole (%.2f GB, %s unread); pruned %s (%.2f GB)",
+        len(held),
+        total / 1024**3,
+        sum(1 for h in held if h.read_at is None),
+        pruned,
+        freed / 1024**3,
+    )
+    # AN OBSERVATION OF THE RAW ASSET, so the held total has a history beside its materializations.
+    context.log_event(
+        dg.AssetObservation(
+            asset_key=CNINFO_FILINGS,
+            metadata={
+                "held": len(held),
+                "held_bytes": total,
+                "unread": sum(1 for h in held if h.read_at is None),
+                "pruned": pruned,
+                "freed_bytes": freed,
+                "held_bytes_after": total - freed,
+            },
+        )
+    )
+
+
+@dg.job(name=CNINFO_RETENTION_JOB, tags=CNINFO_RUN)
+def cninfo_retention_job() -> None:
+    prune_cninfo_reports()
+
+
+@dg.schedule(
+    job=cninfo_retention_job,
+    cron_schedule="*/15 * * * *",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description="Prunes read CNINFO reports every 15 minutes (a backfill fetches ~9 GB an hour).",
+)
+def cninfo_retention(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())

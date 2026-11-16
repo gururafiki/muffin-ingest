@@ -574,6 +574,114 @@ class ParquetIOManager(dg.UPathIOManager):
                     found.append({c: row.get(c) for c in wanted})
         return found
 
+    def stored_rows_sized(
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        columns: Sequence[str],
+        sized: str = "body",
+    ) -> list[dict[str, Any]]:
+        """`columns` of every stored row, each with `<sized>_bytes`: what that column takes ON DISK
+        for the row, read from the footer, so no body is decoded. Exact for a file of one row per
+        row group (`row_group_rows: 1`); otherwise each row of a group gets an equal share."""
+        import pyarrow.parquet as pq
+
+        path = self._with_extension(self._base_path.joinpath(*asset_key.path, partition_key))
+        if not path.exists():
+            return []
+        stored = pq.ParquetFile(_local(path))
+        names = stored.schema_arrow.names
+        if names == ["collected_nothing"]:
+            return []
+        wanted = [c for c in columns if c in names]
+        index = names.index(sized) if sized in names else None
+        out: list[dict[str, Any]] = []
+        for group in range(stored.num_row_groups):
+            meta = stored.metadata.row_group(group)
+            size = 0 if index is None else meta.column(index).total_compressed_size
+            rows = stored.read_row_group(group, columns=wanted).to_pylist() if wanted else []
+            if not wanted:
+                rows = [{} for _ in range(meta.num_rows)]
+            for row in rows:
+                row[f"{sized}_bytes"] = size // max(1, meta.num_rows)
+                out.append(row)
+        return out
+
+    def prune_bodies(
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        rows: set[tuple[Any, ...]],
+        key_columns: Sequence[str],
+        *,
+        pruned_at: str,
+        compression: str = "zstd",
+    ) -> int:
+        """Drop the `body` of the stored rows whose `key_columns` are in `rows`, stamping
+        `pruned_at` on them; every other column and row is kept. Returns the rows pruned.
+
+        RETENTION, NOT DELETION (Phase 6 decision 4): CNINFO's reports are whole in raw until read,
+        then pruned, and a parser change re-fetches them. The row stays, so what was fetched, when
+        and how it ended is still on record, and a reader can tell a pruned report (`pruned_at`)
+        from one never fetched.
+
+        Copied one row group at a time into a file renamed over the old, as the merge is, so a kill
+        part-way leaves the stored file whole. The caller must hold whatever stops the asset writing
+        the same partition meanwhile (its pool).
+        """
+        import os
+
+        import pyarrow as pa
+        import pyarrow.compute as pc
+        import pyarrow.parquet as pq
+
+        path = self._with_extension(self._base_path.joinpath(*asset_key.path, partition_key))
+        local = _local(path)
+        if not rows or not os.path.exists(local):
+            return 0
+        stored = pq.ParquetFile(local)
+        names = stored.schema_arrow.names
+        if "body" not in names or any(c not in names for c in key_columns):
+            return 0
+        fields = [f for f in stored.schema_arrow if f.name != "pruned_at"]
+        schema = pa.schema(
+            sorted([*fields, pa.field("pruned_at", pa.string())], key=lambda f: f.name)
+        )
+        temporary = f"{local}.pruning"
+        pruned = 0
+        with pq.ParquetWriter(temporary, schema, compression=compression) as writer:
+            for group in range(stored.num_row_groups):
+                table = stored.read_row_group(group)
+                keys = zip(*(table.column(c).to_pylist() for c in key_columns), strict=True)
+                hit = pa.array([k in rows for k in keys], type=pa.bool_())
+                hits = pc.sum(hit).as_py() or 0
+                if hits:
+                    pruned += hits
+                    body = table.column("body")
+                    table = table.set_column(
+                        names.index("body"),
+                        "body",
+                        pc.if_else(hit, pa.scalar(None, body.type), body),
+                    )
+                    previous = (
+                        table.column("pruned_at")
+                        if "pruned_at" in table.column_names
+                        else pa.nulls(table.num_rows, pa.string())
+                    )
+                    stamped = pc.if_else(hit, pa.scalar(pruned_at), previous.cast(pa.string()))
+                    if "pruned_at" in table.column_names:
+                        table = table.set_column(
+                            table.column_names.index("pruned_at"), "pruned_at", stamped
+                        )
+                    else:
+                        table = table.append_column("pruned_at", stamped)
+                writer.write_table(_conformed(table, schema), row_group_size=1)
+        if not pruned:
+            os.remove(temporary)
+            return 0
+        os.replace(temporary, local)
+        return pruned
+
     def _stored_rows(
         self, path: UPath, columns: Sequence[str] | None = None
     ) -> Sequence[Mapping[str, Any]]:
@@ -636,6 +744,26 @@ class RawStore(dg.ConfigurableResource):  # type: ignore[type-arg]
     ) -> Sequence[Mapping[str, Any]]:
         return ParquetIOManager(base_path=self.base_path).stored_rows_where(
             asset_key, partition_key, where, columns
+        )
+
+    def stored_rows_sized(
+        self, asset_key: dg.AssetKey, partition_key: str, columns: Sequence[str]
+    ) -> list[dict[str, Any]]:
+        return ParquetIOManager(base_path=self.base_path).stored_rows_sized(
+            asset_key, partition_key, columns
+        )
+
+    def prune_bodies(
+        self,
+        asset_key: dg.AssetKey,
+        partition_key: str,
+        rows: set[tuple[Any, ...]],
+        key_columns: Sequence[str],
+        *,
+        pruned_at: str,
+    ) -> int:
+        return ParquetIOManager(base_path=self.base_path).prune_bodies(
+            asset_key, partition_key, rows, key_columns, pruned_at=pruned_at
         )
 
 

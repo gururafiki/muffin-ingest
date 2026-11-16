@@ -476,6 +476,7 @@ def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
         "finviz",
         "sec",
         "nse",
+        "cninfo",
         "sql",
         "openfigi_filter",
         "openfigi_mapping",
