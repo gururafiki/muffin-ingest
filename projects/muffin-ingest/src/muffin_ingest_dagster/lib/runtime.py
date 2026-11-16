@@ -48,6 +48,11 @@ SEC_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 #: then each report read in a child of its own. Thirty minutes is twice that budget.
 CNINFO_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 
+#: ONE DART RUN: ten filers' lists and the archives due, bounded by its own 15-minute budget (a cold
+#: archive takes 70-100 s from the node), or the registry, one 3.6 MB ZIP in ~6 minutes (346 s,
+#: 2026-11-16). Thirty minutes is twice the budget.
+DART_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
+
 #: ONE INSIDER DATA SET: one 8-14 MB zip (measured 2006q1-2026q1), read in 1.1-1.5 s, then a
 #: quarter's ~80-125 thousand rows written. Fifteen minutes.
 SEC_DATASET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "900"}

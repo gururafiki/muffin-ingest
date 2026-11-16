@@ -6,6 +6,7 @@ for every filer on every evaluation, never for the partitions a run wrote.
 
 import dagster as dg
 from muffin_ingest.facets import cninfo as cn
+from muffin_ingest.facets import dart as fd
 from muffin_ingest.facets import sec_segments
 
 from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION
@@ -59,7 +60,8 @@ def every_cninfo_report_was_read(postgres: Postgres) -> dg.AssetCheckResult:
     A WARN, NOT AN ERROR, WHILE THE EDGE'S BACKLOG DRAINS: on 2026-11-15, 30,915 full reports were
     unread, most for two months, and an ERROR from the first evaluation would sit red for the weeks
     the drain takes, which is how a gate stops being read. It becomes an ERROR once the backlog is
-    drained (docs/deferred/2026-11-15-the-china-backlog-drains.md in the umbrella).
+    drained (docs/deferred/2026-11-15-the-china-segment-backlog-drains-by-backfill.md in
+    the umbrella).
     """
     with postgres.connect() as conn:
         found = cn.unread(conn, CNINFO_UNREAD_AFTER_DAYS)
@@ -100,4 +102,29 @@ def cninfo_reports_within_cap(
         if held > cn.CAP_BYTES * 3 // 2
         else dg.AssetCheckSeverity.WARN,
         metadata={"held_bytes": held, "reports_held": count, "cap_bytes": cn.CAP_BYTES},
+    )
+
+
+DART_SEGMENT = dg.AssetKey("dart_segment")
+
+#: How long an annual report may sit in `security_filing` never read before the check counts it. A
+#: filer is visited on its 30-day floor, so a month and a week is a stopped lane.
+DART_UNREAD_AFTER_DAYS = 37
+
+
+@dg.asset_check(asset=DART_SEGMENT, blocking=False)
+def every_dart_filing_was_read(postgres: Postgres) -> dg.AssetCheckResult:
+    """No annual report has been held past a floor cycle and never read, and none is behind the
+    parser. A WARN while the registry's newly mapped filers drain (894 Korean equities against the
+    443 the edge had found, 2026-11-16); an ERROR once they have."""
+    with postgres.connect() as conn:
+        found = fd.unread(conn, DART_UNREAD_AFTER_DAYS)
+    return dg.AssetCheckResult(
+        passed=found.never_read == 0 and found.behind_the_parser == 0,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "never_read": found.never_read,
+            "securities": found.securities,
+            "behind_the_parser": found.behind_the_parser,
+        },
     )
