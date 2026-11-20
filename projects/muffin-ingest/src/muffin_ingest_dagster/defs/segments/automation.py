@@ -184,7 +184,8 @@ cninfo_segments_job = dg.define_asset_job(
     job=cninfo_registry_job,
     cron_schedule="20 7 * * 1",
     execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # Started by hand on 2026-11-16 and running since: declared here so a state reset keeps it.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="CNINFO's stock lists, Mondays 07:20 UTC: the org id of every A-share.",
 )
 def cninfo_stock_lists(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
@@ -323,7 +324,8 @@ def cninfo_retention_job() -> None:
     job=cninfo_retention_job,
     cron_schedule="*/15 * * * *",
     execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # Started by hand on 2026-11-16 and running since: declared here so a state reset keeps it.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="Prunes read CNINFO reports every 15 minutes (a backfill fetches ~9 GB an hour).",
 )
 def cninfo_retention(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:

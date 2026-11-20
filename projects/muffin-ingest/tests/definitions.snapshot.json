@@ -2427,13 +2427,13 @@
     },
     "cninfo_retention": {
       "cron_schedule": "*/15 * * * *",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "cninfo_retention"
     },
     "cninfo_stock_lists": {
       "cron_schedule": "20 7 * * 1",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "cninfo_registry"
     },
