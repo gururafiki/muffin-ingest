@@ -110,12 +110,15 @@ COST_HDR = "营业成本"
 #: full. Read only when a report carries no mandated heading, so every report the mandated tables
 #: are read from is read exactly as before.
 COMPOSITION = "营业收入构成"
+#: The heading's wordings, measured over 624 Shenzhen reports: `营业收入构成`, `营业总收入构成`
+#: (东方财富) and `营业收入与构成` (汉钟精机 FY2025).
+_COMPOSITION_WORDS = re.compile(r"营业总?收入与?构成")
 #: The table's heading as a line of its own (`（1） 营业收入构成`), never a phrase in prose. The
 #: numbering may be incomplete: 9900000621 sets its `（` a few points off the line, 9900003921 its
 #: `1` (`（ ） 营业收入构成`).
 _COMPOSITION_HEADING = re.compile(
     r"^\s*(?:[（(]?\s*[0-9一二三四五六七八九十]*\s*[)）]|[0-9一二三四五六七八九十]+\s*[、.\uff0e])?"
-    r"\s*营业收入构成\s*[:：]?\s*$"
+    r"\s*营业总?收入与?构成\s*[:：]?\s*$"
 )
 #: The rows before the table's first group: its `营业收入合计`, the company's revenue. Never a
 #: fact; it is what every group is reconciled against.
@@ -134,6 +137,15 @@ _GROUP_NOTE = re.compile(r"\s*[（(][^（()）]*[)）]\s*$")
 #: The amount column's label. The share column's label starts where the amount column ends: set
 #: whole (`占营业收入比重`) or over two lines (`占营业收入`/`比重`, `占营业收`/`入比重`,
 #: `占营业`/`收入比重`).
+#: A group label the reader does not keep: `分` and two to six CJK characters alone on a line
+#: (汉威科技 prints `分行业应用`, a second product split, after `分产品`). Its rows are skipped
+#: rather than read into the group before it. Two characters are not enough: `分销` is a member.
+_GROUP = re.compile(r"^分[㐀-鿿]{2,6}$")
+#: The rows of a group the reader does not keep.
+_SKIPPED_AXIS = "cninfo:skipped"
+#: A figure in whole units, which a table stated in thousands or more prints (美的's `456,451,731`
+#: 千元): never in a table stated in yuan, where every figure carries its fen.
+_WHOLE = re.compile(r"^-?\d{1,3}(?:,\d{3})+$")
 AMOUNT_HDR = "金额"
 SHARE_HDR = "占营业"
 #: What ends the table besides `_TABLE_ENDS`: the next section (`占公司营业收入或营业利润10%
@@ -160,7 +172,7 @@ _CELL_HEIGHT = 60.0
 SCAN_PAGES = 90
 
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
-_YEAR = re.compile(r"(\d{4,})\s*年\s*年度报告")
+_YEAR = re.compile(r"(\d{4,})\s*年?\s*年度报告")
 
 
 @dataclass(frozen=True, slots=True)
@@ -416,6 +428,15 @@ def parse_segment_page(
                     out.append(fragment + "0")
                 else:
                     out.append(fragment)
+            elif composing and scale > 1 and _WHOLE.match(fragment):
+                # Whole unless the next fragment in its column continues it.
+                following = next(
+                    (c for n in range(k + 1, len(lines)) if (c := column(n, lo, hi))), []
+                )
+                if following and (_DIGITS.match(following[0]) or following[0][:1] in ",."):
+                    out.append(fragment)
+                else:
+                    out.append(fragment + ".00")
             else:
                 out.append(fragment)
         return out
@@ -507,6 +528,10 @@ def parse_segment_page(
                 group = GROUPS[label]
                 axis = group or ""
                 composing = group is not None
+                continue
+            if _GROUP.match(label):
+                close()
+                axis = _SKIPPED_AXIS
                 continue
             if not name_x:
                 first = next((i for i in line if _end(i) <= name_end and i.s.strip()), None)
@@ -616,7 +641,14 @@ def parse_segment_page(
                 if _TOTAL.search(n)
             )
             continue
+        if table_rows and table_rows[0].axis == _SKIPPED_AXIS:
+            continue
         kept = _without_restated_totals([(n, r) for n, r in named if n], headings)
+        if composition:
+            # A group IS the company's total, so an `其中：` with no row above it in the group is
+            # a part of the group, not an orphan: 安科生物 heads its regions `国内销售：` and
+            # prints the first `其中：华东（不含安徽）`, which otherwise stood in no split.
+            kept = [replace(r, parent=None) if r.parent == "" else r for r in kept]
         out.extend(_nested(kept, step=0.01 * table_scale))
     return out
 
@@ -1182,7 +1214,7 @@ def segment_facts_from_pdf(
             if period is None:
                 period = fiscal_year_end_from(text)
             if CN_TABLES[0][0] not in text:
-                if COMPOSITION in text and _composition_heading_on(items):
+                if _COMPOSITION_WORDS.search(text) and _composition_heading_on(items):
                     candidates.append((index, carried))
                 carried = unit_stated_last(items, carried)
                 continue

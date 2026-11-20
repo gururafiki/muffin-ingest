@@ -214,6 +214,15 @@ def test_the_fiscal_period_comes_from_the_document() -> None:
     # 中信建投's header draws `2025` and then `025` over it; pdfium reports both.
     assert cn_pdf.fiscal_year_end_from("2025025年年度报告 中信建") == "2025-12-31"
     assert cn_pdf.fiscal_year_end_from("股票代码：6010662025年年度报告") == "2025-12-31"
+    # Some Shenzhen covers print `2025 年度报告`, the year's 年 shared with 年度 (伟星股份 and
+    # 华利集团, FY2025): a readable composition table was dropped for want of a period.
+    assert cn_pdf.fiscal_year_end_from("证券简称：伟星股份 公告编号：2026-009 2025 年度报告") == (
+        "2025-12-31"
+    )
+    assert (
+        cn_pdf.fiscal_year_end_from("中山华利实业集团股份有限公司 2025 年度报告全文")
+        == "2025-12-31"
+    )
     assert cn_pdf.fiscal_year_end_from("关于召开股东大会的通知") is None
     assert cn_pdf.fiscal_year_end_from("1890年年度报告") is None
 
@@ -1893,3 +1902,114 @@ def test_a_radical_drawn_for_an_ideograph_is_read_as_the_ideograph() -> None:
     brackets and colons, which member names carry, are left as printed."""
     assert cn_pdf._ideographs("营业收⼊构成") == "营业收入构成"
     assert cn_pdf._ideographs("⾏业（含其他）：") == "行业（含其他）："
+
+
+def test_a_table_in_thousands_prints_whole_numbers_and_is_read_in_yuan() -> None:
+    """美的 FY2025 (9900005965, page 49) states its table in 千元 with no decimals: `456,451,731`.
+    Read as figures to the fen, no cell ever completed and Midea had no split at all."""
+    items = [
+        at("（1） 营业收入构成", 57, 152, 410.5),
+        at("单位：", 494, 521, 383.2),
+        at("千元", 521, 539, 383.2),
+        at("金额", 181, 199, 344.7),
+        at("占营业收入比重", 239, 302, 344.7),
+        at("营业收入合计", 47, 101, 324.3),
+        at("456,451,731", 184, 229, 324.3),
+        at("100.00%", 277, 309, 324.3),
+        at("分行业", 47, 74, 304.0),
+        at("制造业", 47, 74, 283.6),
+        at("409,272,424", 184, 229, 283.6),
+        at("89.66%", 281, 309, 283.6),
+        at("其他业务", 47, 83, 263.3),
+        at("47,179,307", 188, 229, 263.3),
+        at("10.34%", 281, 309, 263.3),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 456451731000.0),
+        ("制造业", 409272424000.0),
+        ("其他业务", 47179307000.0),
+    ]
+    # A table stated in yuan never prints a whole number: there it is still being set.
+    in_yuan = [i for i in items if i.s not in ("单位：", "千元")]
+    assert cn_pdf.parse_segment_page(in_yuan, composition=True) == []
+
+
+def test_a_group_the_reader_does_not_know_is_skipped() -> None:
+    """汉威科技 FY2025 (page 60) prints a second product split under `分行业应用` after `分产品`:
+    read into 分产品, the repeated `传感器` and `公用事业` merged into twice their value."""
+
+    def row(name: str, amount: str, y: float) -> list[TextItem]:
+        return [at(name, 57, 57 + 9 * len(name), y), at(amount, 160, 217, y)]
+
+    items = [
+        at("（1） 营业收入构成", 57, 152, 800.0),
+        at("金额", 174, 192, 780.0),
+        at("占营业收入比重", 232, 295, 780.0),
+        *row("营业收入合计", "1,000.00", 760.0),
+        at("分产品", 57, 84, 740.0),
+        *row("传感器", "400.00", 728.0),
+        *row("仪表", "600.00", 716.0),
+        at("分行业应用", 57, 102, 701.0),
+        *row("传感器", "400.00", 686.0),
+        *row("城市", "600.00", 674.0),
+        at("分地区", 57, 84, 659.0),
+        *row("国内", "950.00", 644.0),
+        *row("国外", "50.00", 632.0),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.axis, r.name, r.revenue) for r in rows if not r.stated_total] == [
+        ("cninfo:分产品", "传感器", 400.0),
+        ("cninfo:分产品", "仪表", 600.0),
+        ("cninfo:分地区", "国内", 950.0),
+        ("cninfo:分地区", "国外", 50.0),
+    ]
+
+
+def test_an_of_which_at_the_top_of_a_group_is_part_of_the_group() -> None:
+    """安科生物 FY2025 (page 23, as measured, with its row borders) heads its regions
+    `国内销售：` and prints the first `其中：华东（不含安徽）`: with no row above it, it was an
+    orphan in no split, and the geography could not reconcile. A group is the company's total."""
+    items = [
+        at("（1） 营业收入构成", 57, 152, 800.0),
+        at("金额", 174, 192, 780.0),
+        at("占营业收入比重", 232, 295, 780.0),
+        at("营业收入合计", 68, 122, 760.0),
+        at("2,646,519,767.58", 154, 217, 760.0),
+        at("分地区", 67.7, 94.7, 733.78),
+        at("国内销售：", 67.7, 112.7, 719.38),
+        at("其中：华东（不", 67.7, 130.7, 707.14),
+        at("975,330,030.97", 161.2, 217.5, 701.14),
+        at("含安徽）", 67.7, 103.7, 695.14),
+        at("安徽", 67.7, 85.7, 682.90),
+        at("237,491,732.78", 161.2, 217.5, 682.90),
+        at("华中西南", 67.7, 103.7, 670.66),
+        at("652,183,119.61", 161.5, 217.5, 670.66),
+        at("华北东北", 67.7, 103.7, 658.42),
+        at("325,159,739.68", 161.2, 217.5, 658.42),
+        at("华南", 67.7, 85.7, 646.18),
+        at("337,401,015.25", 161.2, 217.5, 646.18),
+        at("西北", 67.7, 85.7, 633.94),
+        at("115,247,608.58", 161.5, 217.5, 633.94),
+        at("其他业务收入", 67.7, 121.7, 621.70),
+        at("3,193,491.08", 170.2, 217.5, 621.70),
+        at("国外销售：", 67.7, 112.7, 609.46),
+        at("513,029.63", 176.9, 217.5, 609.46),
+    ]
+    rules = [
+        cn_pdf.Rule(y, 62.3, 142.3)
+        for y in (729.10, 716.86, 692.62, 680.38, 668.14, 655.90, 643.66, 631.42, 619.18, 606.94)
+    ]
+    rows = cn_pdf.parse_segment_page(items, rules, composition=True)
+    regions = [(r.name, r.parent) for r in rows if not r.stated_total]
+    assert regions[0] == ("华东（不含安徽）", None)
+    facts = cn_pdf.facts_from_rows(rows, "2025-12-31")
+    assert len(facts) == 8 and all(f.partition_id == 1 for f in facts)
+
+
+def test_the_composition_heading_s_wordings() -> None:
+    """东方财富 prints `营业总收入构成`, 汉钟精机 FY2025 `营业收入与构成`."""
+    for heading in ("（1）营业总收入构成", "（1）营业收入与构成", "（1） 营业收入构成"):
+        assert cn_pdf._COMPOSITION_HEADING.match(heading), heading
+        assert cn_pdf._COMPOSITION_WORDS.search(heading), heading
+    assert not cn_pdf._COMPOSITION_HEADING.match("营业收入构成情况")
