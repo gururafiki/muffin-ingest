@@ -149,7 +149,8 @@ def raw_yahoo_news(context: AssetExecutionContext, config: NewsRun, postgres: Po
     """One request per company for its RSS headlines.
 
     THE `yfinance` POOL, although the host is another: it keeps a launched run from asking Yahoo
-    beside the price night or the company lane. Once in `yahoo_companies`, the run holds it anyway.
+    beside the price night or the company lane. In `yahoo_companies` (since 2026-11-21) the run
+    holds it anyway.
     """
     wanted = set(context.partition_keys)
     with postgres.connect() as conn:

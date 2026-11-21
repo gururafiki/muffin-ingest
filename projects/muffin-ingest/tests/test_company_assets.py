@@ -13,6 +13,7 @@ import itertools
 import json
 import uuid
 from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Set as AbstractSet
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -773,3 +774,32 @@ def test_analyst_actions_run_in_the_company_job_from_the_summary_it_stores() -> 
     assert dg.AssetKey("yahoo_analyst_action") in selected
     actions = loaded_defs().resolve_assets_def("yahoo_analyst_action")
     assert dg.AssetKey("raw_yahoo_summary") in actions.dependency_keys
+
+
+def test_news_and_yahoo_earnings_ride_the_company_rotation() -> None:
+    """Phase 6b decision 2: a company's news and its Yahoo earnings are fetched and parsed on the
+    weekly visit, in the run that stores its summary. Outside the job, nothing schedules either:
+    the news lane would stop as the edge's did on 2026-10-01, with every check still green.
+
+    And no new pool: a run claims every pool its steps use, so a new one would hold the whole
+    company run behind an unrelated lane.
+    """
+    job = company_automation.yahoo_companies_job
+    graph = loaded_defs().resolve_asset_graph()
+    selected = job.selection.resolve(graph)
+    for key in ("raw_yahoo_news", "company_news", "yahoo_earnings"):
+        assert dg.AssetKey(key) in selected, key
+    earnings = loaded_defs().resolve_assets_def("yahoo_earnings")
+    assert dg.AssetKey("raw_yahoo_summary") in earnings.dependency_keys
+    news = loaded_defs().resolve_assets_def("company_news")
+    assert dg.AssetKey("raw_yahoo_news") in news.dependency_keys
+
+    def pools(keys: AbstractSet[dg.AssetKey]) -> set[str]:
+        return {p for k in keys if (p := loaded_defs().resolve_assets_def(k).op.pool) is not None}
+
+    before = selected - {
+        dg.AssetKey("raw_yahoo_news"),
+        dg.AssetKey("company_news"),
+        dg.AssetKey("yahoo_earnings"),
+    }
+    assert pools(selected) == pools(before) == {"yfinance", "sql"}
