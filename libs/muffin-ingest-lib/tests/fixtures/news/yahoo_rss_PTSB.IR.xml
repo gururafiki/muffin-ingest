@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<rss version="2.0">
+    <channel>
+        <copyright>Copyright (c) 2026 Yahoo Inc. All rights reserved.</copyright>
+        <description>Latest Financial News for PTSB.IR</description>
+        <image>
+            <height>45</height>
+            <link>http://finance.yahoo.com/q/h?s=PTSB.IR</link>
+            <title>Yahoo! Finance: PTSB.IR News</title>
+            <url>https://s.yimg.com/rz/stage/p/yahoo_finance_en-US_h_p_finance_2.png</url>
+            <width>144</width>
+        </image>
+        <item>
+            <description>LONDON, November 20, 2026-- FORM 8.3</description>
+            <guid isPermaLink="false">0dd4a297-d935-376e-956f-e22a819dc5c5</guid>
+            <link>https://finance.yahoo.com/markets/options/articles/form-8-3-152500426.html?.tsrc=rss</link>
+            <pubDate>Fri, 20 Nov 2026 15:25:00 +0000</pubDate>
+            <title>Form 8.3</title>
+        </item>
+        <language>en-US</language>
+        <lastBuildDate>Sat, 21 Nov 2026 16:00:26 +0000</lastBuildDate>
+        <link>http://finance.yahoo.com/q/h?s=PTSB.IR</link>
+        <title>Yahoo! Finance: PTSB.IR News</title>
+    </channel>
+</rss>

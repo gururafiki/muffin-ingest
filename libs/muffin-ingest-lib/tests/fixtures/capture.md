@@ -161,3 +161,21 @@ for symbol in ["NPN.JO", "BARC.L"]:
 
 then `gzip -9 -n -c <file> > yahoo_summary_<symbol>.json.gz` (`-n`, so the archive carries no name
 or timestamp and a re-capture of the same bytes is the same file).
+
+## `news/yahoo_rss_*.xml` — Yahoo's per-company RSS headlines, captured 2026-11-21
+
+`https://feeds.finance.yahoo.com/rss/2.0/headline?s=<symbol>&region=US&lang=en-US`, one request per
+symbol with a browser User-Agent, bodies saved byte for byte. Captured for Phase 6b's news lane
+(umbrella docs/specs/2026-11-21-macro-and-events.md, step 1).
+
+| file | what it pins |
+|---|---|
+| `AAPL`, `SAP.DE`, `7203.T` | 18, 18, 16 items: link, title, description, pubDate (RFC 822, `+0000`), guid; **no publisher** |
+| `PTSB.IR` | one item: a thin feed is still an answer |
+| `ZZQQXX` | **200 with an empty channel** whose description reads "Latest Financial News for " and the image title "Yahoo! Finance:  News", the symbol blanked: an unknown symbol, never an HTTP error |
+
+Every link carries `.tsrc=rss` (sometimes after other parameters), which none of the edge's stored
+URLs carries. Measured the same day over 100 companies at one second each: no refusal, 0.97 new
+items per company per week, so a weekly visit reaches a company's whole feed.
+
+To capture again: the same URL with `curl -sA 'Mozilla/5.0'`, one symbol at a time.

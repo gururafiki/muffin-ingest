@@ -90,6 +90,9 @@ CACHE_LOCATIONS: dict[str, str] = {
     "cninfo-static": "static.cninfo.com.cn",
     "wikidata": "query.wikidata.org",
     "yahoo": "query2.finance.yahoo.com",
+    # Phase 6b: per-company RSS headlines (not cached) and nasdaq's earnings calendar by date.
+    "yahoo-rss": "feeds.finance.yahoo.com",
+    "nasdaq": "api.nasdaq.com",
     "alphavantage": "www.alphavantage.co",
     "tiingo": "api.tiingo.com",
     "openbb": "openbb-api",
