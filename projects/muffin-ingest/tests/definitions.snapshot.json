@@ -2751,7 +2751,7 @@
     },
     "macro_daily": {
       "cron_schedule": "40 7 * * *",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "macro_daily"
     },
