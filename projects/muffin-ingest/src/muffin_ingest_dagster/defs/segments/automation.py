@@ -462,8 +462,8 @@ def new_nse_filers(context: dg.SensorEvaluationContext, postgres: Postgres) -> d
     job=nse_segments_job,
     cron_schedule="20 8 * * *",
     execution_timezone="UTC",
-    # Started by hand on 2026-11-20, after the drain had collected every filer (`pmneyhxa`) and a dry
-    # run of its next two ticks asked 19 and 16 small runs: declared here so a state reset keeps it.
+    # Started by hand on 2026-11-20, after the drain had collected every filer (`pmneyhxa`) and a
+    # dry run of its next two ticks asked 19 and 16 small runs: declared so a state reset keeps it.
     default_status=dg.DefaultScheduleStatus.RUNNING,
     description="NSE filers on their 30-day floor, daily 08:20 UTC, outside the run windows.",
 )
