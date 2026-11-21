@@ -2481,7 +2481,7 @@
     },
     "nse_filers_floor": {
       "cron_schedule": "20 8 * * *",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "nse_segments"
     },
