@@ -1,0 +1,61 @@
+{
+ "route": "/api/v1/economy/unemployment",
+ "rows": [
+  {
+   "country": "united_states",
+   "date": "2025-11-01",
+   "value": 0.043
+  },
+  {
+   "country": "united_states",
+   "date": "2025-12-01",
+   "value": 0.040999999999999995
+  },
+  {
+   "country": "united_states",
+   "date": "2026-01-01",
+   "value": 0.047
+  },
+  {
+   "country": "united_states",
+   "date": "2026-02-01",
+   "value": 0.047
+  },
+  {
+   "country": "united_states",
+   "date": "2026-03-01",
+   "value": 0.043
+  },
+  {
+   "country": "united_states",
+   "date": "2026-04-01",
+   "value": 0.04
+  },
+  {
+   "country": "united_states",
+   "date": "2026-05-01",
+   "value": 0.040999999999999995
+  },
+  {
+   "country": "united_states",
+   "date": "2026-06-01",
+   "value": 0.044000000000000004
+  },
+  {
+   "country": "united_states",
+   "date": "2026-07-01",
+   "value": 0.044000000000000004
+  },
+  {
+   "country": "united_states",
+   "date": "2026-08-01",
+   "value": 0.043
+  },
+  {
+   "country": "united_states",
+   "date": "2026-09-01",
+   "value": 0.04
+  }
+ ],
+ "warnings": []
+}

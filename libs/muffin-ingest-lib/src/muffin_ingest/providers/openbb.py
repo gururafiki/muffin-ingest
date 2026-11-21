@@ -40,7 +40,8 @@ unit tests and the CI `checks` job all run without openbb present.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -52,6 +53,16 @@ from muffin_ingest.providers.vocab import no_data_for_subject, throttled
 
 class ProviderRefused(Exception):
     """The provider answered, and the answer was that it will not serve us right now."""
+
+
+#: A credential in a query string: FRED's `api_key=`, FMP's `apikey=`, a `token=`. A provider's
+#: exception often quotes the URL it requested, and the hub's providers put their keys in it.
+_CREDENTIAL = re.compile(r"((?:api_?key|token|key)=)[^&\s'\"]+", re.IGNORECASE)
+
+
+def redacted(text: str) -> str:
+    """`text` with any query-string credential replaced, for logs and metadata."""
+    return _CREDENTIAL.sub(r"\1REDACTED", text)
 
 
 @dataclass
@@ -187,3 +198,94 @@ def sector_performance(provider: str = "finviz") -> Answer:
         return answer_from(
             obb.equity.compare.groups(group="sector", metric="performance", provider=provider)
         )
+
+
+# ── macro: the routes `market.macro_indicator` names ───────────────────────────────────────────
+#
+# THE CATALOGUE IS A CONTROL TABLE, so a series is a row; its ROUTE is still dispatched here, by
+# name, to a typed call. A route not listed is refused rather than walked with `getattr`, and a
+# parameter a route does not take is refused rather than passed: every route takes `**kwargs`, so a
+# misspelled key binds happily and the call silently answers for the default instead.
+
+#: Each route the catalogue may name, and the catalogue parameters it takes.
+MACRO_ROUTES: dict[str, frozenset[str]] = {
+    "/api/v1/economy/fred_series": frozenset({"symbol"}),
+    "/api/v1/economy/cpi": frozenset(),
+    "/api/v1/economy/gdp/real": frozenset(),
+    "/api/v1/economy/unemployment": frozenset(),
+    "/api/v1/fixedincome/government/yield_curve": frozenset(),
+    "/api/v1/fixedincome/rate/effr": frozenset(),
+    "/api/v1/fixedincome/rate/sofr": frozenset(),
+    "/api/v1/index/price/historical": frozenset({"symbol"}),
+    "/api/v1/derivatives/futures/historical": frozenset({"symbol"}),
+    "/api/v1/crypto/price/historical": frozenset({"symbol"}),
+}
+
+#: The OECD routes ask for ONE country, named in the catalogue's `provider_country` (`japan`,
+#: `united_states`). Without it the hub answers for its default country, which would file the US
+#: series under another code.
+MACRO_COUNTRY_ROUTES = frozenset(
+    {"/api/v1/economy/cpi", "/api/v1/economy/gdp/real", "/api/v1/economy/unemployment"}
+)
+
+
+class UnknownMacroRoute(ValueError):
+    """The catalogue names a route, or a parameter, this module has no typed call for."""
+
+
+def macro_series(
+    route: str,
+    *,
+    provider: str,
+    start: date,
+    country: str | None = None,
+    params: Mapping[str, Any] | None = None,
+) -> Answer:
+    """One catalogued series from `start`, the way the edge asked for it (`macro-indicators`).
+
+    THE YIELD CURVE IGNORES `start`: it is a SNAPSHOT, the curve of the latest date, a point per
+    maturity. The other nine are series.
+    """
+    given = dict(params or {})
+    allowed = MACRO_ROUTES.get(route)
+    if allowed is None:
+        raise UnknownMacroRoute(f"no typed call for route {route!r}")
+    extra = sorted(set(given) - allowed)
+    if extra:
+        raise UnknownMacroRoute(
+            f"{route} takes {sorted(allowed)}; the catalogue also names {extra}, which the hub "
+            f"would swallow and answer for its default"
+        )
+    symbol = str(given.get("symbol") or "")
+    if "symbol" in allowed and not symbol:
+        raise UnknownMacroRoute(f"{route} needs a symbol")
+    if route in MACRO_COUNTRY_ROUTES and not country:
+        raise UnknownMacroRoute(f"{route} needs a country")
+    since = start.isoformat()
+
+    from openbb import obb
+
+    with metrics.request(provider):
+        if route == "/api/v1/economy/fred_series":
+            result = obb.economy.fred_series(symbol=symbol, start_date=since, provider=provider)
+        elif route == "/api/v1/economy/cpi":
+            result = obb.economy.cpi(country=country, start_date=since, provider=provider)
+        elif route == "/api/v1/economy/gdp/real":
+            result = obb.economy.gdp.real(country=country, start_date=since, provider=provider)
+        elif route == "/api/v1/economy/unemployment":
+            result = obb.economy.unemployment(country=country, start_date=since, provider=provider)
+        elif route == "/api/v1/fixedincome/government/yield_curve":
+            result = obb.fixedincome.government.yield_curve(provider=provider)
+        elif route == "/api/v1/fixedincome/rate/effr":
+            result = obb.fixedincome.rate.effr(start_date=since, provider=provider)
+        elif route == "/api/v1/fixedincome/rate/sofr":
+            result = obb.fixedincome.rate.sofr(start_date=since, provider=provider)
+        elif route == "/api/v1/index/price/historical":
+            result = obb.index.price.historical(symbol=symbol, start_date=since, provider=provider)
+        elif route == "/api/v1/derivatives/futures/historical":
+            result = obb.derivatives.futures.historical(
+                symbol=symbol, start_date=since, provider=provider
+            )
+        else:  # "/api/v1/crypto/price/historical", the last key of MACRO_ROUTES
+            result = obb.crypto.price.historical(symbol=symbol, start_date=since, provider=provider)
+        return answer_from(result)

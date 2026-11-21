@@ -12,6 +12,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "macro_observation:macro_series_fresh": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "nasdaq_earnings:nasdaq_window_is_current": {
       "additional_deps": [],
       "blocking": false
@@ -426,6 +430,37 @@
         "kind": "time_window",
         "start": "2026-09-01T00:00:00+00:00",
         "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "macro_observation": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_macro_series": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "macro",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "macro_indicator"
       },
       "pools": [
         "sql"
@@ -867,6 +902,36 @@
         "kind": "time_window",
         "start": "2026-09-01T00:00:00+00:00",
         "timezone": "UTC"
+      },
+      "pools": [
+        "yfinance"
+      ],
+      "tags": {}
+    },
+    "raw_macro_series": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "macro",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "openbb",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "macro_indicator"
       },
       "pools": [
         "yfinance"
@@ -2336,6 +2401,16 @@
         "name": "exchange_sweep"
       }
     },
+    "__anonymous_asset_job_new_macro_series": {
+      "assets": [
+        "raw_macro_series"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "macro_indicator"
+      }
+    },
     "__anonymous_asset_job_new_nport_filings": {
       "assets": [
         "raw_nport_filing"
@@ -2462,6 +2537,17 @@
       "partitions": {
         "kind": "dynamic",
         "name": "dart_filer"
+      }
+    },
+    "macro_daily": {
+      "assets": [
+        "macro_observation",
+        "raw_macro_series"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "macro_indicator"
       }
     },
     "nasdaq_earnings_window": {
@@ -2663,6 +2749,12 @@
       "execution_timezone": "UTC",
       "job": "__anonymous_asset_job_heartbeat"
     },
+    "macro_daily": {
+      "cron_schedule": "40 7 * * *",
+      "default_status": "STOPPED",
+      "execution_timezone": null,
+      "job": "macro_daily"
+    },
     "nasdaq_earnings_window": {
       "cron_schedule": "10 7 * * *",
       "default_status": "RUNNING",
@@ -2745,6 +2837,14 @@
         "__anonymous_asset_job_new_exchange_sweeps"
       ],
       "minimum_interval_seconds": 86400,
+      "type": "STANDARD"
+    },
+    "new_macro_series": {
+      "default_status": "RUNNING",
+      "jobs": [
+        "__anonymous_asset_job_new_macro_series"
+      ],
+      "minimum_interval_seconds": 3600,
       "type": "STANDARD"
     },
     "new_nport_filings": {

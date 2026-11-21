@@ -199,3 +199,24 @@ reads `"time-after-hours"`. Measured the same day: p50 2.25 s a request, no refu
 paced at one second.
 
 To capture again: the same URL with `curl -sA 'Mozilla/5.0' -H 'Accept: application/json'`.
+
+## `macro/<code>.json` — openbb's answers for catalogued macro series, captured 2026-11-21
+
+One call each, in-process through the production image (`openbb` with the environment's
+`FRED_API_KEY`), from 400 days before 2026-11-21: what `providers.openbb.macro_series` asks. Each
+file holds the route, `model_dump()` of every result row (dates as strings), and the warnings.
+Captured for Phase 6b's macro lane (umbrella docs/specs/2026-11-21-macro-and-events.md).
+
+| file | what it pins |
+|---|---|
+| `de-10y-yield-fred` | FRED: 13 rows, the value under a key named after the series (`IRLTLT01DEM156N`) |
+| `us-cpi` | OECD: `value` as a FRACTION (0.0374), with `country` and `expenditure` |
+| `us-unemployment` | OECD: **ends at 2026-09-01** (0.04), while the edge served 0.039 for 10-01 |
+| `us-yield-curve` | the Fed: a SNAPSHOT, 11 maturities of one date (`maturity`, `rate`, `maturity_years`) |
+| `us-effr` | the Fed: 274 days, `rate` beside percentiles and target bounds |
+| `gold` | yfinance through openbb: OHLC bars, `date` as `"2026-11-20 00:00:00"` |
+| `jp-cpi` | OECD for Japan: **zero rows and no error**, the catalogued series that has never answered |
+
+To capture again: the probe in the umbrella spec's validation section, in a throwaway container from
+the code location's image (`docker run --rm -i --memory 1g -e FRED_API_KEY <image>`), never inside
+the code location itself.

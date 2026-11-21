@@ -1,0 +1,72 @@
+{
+ "route": "/api/v1/fixedincome/government/yield_curve",
+ "rows": [
+  {
+   "date": "2026-11-19",
+   "maturity": "month_1",
+   "maturity_years": 0.08333333333333333,
+   "rate": 0.042
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "month_3",
+   "maturity_years": 0.25,
+   "rate": 0.0434
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "month_6",
+   "maturity_years": 0.5,
+   "rate": 0.044199999999999996
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_1",
+   "maturity_years": 1.0,
+   "rate": 0.0462
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_2",
+   "maturity_years": 2.0,
+   "rate": 0.047599999999999996
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_3",
+   "maturity_years": 3.0,
+   "rate": 0.0481
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_5",
+   "maturity_years": 5.0,
+   "rate": 0.048600000000000004
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_7",
+   "maturity_years": 7.0,
+   "rate": 0.049400000000000006
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_10",
+   "maturity_years": 10.0,
+   "rate": 0.0504
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_20",
+   "maturity_years": 20.0,
+   "rate": 0.054299999999999994
+  },
+  {
+   "date": "2026-11-19",
+   "maturity": "year_30",
+   "maturity_years": 30.0,
+   "rate": 0.054000000000000006
+  }
+ ],
+ "warnings": []
+}

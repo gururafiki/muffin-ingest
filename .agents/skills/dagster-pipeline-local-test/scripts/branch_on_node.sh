@@ -11,8 +11,9 @@
 #
 # NOT inside the code-location container: its memory limit is shared with the gRPC server and every
 # run, and a probe there was OOM-killed on 2026-10-04. This one gets its own 1 GB and is removed.
-# The two secrets travel through the environment of the docker CLI, never its argv, and are never
-# printed.
+# The secrets travel through the environment of the docker CLI, never its argv, and are never
+# printed: the database and cache URLs, and the provider credentials and User-Agent the code
+# location holds (an unset one stays unset).
 set -euo pipefail
 
 harness=${1:?usage: branch_on_node.sh path/to/harness.py}
@@ -35,6 +36,12 @@ tar cf - -C "$stage" . | ssh muffin '
   IMG=$(docker inspect --format "{{.Config.Image}}" "$ING")
   export INGEST_DATABASE_URL="$(docker exec "$ING" printenv INGEST_DATABASE_URL)"
   export HTTP_CACHE_URL="$(docker exec "$ING" printenv HTTP_CACHE_URL)"
+  KEYS=""
+  for name in FRED_API_KEY OPENFIGI_API_KEY DART_API_KEY MUFFIN_USER_AGENT; do
+    value="$(docker exec "$ING" printenv "$name" || true)"
+    if [ -n "$value" ]; then export "$name=$value"; KEYS="$KEYS -e $name"; fi
+  done
+  unset value
   docker run --rm -i -m 1g --network "container:$ING" \
-    -e INGEST_DATABASE_URL -e HTTP_CACHE_URL --entrypoint sh "$IMG" -c \
+    -e INGEST_DATABASE_URL -e HTTP_CACHE_URL $KEYS --entrypoint sh "$IMG" -c \
     "mkdir -p /tmp/b && tar xf - -C /tmp/b && cd /tmp && PYTHONPATH=/tmp/b python /tmp/b/harness.py"'
