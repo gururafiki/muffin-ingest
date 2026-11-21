@@ -179,3 +179,23 @@ URLs carries. Measured the same day over 100 companies at one second each: no re
 items per company per week, so a weekly visit reaches a company's whole feed.
 
 To capture again: the same URL with `curl -sA 'Mozilla/5.0'`, one symbol at a time.
+
+## `nasdaq/nasdaq_earnings_*.json` — nasdaq's earnings calendar by date, captured 2026-11-21
+
+`https://api.nasdaq.com/api/calendar/earnings?date=<yyyy-mm-dd>` with a browser User-Agent and
+`Accept: application/json`, bodies saved byte for byte. Captured for Phase 6b's earnings lane
+(umbrella docs/specs/2026-11-21-macro-and-events.md, step 1).
+
+| file | what it pins |
+|---|---|
+| `2026-10-30` | a past day, 66 rows: `eps` and `surprise` present (XOM `"$4.23"`, `"8.46"`, a PERCENT) |
+| `2026-11-24` | a day to come, 52 rows: `epsForecast`, `lastYearEPS`, `lastYearRptDt`, no `eps` |
+| `2015-02-03` | 92 rows eleven years back: `"N/A"` and `""` for missing values |
+| `2016-06-29` | **`data: null`** with code 1002 "Earnings Calendar: No record found.": the answer openbb crashes on and the edge stalled behind |
+| `2026-11-21` | a Saturday: `rows: []`, `headers: {}` |
+
+Money is a string (`"$648,310,820,000"`), `fiscalQuarterEnding` reads `"Sep/2026"` and `time`
+reads `"time-after-hours"`. Measured the same day: p50 2.25 s a request, no refusal over 50 dates
+paced at one second.
+
+To capture again: the same URL with `curl -sA 'Mozilla/5.0' -H 'Accept: application/json'`.

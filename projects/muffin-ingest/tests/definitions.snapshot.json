@@ -12,6 +12,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "nasdaq_earnings:nasdaq_window_is_current": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "nse_segment:every_nse_filing_was_read": {
       "additional_deps": [],
       "blocking": false
@@ -428,6 +432,42 @@
       ],
       "tags": {}
     },
+    "nasdaq_earnings": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 60,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_nasdaq_earnings": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "earnings",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 22,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2012-01-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "nse_segment": {
       "automation_condition": null,
       "backfill_policy": {
@@ -830,6 +870,41 @@
       },
       "pools": [
         "yfinance"
+      ],
+      "tags": {}
+    },
+    "raw_nasdaq_earnings": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 60,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "earnings",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "nasdaq",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 22,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2012-01-01T00:00:00+00:00",
+        "timezone": "UTC"
+      },
+      "pools": [
+        "nasdaq"
       ],
       "tags": {}
     },
@@ -2132,6 +2207,37 @@
       ],
       "tags": {}
     },
+    "yahoo_earnings": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_summary": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "earnings",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "yahoo_fiscal_calendar": {
       "automation_condition": null,
       "backfill_policy": {
@@ -2358,6 +2464,22 @@
         "name": "dart_filer"
       }
     },
+    "nasdaq_earnings_window": {
+      "assets": [
+        "nasdaq_earnings",
+        "raw_nasdaq_earnings"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 22,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2012-01-01T00:00:00+00:00",
+        "timezone": "UTC"
+      }
+    },
     "nightly_prices": {
       "assets": [
         "price_bar_history",
@@ -2537,6 +2659,12 @@
       "default_status": "RUNNING",
       "execution_timezone": "UTC",
       "job": "__anonymous_asset_job_heartbeat"
+    },
+    "nasdaq_earnings_window": {
+      "cron_schedule": "10 7 * * *",
+      "default_status": "STOPPED",
+      "execution_timezone": null,
+      "job": "nasdaq_earnings_window"
     },
     "nightly_prices": {
       "cron_schedule": "0 0 * * *",
