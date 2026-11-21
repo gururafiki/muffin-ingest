@@ -35,8 +35,11 @@ nasdaq_earnings_job = dg.define_asset_job(
     # 07:10 UTC: after the company lane (03:30-~06:00), before the SEC wave (11:00), and after US
     # reports of the previous evening are filled in.
     cron_schedule="10 7 * * *",
-    # STOPPED UNTIL THE CUTOVER: the writers use the provider keys the cutover migration adds.
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING SINCE 2026-11-21 (Phase 6b step 4). It shipped STOPPED because the writers use the
+    # provider keys the cutover migration adds (muffin-deployment#532), which retired the edge's
+    # `earnings-calendar` and `earnings-history` in the same deploy. Declared here rather than
+    # toggled in the UI, so a reset of Dagster's state cannot stop it.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="Nasdaq's calendar for the last seven days and the next 21, in one run.",
 )
 def nasdaq_earnings_window(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunRequest]:

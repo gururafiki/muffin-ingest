@@ -13,6 +13,9 @@ from muffin_ingest_dagster.defs.companies.core import (
     yahoo_statement,
 )
 from muffin_ingest_dagster.defs.companies.raw import raw_yahoo_company
+from muffin_ingest_dagster.defs.earnings.core import yahoo_earnings
+from muffin_ingest_dagster.defs.news.core import company_news
+from muffin_ingest_dagster.defs.news.raw import raw_yahoo_news
 from muffin_ingest_dagster.defs.prices.partitions import SECURITY_PARTITION, security_partitions
 from muffin_ingest_dagster.lib import rotation
 from muffin_ingest_dagster.lib.priority import COMPANY_LANE
@@ -34,6 +37,12 @@ RESUME_LOOKBACK = 80
 #: RUN (since 2026-10-30), so its labels are on the statements before the derivation, which waits
 #: for the run's `sql` slot, reads them. ANALYST ACTIONS JOINED ON 2026-11-08, after a live run and
 #: a replay over every stored summary: they read the same document `company_facts` does.
+#:
+#: NEWS AND YAHOO'S EARNINGS JOINED ON 2026-11-21 (Phase 6b decision 2), after a live run of the
+#: news lane on five companies. `yahoo_earnings` reads the summary this run stores, like analyst
+#: actions. `raw_yahoo_news` asks a different Yahoo host, one request a company, and never fails the
+#: run: a 429 leaves the rest `unasked`, and the next week's visit asks again, so a refusal costs
+#: news and never the company's other facts. Both add no pool the run did not already hold.
 yahoo_companies_job = dg.define_asset_job(
     COMPANY_SCHEDULE,
     selection=dg.AssetSelection.assets(
@@ -42,6 +51,9 @@ yahoo_companies_job = dg.define_asset_job(
         yahoo_statement,
         yahoo_fiscal_calendar,
         yahoo_analyst_action,
+        yahoo_earnings,
+        raw_yahoo_news,
+        company_news,
     ),
     partitions_def=security_partitions,
     run_tags={**COMPANY_LANE, **COMPANY_RUN},

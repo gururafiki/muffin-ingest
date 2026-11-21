@@ -337,9 +337,10 @@ def test_the_check_warns_when_no_recent_article_came_in() -> None:
 # --- the location --------------------------------------------------------------------------------
 
 
-def test_the_news_assets_stay_out_of_the_company_job_until_their_live_run() -> None:
+def test_the_news_assets_run_in_the_company_job() -> None:
+    """In the job since 2026-11-21, after their live run on five companies (Phase 6b decision 2).
+    Checked on the RESOLVED job, the shape a scheduled run executes."""
     defs = loaded_defs()
     job = defs.resolve_job_def("yahoo_companies")
     keys = {key.to_user_string() for key in job.asset_layer.selected_asset_keys}
-    assert {"raw_yahoo_summary", "security_profile"} <= keys
-    assert not keys & {"raw_yahoo_news", "company_news"}
+    assert {"raw_yahoo_summary", "security_profile", "raw_yahoo_news", "company_news"} <= keys

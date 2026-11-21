@@ -267,6 +267,14 @@ def test_the_window_is_asked_past_the_cache_and_older_days_through_it(tmp_path: 
         assert fake.calls == [(day, day == edge)]
 
 
+def test_the_window_schedule_is_declared_running() -> None:
+    """The edge's `earnings-calendar` and `earnings-history` retired in muffin-deployment#532, so
+    if this does not run, nothing collects nasdaq's calendar. Declared in code, so a reset of
+    Dagster's state cannot stop it."""
+    schedule = earnings_automation.nasdaq_earnings_window
+    assert schedule.default_status == dg.DefaultScheduleStatus.RUNNING
+
+
 def test_the_schedule_asks_the_past_week_and_the_next_three_in_one_run() -> None:
     tick = datetime(2026, 11, 21, 7, 10, tzinfo=UTC)
     with (

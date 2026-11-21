@@ -2580,6 +2580,8 @@
     },
     "yahoo_companies": {
       "assets": [
+        "company_news",
+        "raw_yahoo_news",
         "raw_yahoo_statements",
         "raw_yahoo_summary",
         "security_estimate",
@@ -2589,6 +2591,7 @@
         "security_share_stats",
         "yahoo_analyst_action",
         "yahoo_classification",
+        "yahoo_earnings",
         "yahoo_fiscal_calendar",
         "yahoo_statement"
       ],
@@ -2662,7 +2665,7 @@
     },
     "nasdaq_earnings_window": {
       "cron_schedule": "10 7 * * *",
-      "default_status": "STOPPED",
+      "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "nasdaq_earnings_window"
     },
