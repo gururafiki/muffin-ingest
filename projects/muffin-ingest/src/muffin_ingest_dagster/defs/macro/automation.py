@@ -33,8 +33,11 @@ macro_daily_job = dg.define_asset_job(
     # window (07:10), before the SEC wave (11:00). FRED and OECD publish on their own days, so one
     # read a day is ample; the edge asked every six hours, and its TTL skipped 93% of those.
     cron_schedule="40 7 * * *",
-    # STOPPED UNTIL ITS LIVE RUN AND PARITY with what the edge's `macro-indicators` wrote.
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING SINCE 2026-11-21, after a read-only parity with what the edge's `macro-indicators`
+    # wrote (2,146 of 2,147 points identical), a live run on one series and a full run over the
+    # grid. The edge resource retired in the same change (muffin-deployment#533), so if this does
+    # not run, nothing collects macro. Declared here rather than toggled in the UI.
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="Every catalogued macro series' last 400 days, in one run.",
 )
 def macro_daily(context: dg.ScheduleEvaluationContext) -> Sequence[dg.RunRequest] | dg.SkipReason:

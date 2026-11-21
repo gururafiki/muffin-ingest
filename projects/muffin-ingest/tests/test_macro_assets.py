@@ -409,9 +409,11 @@ def test_the_freshness_check_names_a_stale_series_and_one_with_no_point() -> Non
     assert "btc" not in which and "gb-unemployment-fred" not in which
 
 
-def test_the_lane_ships_with_its_schedule_stopped_and_its_sensor_running() -> None:
+def test_the_lane_s_schedule_and_sensor_are_declared_running() -> None:
+    """The edge's `macro-indicators` retired in muffin-deployment#533: if these stop, nothing
+    collects macro. Declared in code, so a reset of Dagster's state cannot stop them."""
     defs = loaded_defs()
-    assert defs.get_schedule_def("macro_daily").default_status == dg.DefaultScheduleStatus.STOPPED
+    assert defs.get_schedule_def("macro_daily").default_status == dg.DefaultScheduleStatus.RUNNING
     assert defs.get_sensor_def("new_macro_series").default_status == dg.DefaultSensorStatus.RUNNING
     job = defs.resolve_job_def("macro_daily")
     keys = {k.to_user_string() for k in job.asset_layer.selected_asset_keys}

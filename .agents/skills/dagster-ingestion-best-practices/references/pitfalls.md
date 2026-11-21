@@ -215,6 +215,22 @@ testing the zero-close branch, "the previous bar" indistinguishable from "a one-
 guard distinguishes candidate rules, the fixture must make them disagree — and a mutation harness must
 report a no-op as loudly as a miss.
 
+## Do not build a schedule or sensor context without `with` in a test
+
+`dg.build_schedule_context(instance=…)` and `dg.build_sensor_context(instance=…)` bind a global
+definitions state to the test instance. Called without `with`, it outlives the instance, and a
+LATER test file fails loading definitions with "Attempted to resolve undefined DagsterInstance
+weakref". The failing test has nothing wrong with it. Met twice: 2026-10-04 (the ledger's removal)
+and 2026-11-21 (the macro lane, 58 failures in other files, every file passing alone). Write
+`with dg.build_schedule_context(...) as context:`.
+
+## Do not look for a log line in a run result
+
+`ExecuteInProcessResult.all_events` holds Dagster events, not log messages, so a test asserting
+that a secret never reaches the logs passes whatever the code logs. Read
+`instance.all_logs(result.run_id)` and its `user_message`s, inside the instance's `with`. Found by
+mutation on the macro lane's redaction (2026-11-21).
+
 ## Do not assume static typing will save you
 
 openbb routes are `(symbol, start_date, end_date, provider, **kwargs)`: a misspelled keyword binds and

@@ -231,6 +231,15 @@ scripts/branch_on_node.sh /tmp/my_harness.py
 - **It does ask the provider**, once per subject. Keep it to a handful, and never run it inside the
   00:00 UTC lanes.
 - **Never inside the code-location container**: its memory limit is shared with the gRPC server
-  and every run. The two secrets pass through the docker CLI's environment, never its arguments,
-  and are never printed.
+  and every run. The secrets pass through the docker CLI's environment, never its arguments, and
+  are never printed: the database and cache URLs, plus the provider keys and User-Agent the code
+  location holds (`FRED_API_KEY`, `OPENFIGI_API_KEY`, `DART_API_KEY`, `MUFFIN_USER_AGENT`).
+- **To check the SQL itself, `EXPLAIN` it.** A read-only transaction plans a DML statement without
+  running it, so recording what the writers build (a cursor whose `execute` appends) and running
+  `explain <sql>` with the same parameters checks syntax, types and column names against the real
+  table. Used for the macro lane's upsert and windowed retraction on 2026-11-21.
+- **A parity that counts what stage 2 WOULD write** is the comparison worth having: stage 1 for
+  real into a temporary directory, then the library's own parse over those files against the
+  table, reporting insert, change, unchanged and would-retract per subject. That is how the macro
+  lane was shown to match the edge on 2,146 of 2,147 points before it shipped.
 
