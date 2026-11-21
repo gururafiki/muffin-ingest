@@ -53,6 +53,17 @@ exactly what one ask claims: the price history lane has one partition per securi
 and the company lane (`defs/companies/`, Yahoo's quoteSummary and statements) uses the same grid,
 visiting a seventh of it a day.
 
+The segment lanes (`defs/segments/`, since 2026-11-16) use one grid per regulator, keyed by the
+id that regulator files under: `sec_filer` (CIK, shared with the SEC filer lane), `cninfo_filer`
+(CNINFO's org id, ~2,173), `dart_filer` (DART's corp code, ~1,086) and `nse_filer` (NSE's symbol,
+642). Stage 1 asks a filer for its filing list and fetches each segment-bearing document not yet
+read at `market.segment_parser.version`, merging them into that filer's raw file one row group per
+document, so reading one filing never decodes the rest. Stage 2 parses each held document, retracts
+that filing's rows by accession only when the document was read, and stamps the filing. A filer is
+re-walked on a 30-day hash floor (SEC's is a sensor over its daily index). A whole history, or a
+parser bump, is drained by an operator backfill at priority −1, and China's annual-report PDFs are
+pruned to 5 GB once read. Each lane's queue is an asset check (`every_<regulator>_…_was_read`).
+
 What a provider said about a subject's IDENTIFIER is a different fact. A symbol the provider
 rejected when asked alone, with a control symbol answering in the same run, is an observation in
 `market.identifier_probe`, keyed by the symbol it was asked with. The askable population skips a
