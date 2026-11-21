@@ -3,9 +3,12 @@
 PORTED FROM THE EDGE's `security-segments` handler and its queue, `market.pending_segments`
 (Phase 6, decided 2026-11-09). The parser is `facets.segments`; this module is the SEC side of it.
 
-THE QUEUE IS THE FILING TABLE'S OWN MARKERS, read per filer. A filing is due when it is an accounts
-form (`filing_form.carries_segments`: 10-K, 10-Q, 20-F, 40-F) that SEC says carries XBRL, and it has
-never been read or was read by an older parser version. The edge's view ranked every filing of
+THE QUEUE IS THE FILING TABLE'S OWN MARKERS, read per filer. A filing is due when its form carries
+segments (`filing_form.carries_segments`, a control table: 10-K, 10-Q, 20-F, 40-F, and since
+2026-11-21 the amended and transition forms measured to carry them, 10-Q/A, 20-F/A, 10-KT, 10-QT),
+SEC says it carries XBRL, and it has never been read or was read by an older parser version. An
+amendment that carries segments re-files the whole period and, being newer, keeps its rows over
+its original's (`segment_tables.file_filing`). The edge's view ranked every filing of
 every filer on each call, which is what timed out 17% of its runs (343 of 2,015 in the week to
 2026-11-09); asked per filer through the primary key, the same question needs no ranking.
 
