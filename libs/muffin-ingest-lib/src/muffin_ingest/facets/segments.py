@@ -695,6 +695,13 @@ def segment_facts_from(
             )
             if target is None:
                 continue
+            # A REVENUE TOTAL IS POSITIVE. A filing can tag a contra or adjustment line with a
+            # revenue concept and a negative or zero value, and a split "reconciling" to it is not a
+            # split of the company: measured 2026-11-21, 3,576 revenue splits were stored against a
+            # total <= 0 (Radiant Logistics, -103,000; Univest, a 337 m split against -9.2 m).
+            # Revenue only: segment operating income legitimately reconciles to a loss.
+            if cands[0].metric_code == "revenue" and not target > 0:
+                continue
             placement = assign_partitions([(c.member_code, c.value) for c in cands], target)
             target_by_bucket[bucket_key] = target
             placed = sum(1 for p in placement.values() if p > 0)
@@ -715,12 +722,31 @@ def segment_facts_from(
                     f"{_key(c.metric_code, c.period_type, c.period_start, c.period_ending)}|{p}"
                 )
 
+        # A REVENUE SPLIT TOTALLING ZERO OR LESS IS NOT A SPLIT, however its members were placed.
+        # A bucket inherits `best_map` from whichever bucket placed the most members, so revenue
+        # rows can carry a partition they never reconciled; when those rows add up to nothing or
+        # less (eliminations alone, a sign-flipped line), serving them as the company's revenue
+        # split is wrong. Measured 2026-11-21: 5,194 stored revenue splits totalled <= 0. Revenue
+        # only, for the same reason as the target rule above.
+        revenue_sums: dict[str, list[float]] = {}
+        for c in group:
+            p = 0 if best_map is None else best_map.get(c.member_code, 0)
+            if p > 0 and c.metric_code == "revenue":
+                revenue_sums.setdefault(
+                    f"{_key(c.metric_code, c.period_type, c.period_start, c.period_ending)}|{p}", []
+                ).append(c.value)
+        non_positive = {k for k, values in revenue_sums.items() if not _add_up(values) > 0}
+
         for c in group:
             inherited = 0 if best_map is None else best_map.get(c.member_code, 0)
             bucket_key = _key(c.metric_code, c.period_type, c.period_start, c.period_ending)
             partition_id = (
                 0
-                if inherited > 0 and f"{bucket_key}|{inherited}" not in real_members
+                if inherited > 0
+                and (
+                    f"{bucket_key}|{inherited}" not in real_members
+                    or f"{bucket_key}|{inherited}" in non_positive
+                )
                 else inherited
             )
             # A MARGINAL THAT EARNS NO PARTITION IS DROPPED, NOT STORED AT 0: it is ours, and

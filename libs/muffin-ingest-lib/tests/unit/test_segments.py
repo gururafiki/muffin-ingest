@@ -773,6 +773,64 @@ def test_a_residual_alone_is_not_served_and_beside_real_segments_it_is() -> None
     assert len(of("operating_income")) == 2 and total(of("operating_income")) == 150
 
 
+# A REVENUE TOTAL IS POSITIVE (2026-11-21). Univest's shape: revenue tagged with a total of -9.2 m
+# while its segments' revenue sums to 337 m, and the split placed by operating income. The old
+# parser stamped the inherited revenue split `reconciled_to=-9.2 m`. Operating income here
+# reconciles to a LOSS and must stay placed against it, so "refuse every non-positive target" fails.
+def test_a_revenue_split_is_never_reconciled_to_a_non_positive_total() -> None:
+    up, down = "univ:BankingMember", "univ:WealthMember"
+    out = segment_facts_from(
+        instance(
+            [
+                fact(REV, -9, **YEAR),
+                fact(REV, 200, {BIZ: up}, **YEAR),
+                fact(REV, 137, {BIZ: down}, **YEAR),
+                fact("OperatingIncomeLoss", -30, **YEAR),
+                fact("OperatingIncomeLoss", -10, {BIZ: up}, **YEAR),
+                fact("OperatingIncomeLoss", -20, {BIZ: down}, **YEAR),
+            ]
+        ),
+        AXES,
+        CONCEPTS,
+    )
+    revenue = [f for f in out if f.metric_code == "revenue"]
+    profit = [f for f in out if f.metric_code == "operating_income"]
+    assert [f.partition_id for f in profit] == [1, 1]
+    assert {f.reconciled_to for f in profit} == {-30}
+    # Still placed (by operating income's map, with a positive total), but against no total.
+    assert [f.partition_id for f in revenue] == [1, 1]
+    assert {f.reconciled_to for f in revenue} == {None}
+
+
+# A REVENUE SPLIT TOTALLING ZERO IS NOT A SPLIT (2026-11-21). Depreciation places the members;
+# revenue has no total of its own and inherits the partition. Members summing to nothing are
+# unplaced, and the control, the same instance with a positive revenue, stays placed: "revenue never
+# inherits" fails it.
+@pytest.mark.parametrize(("down_revenue", "placed"), [(-5, False), (3, True)])
+def test_an_inherited_revenue_split_totalling_zero_or_less_is_unplaced(
+    down_revenue: float, placed: bool
+) -> None:
+    up, down = "x:UpMember", "x:DownMember"
+    d = "DepreciationDepletionAndAmortization"
+    out = segment_facts_from(
+        instance(
+            [
+                fact(d, 30, **YEAR),
+                fact(d, 18, {BIZ: up}, **YEAR),
+                fact(d, 12, {BIZ: down}, **YEAR),
+                fact(REV, 5, {BIZ: up}, **YEAR),
+                fact(REV, down_revenue, {BIZ: down}, **YEAR),
+            ]
+        ),
+        AXES,
+        [*CONCEPTS, ConceptSpec("depreciation", d, 100)],
+    )
+    revenue = [f for f in out if f.metric_code == "revenue"]
+    depreciation = [f for f in out if f.metric_code == "depreciation"]
+    assert [f.partition_id for f in depreciation] == [1, 1]
+    assert [f.partition_id for f in revenue] == ([1, 1] if placed else [0, 0])
+
+
 def test_a_subtotal_member_is_dropped_before_partitioning() -> None:
     # Chevron's "aggregation before other operating segments" reconciles exactly with AllOther and
     # would otherwise BE the chosen split.
