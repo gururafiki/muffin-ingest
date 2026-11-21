@@ -559,6 +559,42 @@ def test_retract_unproduced_refuses_what_could_delete_more_than_it_means() -> No
         )
 
 
+def test_retract_unproduced_within_a_window_touches_only_that_window() -> None:
+    """An answer asked from a start date states nothing about what came before it."""
+    cur = FakeCursor()
+    writers.retract_unproduced(
+        cur,
+        "market.macro_observation",
+        [{"as_of": "2026-09-01", "dimension": ""}],
+        scope={"indicator_code": "us-unemployment"},
+        key=["as_of", "dimension"],
+        types={"as_of": "date", "dimension": "text"},
+        within={"as_of": ("2025-10-17", "2026-11-21")},
+    )
+    [(sql, params)] = cur.calls
+    assert sql == (
+        "delete from market.macro_observation as stored_row where stored_row.indicator_code = %s"
+        " and stored_row.as_of between %s and %s and not exists (select 1 from unnest(%s::date[],"
+        " %s::text[]) as p (as_of, dimension) where stored_row.as_of = p.as_of and"
+        " stored_row.dimension = p.dimension)"
+    )
+    assert params == ["us-unemployment", "2025-10-17", "2026-11-21", ["2026-09-01"], [""]]
+
+
+def test_retract_unproduced_refuses_a_window_with_an_open_end() -> None:
+    """An open end would turn "the window" into "everything after the start"."""
+    with pytest.raises(WriterError, match="both ends"):
+        writers.retract_unproduced(
+            FakeCursor(),
+            "market.macro_observation",
+            [],
+            scope={"indicator_code": "x"},
+            key=["as_of"],
+            types={"as_of": "date"},
+            within={"as_of": ("2025-10-17", None)},
+        )
+
+
 def test_retract_unproduced_reports_the_rows_the_driver_deleted() -> None:
     cur = CountingCursor([3])
     result = writers.retract_unproduced(

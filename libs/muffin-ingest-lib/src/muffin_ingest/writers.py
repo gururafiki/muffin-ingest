@@ -403,6 +403,7 @@ def retract_unproduced(
     scope: Mapping[str, Any],
     key: Sequence[str],
     types: Mapping[str, str],
+    within: Mapping[str, tuple[Any, Any]] | None = None,
 ) -> WriteResult:
     """Within a scope, delete the rows whose key the newest whole answer no longer produces.
 
@@ -420,6 +421,10 @@ def retract_unproduced(
 
     An empty `produced` deletes the whole scope: the answer says there is nothing there.
     `retracted` is the number of rows deleted, or 0 when the cursor cannot say.
+
+    `within` narrows the scope to an inclusive range per column, for an answer that covers a
+    WINDOW rather than the whole subject: a macro series asked from 400 days ago states nothing
+    about a point older than that, so only the window it covered may be retracted.
     """
     if not scope:
         raise WriterError("retract_unproduced needs a scope; with none it would empty the table")
@@ -436,14 +441,23 @@ def retract_unproduced(
         if missing:
             raise WriterError(f"a produced row lacks key column(s) {missing}: {dict(row)!r}")
 
-    where = " and ".join(f"{_STORED}.{c} = %s" for c in scope)
+    ranges = dict(within or {})
+    for c, (low, high) in ranges.items():
+        _ident(c)
+        if low is None or high is None:
+            raise WriterError(f"a range on {c!r} needs both ends; an open end retracts the rest")
+    where = " and ".join(
+        [f"{_STORED}.{c} = %s" for c in scope]
+        + [f"{_STORED}.{c} between %s and %s" for c in ranges]
+    )
+    bounds = [v for pair in ranges.values() for v in pair]
     arrays = ", ".join(f"%s::{types[c]}[]" for c in key)
     matched = " and ".join(f"{_STORED}.{c} = p.{c}" for c in key)
     sql = (
         f"delete from {target} as {_STORED} where {where} and not exists ("
         f"select 1 from unnest({arrays}) as p ({', '.join(key)}) where {matched})"
     )
-    cur.execute(sql, [*scope.values(), *([row[c] for row in produced] for c in key)])
+    cur.execute(sql, [*scope.values(), *bounds, *([row[c] for row in produced] for c in key)])
     count = getattr(cur, "rowcount", None)
     return WriteResult(written=0, retracted=count if isinstance(count, int) and count > 0 else 0)
 

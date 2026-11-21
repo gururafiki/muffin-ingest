@@ -1,0 +1,72 @@
+{
+ "route": "/api/v1/economy/cpi",
+ "rows": [
+  {
+   "country": "united_states",
+   "date": "2025-11-01",
+   "expenditure": "total",
+   "value": 0.027350850000000003
+  },
+  {
+   "country": "united_states",
+   "date": "2025-12-01",
+   "expenditure": "total",
+   "value": 0.02677081
+  },
+  {
+   "country": "united_states",
+   "date": "2026-01-01",
+   "expenditure": "total",
+   "value": 0.02386431
+  },
+  {
+   "country": "united_states",
+   "date": "2026-02-01",
+   "expenditure": "total",
+   "value": 0.02414113
+  },
+  {
+   "country": "united_states",
+   "date": "2026-03-01",
+   "expenditure": "total",
+   "value": 0.0325642
+  },
+  {
+   "country": "united_states",
+   "date": "2026-04-01",
+   "expenditure": "total",
+   "value": 0.03810845
+  },
+  {
+   "country": "united_states",
+   "date": "2026-05-01",
+   "expenditure": "total",
+   "value": 0.04248674
+  },
+  {
+   "country": "united_states",
+   "date": "2026-06-01",
+   "expenditure": "total",
+   "value": 0.03531425
+  },
+  {
+   "country": "united_states",
+   "date": "2026-07-01",
+   "expenditure": "total",
+   "value": 0.033648250000000005
+  },
+  {
+   "country": "united_states",
+   "date": "2026-08-01",
+   "expenditure": "total",
+   "value": 0.03396548
+  },
+  {
+   "country": "united_states",
+   "date": "2026-09-01",
+   "expenditure": "total",
+   "value": 0.037376849999999996
+  }
+ ],
+ "warnings": []
+}
