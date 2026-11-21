@@ -4,6 +4,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "company_news:news_is_current": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "dart_segment:every_dart_filing_was_read": {
       "additional_deps": [],
       "blocking": false
@@ -115,6 +119,37 @@
       "partitions": {
         "kind": "dynamic",
         "name": "cninfo_filer"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "company_news": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_yahoo_news": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "news",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
       },
       "pools": [
         "sql"
@@ -1186,6 +1221,36 @@
       "partitions": null,
       "pools": [
         "finviz"
+      ],
+      "tags": {}
+    },
+    "raw_yahoo_news": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 100,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 129600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "news",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "parquet",
+        "yahoo"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "security"
+      },
+      "pools": [
+        "yfinance"
       ],
       "tags": {}
     },
