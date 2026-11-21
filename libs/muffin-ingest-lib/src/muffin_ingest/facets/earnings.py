@@ -130,10 +130,54 @@ def _fetch_order(row: Mapping[str, Any]) -> tuple[str, str]:
     return (str(row.get("fetched_at") or ""), str(row.get("url") or ""))
 
 
+#: How each field is read from one nasdaq row, and when its value counts as stated.
+_FIELDS: dict[str, Any] = {
+    "name": lambda item: str(item.get("name") or "").strip() or None,
+    "eps_consensus": lambda item: money(item.get("epsForecast")),
+    "eps_previous": lambda item: money(item.get("lastYearEPS")),
+    "num_estimates": lambda item: count(item.get("noOfEsts")),
+    "fiscal_quarter": lambda item: quarter(item.get("fiscalQuarterEnding")),
+    # "time-not-supplied" IS AN ABSENCE WEARING A VALUE (umbrella CLAUDE.md), so it never replaces a
+    # time an earlier answer stated.
+    "reporting_time": lambda item: (
+        str(item.get("time") or "").strip().removeprefix("time-").replace("not-supplied", "")
+        or None
+    ),
+    "eps_actual": lambda item: money(item.get("eps")),
+    "surprise_pct": lambda item: money(item.get("surprise")),
+}
+
+
+def _merged(items: Sequence[Mapping[str, Any]]) -> tuple[dict[str, Any], int]:
+    """One symbol's fields on one day, each from the newest answer that states it.
+
+    `items` are that symbol's rows, newest answer first. A DAY'S LATER ANSWER IS NARROWER, NOT A
+    CORRECTION: once the day has passed nasdaq drops `lastYearEPS` and says "time-not-supplied" for
+    a report its forward answer timed (measured 2026-11-21: 130 and 78 of the edge's rows in one
+    week). Returns the fields and how many came from an older answer than the newest.
+    """
+    merged: dict[str, Any] = {}
+    older = 0
+    for name, read in _FIELDS.items():
+        for depth, item in enumerate(items):
+            value = read(item)
+            if value is not None:
+                merged[name] = value
+                older += depth > 0
+                break
+        else:
+            merged[name] = None
+    return merged, older
+
+
 def normalise_nasdaq(
     rows: Sequence[Mapping[str, Any]], *, ids: Mapping[str, str], today: date
 ) -> Normalised:
-    """Stored days to calendar and history rows, from each day's newest document.
+    """Stored days to calendar and history rows.
+
+    THE NEWEST READABLE ANSWER FOR A DAY SAYS WHO REPORTS THAT DAY, and each of those companies'
+    fields comes from the newest answer that states it (`_merged`). A company the newest answer no
+    longer lists has moved its report away from the day, and gets no row.
 
     `ids` maps an upper-case symbol to its security. An unmatched symbol keeps a calendar row with
     no security, as the edge kept it, and gets no history row: the history is per security.
@@ -142,46 +186,60 @@ def normalise_nasdaq(
     stats.update(
         {
             "days": 0,
+            "documents": 0,
             "legacy_rows": 0,
             "listed": 0,
             "matched": 0,
+            "fields_from_older_answers": 0,
             "calendar_too_old": 0,
             "reported": 0,
             "no_quarter": 0,
         }
     )
-    newest: dict[str, Mapping[str, Any]] = {}
-    for row in sorted(rows, key=_fetch_order):
+    by_day: dict[str, list[Mapping[str, Any]]] = {}
+    for row in sorted(rows, key=_fetch_order, reverse=True):
         day = row.get("day")
         if day is None:
             continue
         if row.get("body") is None:
             stats["legacy_rows"] += 1
             continue
-        newest[str(day)] = row
+        stats["documents"] += 1
+        by_day.setdefault(str(day), []).append(row)
 
     out = Normalised(stats=stats)
     keep_from = today - timedelta(days=CALENDAR_DAYS)
-    for key, row in sorted(newest.items()):
+    for key, documents in sorted(by_day.items()):
         day = date.fromisoformat(key)
         stats["days"] += 1
-        result = read_nasdaq(bytes(row["body"]))
-        stats[f"days_{result.outcome}"] += 1
-        if result.outcome == "unreadable":
+        answers = [(d, read_nasdaq(bytes(d["body"]))) for d in documents]
+        readable = [(d, a) for d, a in answers if a.outcome != "unreadable"]
+        if not readable:
+            stats["days_unreadable"] += 1
             continue
+        newest_doc, newest = readable[0]
+        stats[f"days_{newest.outcome}"] += 1
         out.answered.append(key)
-        fetched = str(row.get("fetched_at") or "") or None
-        for item in result.rows:
+        fetched = str(newest_doc.get("fetched_at") or "") or None
+        rows_by_symbol: dict[str, list[Mapping[str, Any]]] = {}
+        for _, answer in readable:
+            for item in answer.rows:
+                symbol = str(item.get("symbol") or "").strip().upper()
+                if symbol:
+                    rows_by_symbol.setdefault(symbol, []).append(item)
+        listed = []
+        for item in newest.rows:
             symbol = str(item.get("symbol") or "").strip().upper()
-            if not symbol:
-                continue
+            if symbol and symbol not in listed:
+                listed.append(symbol)
+        for symbol in listed:
             stats["listed"] += 1
             sid = ids.get(symbol)
             if sid:
                 stats["matched"] += 1
-            consensus = money(item.get("epsForecast"))
-            q = quarter(item.get("fiscalQuarterEnding"))
-            time = str(item.get("time") or "").strip()
+            fields, older = _merged(rows_by_symbol[symbol])
+            stats["fields_from_older_answers"] += older
+            q = fields["fiscal_quarter"]
             if day >= keep_from:
                 out.calendar.append(
                     {
@@ -189,25 +247,25 @@ def normalise_nasdaq(
                         "symbol": symbol,
                         "report_date": day,
                         "security_id": sid,
-                        "name": (str(item.get("name") or "").strip() or None),
-                        "eps_consensus": consensus,
-                        "eps_previous": money(item.get("lastYearEPS")),
-                        "num_estimates": count(item.get("noOfEsts")),
+                        "name": fields["name"],
+                        "eps_consensus": fields["eps_consensus"],
+                        "eps_previous": fields["eps_previous"],
+                        "num_estimates": fields["num_estimates"],
                         "period_ending": q[0] if q else None,
-                        "reporting_time": time.removeprefix("time-") or None,
+                        "reporting_time": fields["reporting_time"] or "not-supplied",
                         "as_of": fetched,
                     }
                 )
             else:
                 stats["calendar_too_old"] += 1
-            actual = money(item.get("eps"))
+            actual = fields["eps_actual"]
             if actual is None or not sid:
                 continue
             if q is None:
                 stats["no_quarter"] += 1
                 continue
             stats["reported"] += 1
-            surprise = money(item.get("surprise"))
+            consensus = fields["eps_consensus"]
             out.history.append(
                 {
                     "security_id": sid,
@@ -217,7 +275,7 @@ def normalise_nasdaq(
                     "eps_estimated": consensus,
                     "surprise": None if consensus is None else round(actual - consensus, 6),
                     # NASDAQ'S `surprise` IS A PERCENT ALREADY: 8.46 is 8.46%.
-                    "surprise_pct": surprise,
+                    "surprise_pct": fields["surprise_pct"],
                     "reported_date": day,
                     "as_of": fetched,
                 }

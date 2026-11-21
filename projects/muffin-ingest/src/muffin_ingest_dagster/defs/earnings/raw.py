@@ -32,7 +32,10 @@ def status_of(exc: DocumentRefused) -> int | None:
     io_manager_key="parquet_io",
     group_name="earnings",
     kinds={"nasdaq", "parquet"},
-    # THE NEWEST ANSWER FOR A DAY IS THE WHOLE DAY: a re-ask replaces the file.
+    # EVERY ANSWER A DAY RECEIVES IS KEPT. Once the day has passed, nasdaq's answer drops the
+    # previous year's EPS and the report's time, which only its earlier answers state; stage 2
+    # takes each field from the newest answer that states it. A forward day is asked ~29 times,
+    # ~4 KB compressed each: ~44 MB a year.
     metadata={"merge_on": ["day", "fetched_at"]},
     partitions_def=nasdaq_days,
     backfill_policy=dg.BackfillPolicy.multi_run(DAYS_PER_RUN),
@@ -94,7 +97,7 @@ def raw_nasdaq_earnings(context: AssetExecutionContext) -> Any:
             metadata=metadata,
         )
     context.add_output_metadata(metadata)
-    return partitioned.by_partition(context, rows, key=_day_of, complete={r["day"] for r in rows})
+    return partitioned.by_partition(context, rows, key=_day_of)
 
 
 def _day_of(row: Mapping[str, Any]) -> str:

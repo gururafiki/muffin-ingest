@@ -244,6 +244,17 @@ def test_a_429_stops_the_run(tmp_path: Path) -> None:
     assert [d for d, _ in fake.calls] == days[:2]
 
 
+def test_a_day_asked_again_keeps_every_answer(tmp_path: Path) -> None:
+    (day,) = _recent_days(1)
+    for answer in (body("2026-11-24"), body("2026-10-30")):
+        with answering(Nasdaq({day: answer})):
+            assert run_days(tmp_path, day, day).success
+    stored = pq.read_table(tmp_path / "raw_nasdaq_earnings" / f"{day}.parquet").to_pylist()
+    assert sorted(len(r["body"]) for r in stored) == sorted(
+        [len(body("2026-11-24")), len(body("2026-10-30"))]
+    )
+
+
 def test_the_window_is_asked_past_the_cache_and_older_days_through_it(tmp_path: Path) -> None:
     today = datetime.now(UTC).date()
     old = (today - timedelta(days=200)).isoformat()

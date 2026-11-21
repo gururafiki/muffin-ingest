@@ -155,6 +155,70 @@ def test_only_each_day_s_newest_document_is_read() -> None:
     assert out.calendar == [] and out.stats["days_empty"] == 1
 
 
+def _answer(day: str, rows: list[dict[str, str]]) -> bytes:
+    return json.dumps(
+        {"data": {"asOf": day, "headers": {}, "rows": rows}, "status": {"rCode": 200}}
+    ).encode()
+
+
+def test_each_field_comes_from_the_newest_answer_that_states_it() -> None:
+    # The forward answer timed the report and stated last year's EPS; the answer after the day
+    # carries the actual and drops both. The row keeps all four facts.
+    forward = {
+        "symbol": "BEEM",
+        "time": "time-after-hours",
+        "lastYearEPS": "($0.28)",
+        "epsForecast": "($0.20)",
+        "fiscalQuarterEnding": "Sep/2026",
+    }
+    after = {
+        "symbol": "BEEM",
+        "time": "time-not-supplied",
+        "eps": "($0.18)",
+        "surprise": "10",
+        "epsForecast": "($0.20)",
+        "fiscalQuarterEnding": "Sep/2026",
+    }
+    day = "2026-11-18"
+    rows = [
+        {"day": day, "body": _answer(day, [forward]), "fetched_at": "2026-11-17T07:00:00+00:00"},
+        {"day": day, "body": _answer(day, [after]), "fetched_at": "2026-11-19T07:00:00+00:00"},
+    ]
+    out = earnings.normalise_nasdaq(rows, ids={"BEEM": "b"}, today=TODAY)
+    (row,) = out.calendar
+    assert (row["reporting_time"], row["eps_previous"], row["eps_consensus"]) == (
+        "after-hours",
+        -0.28,
+        -0.2,
+    )
+    assert row["as_of"] == "2026-11-19T07:00:00+00:00", "stamped with the newest answer"
+    (history,) = out.history
+    assert (history["eps_actual"], history["surprise_pct"]) == (-0.18, 10.0)
+    assert out.stats["fields_from_older_answers"] == 2
+
+
+def test_a_company_the_newest_answer_no_longer_lists_has_moved_away() -> None:
+    day = "2026-11-18"
+    older = _answer(day, [{"symbol": "AACG", "epsForecast": "$0.10"}, {"symbol": "XOM"}])
+    newer = _answer(day, [{"symbol": "XOM", "epsForecast": "$3.90"}])
+    rows = [
+        {"day": day, "body": older, "fetched_at": "2026-11-10T07:00:00+00:00"},
+        {"day": day, "body": newer, "fetched_at": "2026-11-12T07:00:00+00:00"},
+    ]
+    out = earnings.normalise_nasdaq(rows, ids={}, today=TODAY)
+    assert [r["symbol"] for r in out.calendar] == ["XOM"]
+
+
+def test_an_unreadable_newest_answer_falls_back_to_the_last_readable_one() -> None:
+    day = "2026-11-18"
+    rows = [
+        {"day": day, "body": _answer(day, [{"symbol": "XOM"}]), "fetched_at": "2026-11-10"},
+        {"day": day, "body": b"<html>gateway</html>", "fetched_at": "2026-11-12"},
+    ]
+    out = earnings.normalise_nasdaq(rows, ids={}, today=TODAY)
+    assert [r["symbol"] for r in out.calendar] == ["XOM"] and out.answered == [day]
+
+
 # --- Yahoo ---------------------------------------------------------------------------------------
 
 
