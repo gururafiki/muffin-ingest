@@ -2,7 +2,7 @@
 
 import time
 from collections import Counter
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import dagster as dg
@@ -17,6 +17,7 @@ from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
 from muffin_ingest_dagster.defs.segments.partitions import (
     CNINFO_FILERS_PER_RUN,
     DART_FILERS_PER_RUN,
+    FLOOR_DAYS,
     NSE_FILERS_PER_RUN,
     cninfo_filers,
     dart_filers,
@@ -227,6 +228,32 @@ def raw_cninfo_stock_list(context: AssetExecutionContext) -> list[dict[str, Any]
     return rows
 
 
+#: A filer's list is not asked again until the list its file holds is this many days old (decided
+#: 2026-11-23). The floor makes a filer due every `FLOOR_DAYS`, but asks in width-aligned chunks,
+#: and a chunk of ~45 filers holds one on its floor day about three days in four: with no age check,
+#: each floor listed nearly its whole grid every day (measured 2026-11-22: `nse_filers_floor` ran
+#: 16-19 runs a day). A day under the floor, so a list fetched on one floor day is due on the next.
+#: The SEC filer lane has the same rule: a floor visit is not a fetch.
+LIST_MAX_AGE_DAYS = FLOOR_DAYS - 1
+
+
+def _younger_than(row: Any, now: datetime, days: float) -> bool:
+    """Whether a stored list's `fetched_at` (ISO 8601) is less than `days` before `now`.
+
+    No list, or a timestamp that does not parse, is not young: the list is asked rather than
+    trusted. A list asked with an age of 0 days is always asked.
+    """
+    if row is None:
+        return False
+    try:
+        at = datetime.fromisoformat(str(row.get("fetched_at")))
+    except ValueError:
+        return False
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    return now - at < timedelta(days=days)
+
+
 class CninfoRun(dg.Config):
     """What bounds a CNINFO run, and what an operator may ask beyond the queue."""
 
@@ -240,10 +267,22 @@ class CninfoRun(dg.Config):
     budget_bytes: int = 300_000_000
     #: Seconds between requests. 24 of 24 searches answered at 1 s and at 0.25 s (2026-11-15).
     pace_seconds: float = 0.5
+    #: A filer whose stored search is younger than this is not searched; its reports are planned
+    #: from the stored search. 0 searches every filer.
+    list_max_age_days: float = LIST_MAX_AGE_DAYS
 
 
-#: How a search and a report fetch can end. Each set partitions what it counts.
-SEARCH_OUTCOMES = ("answered", "absent", "refused", "transport", "unasked", "not_askable")
+#: How a search and a report fetch can end. Each set partitions what it counts. `fresh` is a filer
+#: whose stored search is young enough not to ask again: it costs no request.
+SEARCH_OUTCOMES = (
+    "answered",
+    "absent",
+    "fresh",
+    "refused",
+    "transport",
+    "unasked",
+    "not_askable",
+)
 REPORT_OUTCOMES = (
     "answered",
     "absent",
@@ -291,12 +330,16 @@ def raw_cninfo_filings(
     filer's securities, that is not read at the current parser version and that raw does not hold
     (a pruned report is not held). The search's first page only, as the edge asked.
 
+    A FILER WHOSE STORED SEARCH IS YOUNGER THAN `list_max_age_days` IS NOT SEARCHED: its reports
+    are planned from that search, so the due reports are fetched exactly as if it had been asked.
+
     THE OUTCOMES PARTITION WHAT THEY COUNT (`SEARCH_OUTCOMES` sums to `requested`,
     `REPORT_OUTCOMES` to `reports_named`). A refusal stops the run and leaves the rest `unasked`;
     nothing is filed for a fetch that did not finish.
     """
     keys = list(context.partition_keys)
     run_id = context.run.run_id
+    now = datetime.now(UTC)
     reread = {k: set(v) for k, v in (config.reread or {}).items()}
     with postgres.connect() as conn:
         found = cn.filers(conn, keys)
@@ -316,6 +359,13 @@ def raw_cninfo_filings(
         filer = found.get(key)
         if filer is None:
             stats["search_not_askable"] += 1
+            continue
+        searched = cn.newest_list(
+            raw_store.stored_rows_where(CNINFO_FILINGS, key, {"document": "announcements"})
+        )
+        if searched is not None and _younger_than(searched, now, config.list_max_age_days):
+            stats["search_fresh"] += 1
+            listed[key] = cn.parse_announcements(bytes(searched["body"]))
             continue
         if stopped is None and time.monotonic() >= deadline:
             stopped = "the time budget is spent"
@@ -476,10 +526,22 @@ class DartRun(dg.Config):
     budget_bytes: int = 300_000_000
     #: Seconds between requests.
     pace_seconds: float = 0.2
+    #: A filer whose stored list is younger than this is not listed; its archives are planned
+    #: from the stored list. 0 lists every filer.
+    list_max_age_days: float = LIST_MAX_AGE_DAYS
 
 
-#: How a filing list and an archive fetch can end. Each set partitions what it counts.
-LIST_OUTCOMES = ("answered", "absent", "refused", "transport", "unasked", "not_askable")
+#: How a filing list and an archive fetch can end. Each set partitions what it counts. `fresh` is a
+#: filer whose stored list is young enough not to ask again: it costs no request.
+LIST_OUTCOMES = (
+    "answered",
+    "absent",
+    "fresh",
+    "refused",
+    "transport",
+    "unasked",
+    "not_askable",
+)
 ARCHIVE_OUTCOMES = (
     "answered",
     "absent",
@@ -518,12 +580,16 @@ def raw_dart_filings(
     DUE: every annual report the list names, and every one `security_filing` already holds for the
     filer's securities, that is not read at the current parser version and that raw does not hold.
 
+    A FILER WHOSE STORED LIST IS YOUNGER THAN `list_max_age_days` IS NOT LISTED: its archives are
+    planned from that list's pages, so the due archives are fetched exactly as if it had been asked.
+
     THE OUTCOMES PARTITION WHAT THEY COUNT (`LIST_OUTCOMES` sums to `requested`,
     `ARCHIVE_OUTCOMES` to `archives_named`). DART refusing in its body (`020`, its daily limit) or
     in its status line stops the run and leaves the rest `unasked`.
     """
     keys = list(context.partition_keys)
     run_id = context.run.run_id
+    now = datetime.now(UTC)
     reread = {k: set(v) for k, v in (config.reread or {}).items()}
     with postgres.connect() as conn:
         found = fd.filers(conn, keys)
@@ -542,6 +608,18 @@ def raw_dart_filings(
     for key in keys:
         if key not in found:
             stats["list_not_askable"] += 1
+            continue
+        # The newest walk's pages, page 1 first. A walk a transport failure cut short holds fewer
+        # pages than its first page says there are: it settled nothing, and is listed again.
+        pages_held = fd.newest_lists(
+            raw_store.stored_rows_where(DART_FILINGS, key, {"document": "filings"})
+        )
+        walk = [fd.parse_filings(bytes(page["body"])) for page in pages_held]
+        whole = bool(walk) and len(walk) >= min(max(walk[0].total_pages, 1), MAX_LIST_PAGES)
+        newest_page = max(pages_held, key=lambda r: str(r.get("fetched_at")), default=None)
+        if whole and _younger_than(newest_page, now, config.list_max_age_days):
+            stats["list_fresh"] += 1
+            listed[key] = [f for parsed in walk for f in parsed.filed]
             continue
         if stopped is None and time.monotonic() >= deadline:
             stopped = "the time budget is spent"
@@ -684,13 +762,18 @@ class NseRun(dg.Config):
     #: Seconds between requests: NSE sits behind Akamai's bot management, and the edge asked six
     #: companies every fifteen minutes.
     pace_seconds: float = 1.0
+    #: A filer whose stored list is younger than this is not listed; its instances are planned
+    #: from the stored list. 0 lists every filer.
+    list_max_age_days: float = LIST_MAX_AGE_DAYS
 
 
-#: How a results list and an instance fetch can end. Each set partitions what it counts.
+#: How a results list and an instance fetch can end. Each set partitions what it counts. `fresh` is
+#: a filer whose stored list is young enough not to ask again: it costs no request.
 NSE_LIST_OUTCOMES = (
     "answered",
     "absent",
     "not_answer",
+    "fresh",
     "refused",
     "transport",
     "unasked",
@@ -727,12 +810,16 @@ def raw_nse_filings(
     DUE: every `.xml` result the list names, and every one `security_filing` already holds for the
     filer's securities, that is not read at the current parser version and that raw does not hold.
 
+    A FILER WHOSE STORED LIST IS YOUNGER THAN `list_max_age_days` IS NOT LISTED: its instances are
+    planned from that list, so the due instances are fetched exactly as if it had been asked.
+
     THE OUTCOMES PARTITION WHAT THEY COUNT (`NSE_LIST_OUTCOMES` sums to `requested`,
     `NSE_INSTANCE_OUTCOMES` to `instances_named`). A refusal (403, 429, 5xx, or a redirect, which
     would leave the cache) stops the run and leaves the rest `unasked`.
     """
     keys = list(context.partition_keys)
     run_id = context.run.run_id
+    now = datetime.now(UTC)
     reread = {k: {nse.canonical(x) for x in v} for k, v in (config.reread or {}).items()}
     with postgres.connect() as conn:
         found = fn.filers(conn, keys)
@@ -751,6 +838,13 @@ def raw_nse_filings(
     for key in keys:
         if key not in found:
             stats["list_not_askable"] += 1
+            continue
+        held_list = fn.newest_list(
+            raw_store.stored_rows_where(NSE_FILINGS, key, {"document": "filings"})
+        )
+        if held_list is not None and _younger_than(held_list, now, config.list_max_age_days):
+            stats["list_fresh"] += 1
+            listed[key] = fn.parse_filings(bytes(held_list["body"])) or []
             continue
         if stopped is None and time.monotonic() >= deadline:
             stopped = "the time budget is spent"

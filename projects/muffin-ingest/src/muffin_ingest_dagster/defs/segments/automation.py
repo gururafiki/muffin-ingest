@@ -361,7 +361,7 @@ dart_segments_job = dg.define_asset_job(
     job=dart_registry_job,
     cron_schedule="50 7 * * 1",
     execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="DART's registry, Mondays 07:50 UTC: the corp code of every Korean equity.",
 )
 def dart_corp_codes(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
@@ -396,7 +396,9 @@ def new_dart_filers(context: dg.SensorEvaluationContext, postgres: Postgres) -> 
     job=dart_segments_job,
     cron_schedule="5 8 * * *",
     execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    # RUNNING since 2026-11-23: stage 1 lists a filer only once its stored list is 29 days old, so
+    # a daily tick lists ~1/30 of the grid (`raw.LIST_MAX_AGE_DAYS`).
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="DART filers on their 30-day floor, daily 08:05 UTC, outside the run windows.",
 )
 def dart_filers_floor(context: dg.ScheduleEvaluationContext) -> list[dg.RunRequest]:

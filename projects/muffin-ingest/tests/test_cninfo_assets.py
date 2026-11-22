@@ -29,7 +29,7 @@ from muffin_ingest.providers import cninfo
 from muffin_ingest.providers.documents import Document
 
 from muffin_ingest_dagster.defs.segments import automation, core, raw
-from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION
+from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION, FLOOR_DAYS
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import FIXTURES
@@ -101,9 +101,16 @@ class Cninfo:
         return cninfo.Answer(_document(public_url, body), status, too_large)
 
 
+#: When a request's answer was fetched, by URL, where a test needs it older than now.
+FETCHED_AT: dict[str, datetime] = {}
+
+
 def _document(url: str, body: bytes) -> Document:
     return Document(
-        url=url, body=body, content_type="application/pdf", fetched_at=datetime.now(UTC)
+        url=url,
+        body=body,
+        content_type="application/pdf",
+        fetched_at=FETCHED_AT.get(url, datetime.now(UTC)),
     )
 
 
@@ -272,6 +279,7 @@ def _clean() -> Iterator[None]:
     PARSER["version"] = 20
     CALLS.clear()
     READ_AT.clear()
+    FETCHED_AT.clear()
     yield
 
 
@@ -414,9 +422,83 @@ def test_a_report_that_was_read_is_never_fetched_again(tmp_path: Path, provider:
 
     again = run(tmp_path, instance, [YANGTZE])
     assert again.success
-    assert provider.calls[asked:] == [f"search {YANGTZE}"], "the search only"
-    assert meta(again, "raw_cninfo_filings")["reports_named"] == 0
+    assert provider.calls[asked:] == [], "the search is fresh, and nothing is due"
+    m = meta(again, "raw_cninfo_filings")
+    assert (m["search_fresh"], m["reports_named"]) == (1, 0)
+    assert m["search_outcomes"] == m["requested"]
     assert meta(again, "cninfo_segment")["filings"] == 0 and READS == []
+
+
+# --- the floor asks each filer's search once a floor --------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("age_days", "searched_again"),
+    # A list fetched on a filer's floor day is due on its next one, whatever the hour of the
+    # tick: an hour short of a floor period is old enough.
+    [(raw.LIST_MAX_AGE_DAYS - 1, False), (FLOOR_DAYS - 1 / 24, True)],
+)
+def test_a_search_younger_than_the_floor_is_not_asked_and_one_as_old_is(
+    tmp_path: Path, provider: Cninfo, age_days: float, searched_again: bool
+) -> None:
+    instance = instance_with(YANGTZE)
+    FETCHED_AT[f"search:{YANGTZE}"] = datetime.now(UTC) - timedelta(days=age_days)
+    assert run(tmp_path, instance, [YANGTZE]).success
+    asked = len(provider.calls)
+    FETCHED_AT.clear()
+
+    again = run(tmp_path, instance, [YANGTZE])
+    assert again.success
+    assert provider.calls[asked:] == ([f"search {YANGTZE}"] if searched_again else [])
+    m = meta(again, "raw_cninfo_filings")
+    assert (m["search_answered"], m["search_fresh"]) == ((1, 0) if searched_again else (0, 1))
+
+
+def test_an_age_of_zero_searches_every_filer(tmp_path: Path, provider: Cninfo) -> None:
+    instance = instance_with(YANGTZE)
+    assert run(tmp_path, instance, [YANGTZE]).success
+    asked = len(provider.calls)
+
+    again = run(tmp_path, instance, [YANGTZE], config={"list_max_age_days": 0})
+    assert again.success
+    assert provider.calls[asked:] == [f"search {YANGTZE}"]
+
+
+def test_a_search_cninfo_did_not_answer_is_asked_again_however_young(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    instance = instance_with(YANGTZE)
+    provider.searches[YANGTZE] = (404, b"")
+    assert run(tmp_path, instance, [YANGTZE]).success
+    asked = len(provider.calls)
+
+    again = run(tmp_path, instance, [YANGTZE])
+    assert again.success
+    assert provider.calls[asked:] == [f"search {YANGTZE}"], "an absence is no list to plan from"
+
+
+def test_a_fresh_search_still_names_its_reports_when_stage_2_never_filed_them(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    """Stage 1 alone, its reports left unasked: `security_filing` holds nothing for the filer, so
+    the next run can only know its reports from the stored search."""
+    instance = instance_with(YANGTZE)
+    first = dg.materialize(
+        [raw.raw_cninfo_filings],
+        instance=instance,
+        partition_key=YANGTZE,
+        run_config={
+            "ops": {"raw_cninfo_filings": {"config": {"pace_seconds": 0.0, "budget_bytes": 0}}}
+        },
+        resources=resources(tmp_path),
+    )
+    assert first.success and provider.calls == [f"search {YANGTZE}"]
+    assert FILING_ROWS == {}
+
+    again = run(tmp_path, instance, [YANGTZE])
+    assert again.success
+    assert provider.calls[1:] == [FY25, FY24], "planned from the stored search, newest first"
+    assert meta(again, "raw_cninfo_filings")["search_fresh"] == 1
 
 
 def test_a_raised_parser_version_rereads_from_raw_without_asking_cninfo(
@@ -512,4 +594,4 @@ def test_retention_drops_a_read_report_past_thirty_days_and_stage_1_fetches_it_w
     PARSER["version"] = 21
     asked = len(provider.calls)
     assert run(tmp_path, instance, [YANGTZE]).success
-    assert provider.calls[asked:] == [f"search {YANGTZE}", FY25]
+    assert provider.calls[asked:] == [FY25]
