@@ -2099,3 +2099,73 @@ def test_a_header_label_is_found_whole_or_glyph_by_glyph(
     line = [at(s, x, end, 500.0) for s, x, end in pieces]
     label = cn_pdf.SHARE_HDR if prefix else cn_pdf.AMOUNT_HDR
     assert cn_pdf._label_starts(line, label, prefix=prefix) == starts
+
+
+def test_this_year_s_amount_label_may_sit_below_the_line_holding_last_year_s() -> None:
+    """舒泰神 (300204) FY2023, page 23: this year's `金额` is 3.3 pt below the line carrying the
+    share labels and last year's `金额`, so the two fall in different lines. Taken from the line met
+    first, the amount column was last year's (548,988,617.75 served as FY2023)."""
+    items = [
+        at("（", 80.8, 92.8, 215.5),
+        at("1", 92.9, 98.9, 215.5),
+        at("）", 98.9, 110.9, 215.5),
+        at("营业收入构成", 113.9, 186.1, 215.5),
+        at("同比增减", 480.6, 516.6, 144.7),
+        at("占营业收入比重", 226.0, 289.0, 133.8),
+        at("金额", 328.8, 346.8, 133.8),
+        at("占营业收入比重", 386.7, 449.7, 133.8),
+        at("金额", 168.2, 186.2, 130.5),
+        at("营业收入合计", 62.2, 116.2, 112.1),
+        at("364,175,426.91", 155.7, 211.9, 112.1),
+        at("100%", 271.4, 292.5, 112.1),
+        at("548,988,617.75", 316.3, 372.5, 112.1),
+        at("100%", 432.1, 453.3, 112.1),
+        at("分行业", 62.2, 89.2, 90.3),
+        at("制造业", 62.2, 89.2, 65.2),
+        at("364,175,426.91", 155.7, 211.9, 65.2),
+        at("100.00%", 260.1, 292.4, 65.2),
+        at("548,988,617.75", 316.3, 372.5, 65.2),
+        at("100.00%", 420.8, 453.1, 65.2),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 364175426.91),
+        ("制造业", 364175426.91),
+    ]
+
+
+def test_prose_after_the_table_is_no_member() -> None:
+    """华大基因 (300676) FY2020, page 57: a note follows the regions, and its second line carries
+    `31,983.13` (万元) in the amount column. Read as a member worth 31,983.13 yuan, it was placed
+    within the split's tolerance of an 8.4 bn total (measured 2026-11-22)."""
+    items = [
+        at("（", 56.6, 67.2, 640.0),
+        at("1", 67.3, 72.6, 640.0),
+        at("）营业收入构成", 72.5, 146.4, 640.0),
+        at("金额", 167.2, 185.2, 585.0),
+        at("占营业收入比重", 224.4, 287.5, 585.0),
+        at("金额", 326.6, 344.6, 585.0),
+        at("占营业收入比重", 383.8, 446.8, 585.0),
+        at("营业收入合计", 58.0, 112.0, 568.0),
+        at("8,397,230,002.83", 151.7, 214.7, 568.0),
+        at("100%", 273.4, 294.6, 568.0),
+        at("分地区", 58.0, 85.0, 552.0),
+        at("中国大陆", 58.0, 94.0, 536.0),
+        at("4,620,634,438.17", 151.7, 214.7, 536.0),
+        at("55.03%", 266.7, 294.6, 536.0),
+        at("境外", 58.0, 76.0, 520.0),
+        at("3,776,595,564.66", 151.7, 214.7, 520.0),
+        at("44.97%", 266.7, 294.6, 520.0),
+        at("注：公司在", 74.7, 119.7, 500.0),
+        at("2020", 121.9, 140.0, 500.0),
+        at("年度“精准医学检测及综合解决方案”分部收入占营业", 142.3, 403.2, 500.0),
+        at("合解决方案收入金额为", 56.6, 146.6, 484.0),
+        at("31,983.13", 148.9, 185.0, 484.0),
+        at("万元，肿瘤精准防控综合解决方案收入金额为", 187.4, 367.3, 484.0),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 8397230002.83),
+        ("中国大陆", 4620634438.17),
+        ("境外", 3776595564.66),
+    ]

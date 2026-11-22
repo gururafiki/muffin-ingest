@@ -395,6 +395,8 @@ def parse_segment_page(
     composing = composed = False
     #: The next revenue completed is negative: its sign was set on a line of its own.
     negate = False
+    #: Where the composition table's header was read: its block is not prose.
+    header_y = 0.0
 
     def close() -> None:
         nonlocal rows, names, rev, cost, cost_held, top, owed, negate
@@ -506,14 +508,20 @@ def parse_segment_page(
                 # table sets over two lines (`占营业收入` 6 pt above `金额`, `比重` 6 pt below).
                 # This year's columns come first, so the FIRST amount label is this year's, set as
                 # one item or letter-spaced over several (`_label_starts`).
-                amounts = _label_starts(line, AMOUNT_HDR)
-                if not amounts:
+                if not _label_starts(line, AMOUNT_HDR):
                     continue
-                amount_x = amounts[0]
-                share = [
-                    x
+                header_lines = [
+                    n
                     for n in range(max(0, k - 3), min(len(lines), k + 4))
                     if abs(heights[n] - y) <= 15
+                ]
+                # THE LEFTMOST AMOUNT LABEL IN THE HEADER BLOCK, not on this line: 舒泰神 (300204)
+                # FY2023 sets this year's `金额` 3.3 pt below the line holding last year's, so the
+                # line met first named only last year's column (measured 2026-11-22).
+                amount_x = min(x for n in header_lines for x in _label_starts(lines[n], AMOUNT_HDR))
+                share = [
+                    x
+                    for n in header_lines
                     for x in _label_starts(lines[n], SHARE_HDR, prefix=True)
                     if x > amount_x
                 ]
@@ -522,6 +530,7 @@ def parse_segment_page(
                     composed = True
                     name_end, rev_end = amount_x, min(share)
                     cost_end = rev_end  # no cost column
+                    header_y = y
                 continue
             # A group row is the label alone on its line, wherever it is set: in the name column,
             # or centred across the table (9900003433's `分行业` at x 283).
@@ -535,6 +544,15 @@ def parse_segment_page(
             if _GROUP.match(label):
                 close()
                 axis = _SKIPPED_AXIS
+                continue
+            # PROSE ENDS THE TABLE: text running past the amount column is no member's name, which
+            # stays in its cell. 华大基因 (300676) FY2020 follows its regions with a note whose line
+            # carries `31,983.13` (万元) in the amount column, read as a member worth 31,983.13
+            # yuan and placed within the split's tolerance; 翰宇药业 (300199) FY2018 likewise.
+            # The header block's own lower line (`比重` set 6 pt below `金额`) is not prose.
+            if abs(y - header_y) > 15 and any(_CJK.search(i.s) and _end(i) > rev_end for i in line):
+                close()
+                axis, composing = "", False
                 continue
             if not name_x:
                 first = next((i for i in line if _end(i) <= name_end and i.s.strip()), None)
