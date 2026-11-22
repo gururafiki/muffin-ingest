@@ -8,7 +8,7 @@ description: >-
 license: AGPL-3.0
 metadata:
   author: muffin
-  version: '2.0.0'
+  version: '2.1.0'
 ---
 
 # Dagster ingestion in muffin
