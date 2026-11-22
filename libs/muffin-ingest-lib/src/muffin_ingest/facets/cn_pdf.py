@@ -330,6 +330,12 @@ _PAGE_NUMBER = re.compile(r"^[-\s\d/]+$")
 #: A name line further than this from every row's figures belongs to none of them.
 _NAME_REACH = 24.0
 
+#: Past the cost label, where a table's own columns go on and another page set two-up beside it
+#: starts: 上海家化 FY2017's region table has its cost label end at 248.0 and the cost table beside
+#: it starts at 657.6.
+_GUTTER = 100.0
+_NO_EDGE = float("inf")
+
 
 def parse_segment_page(
     items: Sequence[TextItem],
@@ -395,6 +401,9 @@ def parse_segment_page(
     composing = composed = False
     #: The next revenue completed is negative: its sign was set on a line of its own.
     negate = False
+    #: The table's edges, once its header is read: nothing ending left of `name_lo` or starting
+    #: right of `name_hi` is the table's (`_GUTTER`).
+    name_lo, name_hi = 0.0, _NO_EDGE
 
     def close() -> None:
         nonlocal rows, names, rev, cost, cost_held, top, owed, negate
@@ -410,14 +419,18 @@ def parse_segment_page(
     def column(n: int, lo: float, hi: float) -> list[str]:
         return [i.s.strip() for i in lines[n] if lo < _end(i) <= hi and _NUMERIC.match(i.s.strip())]
 
-    def settle(fragments: list[str], k: int, lo: float, hi: float) -> list[str]:
+    def settle(fragments: list[str], k: int, lo: float, hi: float, pending: str = "") -> list[str]:
         """A one-decimal figure, given its second decimal when it is whole: the next fragment in
         its column is not bare digits continuing it (云天励飞 prints `62,389.8` beside
         `53,608.12`), or nothing follows on a page printing no money to the fen (中海油服's
         百万元 table, `14,898.0`). At the foot of a page that does, it stays incomplete: 彤程's
-        `2,320,408,095.5` ends page 22 and its `5` opens page 23."""
+        `2,320,408,095.5` ends page 22 and its `5` opens page 23.
+
+        `pending` is what the column holds of a cell still being set: a whole figure can wrap, and
+        中国中铁 (601390) FY2022 sets 境内's `1,095,921,752` as `1,095,921,7` over `52`."""
         out = []
-        for fragment in fragments:
+        for n_fragment, fragment in enumerate(fragments):
+            so_far = (pending if n_fragment == 0 else "") + fragment
             if _ONE_DECIMAL.match(fragment):
                 following = next(
                     (c for n in range(k + 1, len(lines)) if (c := column(n, lo, hi))), []
@@ -428,7 +441,9 @@ def parse_segment_page(
                     out.append(fragment + "0")
                 else:
                     out.append(fragment)
-            elif composing and scale > 1 and _WHOLE.match(fragment):
+            elif scale > 1 and (_WHOLE.match(so_far) or _WHOLE.match(fragment)):
+                # A table in 千元 or larger may print whole numbers, the composition table and the
+                # mandated one alike (中国中铁 (601390) FY2022 and FY2023, `1,087,585,457` 千元).
                 # Whole unless the next fragment in its column continues it.
                 following = next(
                     (c for n in range(k + 1, len(lines)) if (c := column(n, lo, hi))), []
@@ -478,7 +493,8 @@ def parse_segment_page(
             close()
             axis = table
             opened_at = scale
-            name_end = rev_end = cost_end = 0.0
+            name_end = rev_end = cost_end = name_lo = 0.0
+            name_hi = _NO_EDGE
             continue
         if composition and _COMPOSITION_HEADING.match(joined):
             close()
@@ -486,14 +502,35 @@ def parse_segment_page(
                 break  # another year's table, as for a mandated heading read twice
             axis, composing = _COMPOSITION_AXIS, True
             opened_at = scale
-            name_end = rev_end = cost_end = name_x = 0.0
+            name_end = rev_end = cost_end = name_x = name_lo = 0.0
+            name_hi = _NO_EDGE
             continue
         if not axis:
             continue
+        if name_lo > 0 or name_hi < _NO_EDGE:
+            # A TWO-UP PAGE PRINTS ANOTHER PAGE BESIDE THE TABLE: 上海家化 (600315) FY2017 sets its
+            # cash-flow table and the notes under it at x 56-537, left of a segment table whose
+            # names start at 659, and on the next page its region table at x 58-532 beside a cost
+            # table at 657-1133. Read with the table, the other page's text joined its member
+            # names, and a `说明` there ended the product table before its first row and the
+            # region table after its second.
+            line = [i for i in line if _end(i) > name_lo and i.x < name_hi]
+            if not line:
+                continue
+            joined = "".join(i.s for i in line)
         if rev_end and (
             _TABLE_ENDS.search(joined)
             or (composing and _COMPOSITION_ENDS.search(joined))
             or (_NUMBERED.match(joined) and not is_a_row(k))
+            # PROSE ENDS A TABLE: text set from the name column across to the next label (the cost
+            # label, or the composition table's share label) is no name, which stays in its cell.
+            # 中国中铁 (601390) follows its regions with a note and its review of each line, whose
+            # figures (`5,928.32` 亿元) fell in the money columns; 华大基因 (300676) FY2020 and
+            # 翰宇药业 (300199) follow their composition tables with notes. What starts right of
+            # the name column is not prose: the last column's own text (`增加 0.44 个百分点`), a
+            # page footer (`第 15 页 / 共 202 页`), and a column header repeated where the table
+            # runs onto the next page (粤高速, its `金额 占营业收入比重` between two regions).
+            or any(_CJK.search(i.s) and i.x < name_end and _end(i) > rev_end for i in line)
         ):
             close()
             axis = ""
@@ -504,20 +541,29 @@ def parse_segment_page(
             if not rev_end:
                 # The amount column's label, and the share column's beside it, which a narrow
                 # table sets over two lines (`占营业收入` 6 pt above `金额`, `比重` 6 pt below).
-                amount_h = next((i for i in line if i.s.strip() == AMOUNT_HDR), None)
-                if amount_h is None:
+                # This year's columns come first, so the FIRST amount label is this year's, set as
+                # one item or letter-spaced over several (`_label_starts`).
+                if not _label_starts(line, AMOUNT_HDR):
                     continue
-                share = [
-                    i.x
+                header_lines = [
+                    n
                     for n in range(max(0, k - 3), min(len(lines), k + 4))
                     if abs(heights[n] - y) <= 15
-                    for i in lines[n]
-                    if i.s.strip().startswith(SHARE_HDR) and i.x > amount_h.x
+                ]
+                # THE LEFTMOST AMOUNT LABEL IN THE HEADER BLOCK, not on this line: 舒泰神 (300204)
+                # FY2023 sets this year's `金额` 3.3 pt below the line holding last year's, so the
+                # line met first named only last year's column (measured 2026-11-22).
+                amount_x = min(x for n in header_lines for x in _label_starts(lines[n], AMOUNT_HDR))
+                share = [
+                    x
+                    for n in header_lines
+                    for x in _label_starts(lines[n], SHARE_HDR, prefix=True)
+                    if x > amount_x
                 ]
                 if share:
                     close()
                     composed = True
-                    name_end, rev_end = amount_h.x, min(share)
+                    name_end, rev_end = amount_x, min(share)
                     cost_end = rev_end  # no cost column
                 continue
             # A group row is the label alone on its line, wherever it is set: in the name column,
@@ -556,6 +602,10 @@ def parse_segment_page(
             read.add(axis)
             name_end, rev_end = rev_h.x, cost_h.x
             name_x = (name_h.x + _end(name_h)) / 2
+            # The name column is no wider to the left of its label's centre than to the right of
+            # it, up to where the revenue label starts: a label set at the column's left edge
+            # bounds nothing, and one centred in it bounds the column at its own left edge.
+            name_lo = max(0.0, name_x - (name_end - name_x))
             # The header is often set on several lines, labels centred in their cells: 嘉泽's
             # `毛利率` sits 6.5 pt above the line holding the others, so the next label is looked
             # for across the header block, or the cost column would reach a column too far.
@@ -575,15 +625,21 @@ def parse_segment_page(
                 and not any(title in i.s for title, _ in CN_TABLES)
             ]
             cost_end = min(beyond) if beyond else cost_h.x + (cost_h.x - rev_h.x)
+            # The table is read from its name column to its cost column, and another page set
+            # beside it starts a gutter further on (`_GUTTER`). Its own later columns (margin,
+            # changes) are never read.
+            name_hi = _end(cost_h) + _GUTTER
             continue
         if not rev_end:
             continue
 
         here = [s for s in (i.s.strip() for i in line if _end(i) <= name_end) if s]
-        if here and not _PAGE_NUMBER.match("".join(here)):
+        # A line of figures alone is no name: a chart's labels below a table (上海家化's `0.24`,
+        # `14.39`) or a page number.
+        if here and not _PAGE_NUMBER.match("".join(here)) and not _NUMERIC.match("".join(here)):
             names.append((y, "".join(here)))
-        in_rev = settle(column(k, name_end, rev_end), k, name_end, rev_end)
-        in_cost = settle(column(k, rev_end, cost_end), k, rev_end, cost_end)
+        in_rev = settle(column(k, name_end, rev_end), k, name_end, rev_end, rev.text)
+        in_cost = settle(column(k, rev_end, cost_end), k, rev_end, cost_end, cost.text)
         if (in_rev or in_cost) and top is None:
             top = y
         cost_value = cost.take(in_cost)
@@ -692,6 +748,42 @@ def _joined(line: list[TextItem]) -> list[TextItem]:
                 continue
         out.append(item)
     return out
+
+
+#: How far apart two glyphs of one letter-spaced label may be set: an em.
+_LABEL_GAP = 12.0
+
+
+def _label_starts(line: Sequence[TextItem], label: str, *, prefix: bool = False) -> list[float]:
+    """Where each occurrence of a header label starts on its line, in x order: set as one item,
+    or LETTER-SPACED, one glyph per item.
+
+    16 of the 22 Shenzhen reports that served last year's figures as this year's print this
+    year's `金额` as `金` and `额` (x 167.3 and 176.3, flush) beside last year's `金额` as one
+    item (x 326.7), measured 2026-11-22 (鱼跃 002223, 奥赛康 002755 among them). Looking for
+    the label as one item found last year's column, so this year's amount and share fell into
+    the name column (`其他业务16,327,089.580.36%`) and last year's amount was read as the
+    revenue. With `prefix`, the joined glyphs need only start with `label` (`占营业收入比重` for
+    `占营业`).
+    """
+    starts: list[float] = []
+    for n, first in enumerate(line):
+        text, end = "", first.x
+        for item in line[n:]:
+            piece = item.s.strip()
+            if not piece:
+                continue
+            if text and item.x - end > _LABEL_GAP:
+                break
+            text += piece
+            end = _end(item)
+            if text.startswith(label) if prefix else text == label:
+                if not starts or first.x > starts[-1]:
+                    starts.append(first.x)
+                break
+            if not label.startswith(text):
+                break
+    return starts
 
 
 def _labelled(item: TextItem, label: str) -> bool:

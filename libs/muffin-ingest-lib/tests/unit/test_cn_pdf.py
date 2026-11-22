@@ -2030,3 +2030,433 @@ def test_a_split_is_never_placed_against_a_total_of_zero_or_less() -> None:
     assert len(facts) == 5
     assert {f.partition_id for f in facts} == {0}
     assert {f.reconciled_to for f in facts} == {None}
+
+
+#: 奥赛康 (002755) FY2019, pages 24-25, as pdfium gives them: this year's amount label is set
+#: letter-spaced, `金` and `额` as two flush items, beside last year's `金额` as one. Read by its
+#: exact text, last year's column was taken for revenue and this year's figures fell into the names
+#: (`其他业务16,327,089.580.36%` at 30,718,110.71, measured 2026-11-22).
+AOSAIKANG = [
+    at("（", 56.6, 67.2, 640.0),
+    at("1", 67.3, 72.6, 640.0),
+    at("）营业收入构成", 72.5, 146.4, 640.0),
+    at("同比增减", 477.2, 513.2, 600.0),
+    at("金", 167.3, 176.3, 585.0),
+    at("额", 176.3, 185.3, 585.0),
+    at("占营业收入比重", 224.6, 287.6, 585.0),
+    at("金额", 326.7, 344.7, 585.0),
+    at("占营业收入比重", 384.1, 447.1, 585.0),
+    at("营业收入合计", 58.1, 112.1, 568.0),
+    at("4,518,631,692.41", 151.8, 214.8, 568.0),
+    at("100%", 273.5, 294.7, 568.0),
+    at("3,931,881,726.83", 311.2, 374.2, 568.0),
+    at("100%", 433.0, 454.2, 568.0),
+    at("14.92%", 506.0, 533.9, 568.0),
+    at("分行业", 58.1, 85.1, 552.0),
+    at("医药制造业", 58.1, 103.1, 536.0),
+    at("4,502,304,602.83", 151.8, 214.8, 536.0),
+    at("99.64%", 266.8, 294.7, 536.0),
+    at("3,901,163,616.12", 311.2, 374.2, 536.0),
+    at("99.22%", 426.3, 454.2, 536.0),
+    at("15.41%", 506.0, 533.9, 536.0),
+    at("其他业务", 58.1, 94.1, 520.0),
+    at("16,327,089.58", 163.1, 214.8, 520.0),
+    at("0.36%", 271.2, 294.6, 520.0),
+    at("30,718,110.71", 322.8, 374.2, 520.0),
+    at("0.78%", 430.8, 454.1, 520.0),
+    at("-", 503.0, 506.0, 520.0),
+    at("46.85%", 506.0, 533.9, 520.0),
+]
+
+
+def test_a_letter_spaced_amount_label_is_this_year_s_column() -> None:
+    rows = cn_pdf.parse_segment_page(AOSAIKANG, composition=True)
+    assert [(r.axis, r.name, r.revenue, r.stated_total) for r in rows] == [
+        ("cninfo:营业收入构成", "营业收入合计", 4518631692.41, True),
+        ("cninfo:分行业", "医药制造业", 4502304602.83, False),
+        ("cninfo:分行业", "其他业务", 16327089.58, False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pieces", "prefix", "starts"),
+    [
+        ([("金额", 10.0, 28.0)], False, [10.0]),
+        ([("金", 10.0, 19.0), ("额", 19.0, 28.0)], False, [10.0]),
+        # A space set as an item of its own between the glyphs.
+        ([("金", 10.0, 19.0), (" ", 19.0, 22.0), ("额", 23.0, 32.0)], False, [10.0]),
+        # Two glyphs further apart than an em are two words, not one label.
+        ([("金", 10.0, 19.0), ("额", 40.0, 49.0)], False, []),
+        ([("金", 10.0, 19.0), ("额", 19.0, 28.0), ("金额", 120.0, 138.0)], False, [10.0, 120.0]),
+        ([("占营业收入比", 50.0, 113.0), ("重", 113.0, 122.0)], True, [50.0]),
+        ([("占", 50.0, 59.0), ("营", 59.0, 68.0), ("业", 68.0, 77.0)], True, [50.0]),
+        ([("总金额", 10.0, 37.0)], False, []),
+    ],
+)
+def test_a_header_label_is_found_whole_or_glyph_by_glyph(
+    pieces: list[tuple[str, float, float]], prefix: bool, starts: list[float]
+) -> None:
+    line = [at(s, x, end, 500.0) for s, x, end in pieces]
+    label = cn_pdf.SHARE_HDR if prefix else cn_pdf.AMOUNT_HDR
+    assert cn_pdf._label_starts(line, label, prefix=prefix) == starts
+
+
+def test_this_year_s_amount_label_may_sit_below_the_line_holding_last_year_s() -> None:
+    """舒泰神 (300204) FY2023, page 23: this year's `金额` is 3.3 pt below the line carrying the
+    share labels and last year's `金额`, so the two fall in different lines. Taken from the line met
+    first, the amount column was last year's (548,988,617.75 served as FY2023)."""
+    items = [
+        at("（", 80.8, 92.8, 215.5),
+        at("1", 92.9, 98.9, 215.5),
+        at("）", 98.9, 110.9, 215.5),
+        at("营业收入构成", 113.9, 186.1, 215.5),
+        at("同比增减", 480.6, 516.6, 144.7),
+        at("占营业收入比重", 226.0, 289.0, 133.8),
+        at("金额", 328.8, 346.8, 133.8),
+        at("占营业收入比重", 386.7, 449.7, 133.8),
+        at("金额", 168.2, 186.2, 130.5),
+        at("营业收入合计", 62.2, 116.2, 112.1),
+        at("364,175,426.91", 155.7, 211.9, 112.1),
+        at("100%", 271.4, 292.5, 112.1),
+        at("548,988,617.75", 316.3, 372.5, 112.1),
+        at("100%", 432.1, 453.3, 112.1),
+        at("分行业", 62.2, 89.2, 90.3),
+        at("制造业", 62.2, 89.2, 65.2),
+        at("364,175,426.91", 155.7, 211.9, 65.2),
+        at("100.00%", 260.1, 292.4, 65.2),
+        at("548,988,617.75", 316.3, 372.5, 65.2),
+        at("100.00%", 420.8, 453.1, 65.2),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 364175426.91),
+        ("制造业", 364175426.91),
+    ]
+
+
+def test_prose_after_the_table_is_no_member() -> None:
+    """华大基因 (300676) FY2020, page 57: a note follows the regions, and its second line carries
+    `31,983.13` (万元) in the amount column. Read as a member worth 31,983.13 yuan, it was placed
+    within the split's tolerance of an 8.4 bn total (measured 2026-11-22)."""
+    items = [
+        at("（", 56.6, 67.2, 640.0),
+        at("1", 67.3, 72.6, 640.0),
+        at("）营业收入构成", 72.5, 146.4, 640.0),
+        at("金额", 167.2, 185.2, 585.0),
+        at("占营业收入比重", 224.4, 287.5, 585.0),
+        at("金额", 326.6, 344.6, 585.0),
+        at("占营业收入比重", 383.8, 446.8, 585.0),
+        at("营业收入合计", 58.0, 112.0, 568.0),
+        at("8,397,230,002.83", 151.7, 214.7, 568.0),
+        at("100%", 273.4, 294.6, 568.0),
+        at("分地区", 58.0, 85.0, 552.0),
+        at("中国大陆", 58.0, 94.0, 536.0),
+        at("4,620,634,438.17", 151.7, 214.7, 536.0),
+        at("55.03%", 266.7, 294.6, 536.0),
+        at("境外", 58.0, 76.0, 520.0),
+        at("3,776,595,564.66", 151.7, 214.7, 520.0),
+        at("44.97%", 266.7, 294.6, 520.0),
+        at("注：公司在", 74.7, 119.7, 500.0),
+        at("2020", 121.9, 140.0, 500.0),
+        at("年度“精准医学检测及综合解决方案”分部收入占营业", 142.3, 403.2, 500.0),
+        at("合解决方案收入金额为", 56.6, 146.6, 484.0),
+        at("31,983.13", 148.9, 185.0, 484.0),
+        at("万元，肿瘤精准防控综合解决方案收入金额为", 187.4, 367.3, 484.0),
+    ]
+    rows = cn_pdf.parse_segment_page(items, composition=True)
+    assert [(r.name, r.revenue) for r in rows] == [
+        ("营业收入合计", 8397230002.83),
+        ("中国大陆", 4620634438.17),
+        ("境外", 3776595564.66),
+    ]
+
+
+def _crcc_regions() -> list[TextItem]:
+    """中国中铁 (601390) FY2022, page 25: the region table in 千元, whole numbers, two of them set
+    over two lines (`1,095,921,7` over `52`), the last column's own text (`减少 0.23 个百分点`),
+    then a note and the review of each line, whose figures (`391.92` 亿元) fall in the money
+    columns and its short fragments (`降`) in the name column."""
+    rows = [
+        (460.8, [("单位:千元", 400.0, 450.0), ("主营业务分地区情况", 265.4, 360.5)]),
+        (446.6, [("营业收入", 352.2, 394.4), ("营业成本", 409.0, 451.2)]),
+        (439.8, [("毛利率", 304.3, 336.0), ("毛利率比上", 467.5, 520.3)]),
+        (
+            433.0,
+            [
+                ("分地区", 91.6, 123.2),
+                ("营业收入", 165.2, 207.5),
+                ("营业成本", 236.9, 279.1),
+                ("比上期增", 352.2, 394.4),
+                ("比上期增", 409.0, 451.2),
+            ],
+        ),
+        (426.2, [("（%）", 307.0, 333.4), ("期增减（%）", 464.9, 523.0)]),
+        (419.4, [("减（%）", 354.8, 391.8), ("减（%）", 411.6, 448.6)]),
+        (
+            405.7,
+            [
+                ("1,095,921,7", 160.2, 215.2),
+                ("减少", 469.0, 488.9),
+                ("0.23", 491.4, 511.5),
+                ("个", 514.1, 524.0),
+            ],
+        ),
+        (
+            399.1,
+            [
+                ("境内", 81.0, 102.1),
+                ("985,276,448", 234.8, 289.9),
+                ("10.10", 314.5, 339.5),
+                ("7.60", 376.2, 396.3),
+                ("7.88", 433.0, 453.1),
+            ],
+        ),
+        (392.8, [("52", 205.1, 215.1), ("百分点", 493.9, 523.8)]),
+        (379.3, [("增加", 469.0, 488.9), ("0.40", 491.4, 511.5), ("个", 514.1, 524.0)]),
+        (
+            372.7,
+            [
+                ("境外", 81.0, 102.1),
+                ("58,436,740", 165.1, 215.2),
+                ("53,515,414", 239.9, 290.0),
+                ("8.42", 319.6, 339.7),
+                ("6.66", 376.2, 396.3),
+                ("6.20", 433.0, 453.1),
+            ],
+        ),
+        (366.4, [("百分点", 493.9, 523.8)]),
+        (
+            352.9,
+            [
+                ("1,154,358,4", 160.2, 215.2),
+                ("1,038,791,86", 229.9, 290.0),
+                ("减少", 469.0, 488.9),
+                ("0.20", 491.4, 511.5),
+                ("个", 514.1, 524.0),
+            ],
+        ),
+        (
+            346.2,
+            [
+                ("合计", 81.0, 102.1),
+                ("10.01", 314.5, 339.5),
+                ("7.56", 376.2, 396.3),
+                ("7.79", 433.0, 453.1),
+            ],
+        ),
+        (340.0, [("92", 205.1, 215.1), ("2", 284.9, 289.9), ("百分点", 493.9, 523.8)]),
+        (
+            325.9,
+            [
+                ("注：本表中的“营业收入”为合并利润表中的“营", 110.9, 394.9),
+                ("；", 389.6, 400.2),
+                ("“营业成本”包含合并利润表", 394.9, 531.6),
+            ],
+        ),
+        (305.5, [("中的“营业成本”和“利息支出”", 89.9, 247.6), ("。", 242.3, 252.8)]),
+        (
+            106.4,
+            [
+                ("物资贸易业务实现收入", 89.9, 195.0),
+                ("391.92", 197.6, 229.1),
+                ("亿元，同比增长", 231.6, 304.6),
+            ],
+        ),
+        (86.0, [("降", 89.9, 100.5), ("7.83%", 103.1, 129.4), ("。", 129.4, 139.9)]),
+    ]
+    return [at(s, x, end, y) for y, line in rows for s, x, end in line]
+
+
+def test_a_table_in_thousands_may_print_whole_numbers_and_wrap_them() -> None:
+    """The mandated table read as the composition one already was: in 千元 a whole number is a
+    figure, judged with what its column already holds, so `1,095,921,7` and `52` are 境内's
+    1,095,921,752 thousand yuan. The rows sum to the stated 1,154,358,492."""
+    rows = cn_pdf.parse_segment_page(_crcc_regions())
+    assert [(r.name, r.revenue, r.cost) for r in rows if not r.stated_total] == [
+        ("境内", 1095921752000.0, 985276448000.0),
+        ("境外", 58436740000.0, 53515414000.0),
+    ]
+    assert [r.revenue for r in rows if r.stated_total] == [1154358492000.0]
+
+
+def test_prose_from_the_name_column_across_the_revenue_column_ends_a_mandated_table() -> None:
+    """Above, the note and the review after the table yield no row: `391.92` sits in the revenue
+    column. A table in 元 is read as before: its whole numbers are no figures."""
+    assert "物资贸易业务实现收入" not in [
+        r.name for r in cn_pdf.parse_segment_page(_crcc_regions())
+    ]
+    in_yuan = [i for i in _crcc_regions() if i.s != "单位:千元"]
+    assert [r.name for r in cn_pdf.parse_segment_page(in_yuan) if not r.stated_total] == []
+
+
+def test_a_name_running_into_the_revenue_column_is_not_prose() -> None:
+    """Only text reaching the cost label ends the table: a name set past the revenue label's start
+    (here 境内's, to 180.0 against 165.2) leaves the rows after it in the table."""
+    long_name = [replace(i, end=180.0) if i.s == "境内" else i for i in _crcc_regions()]
+    names = [r.name for r in cn_pdf.parse_segment_page(long_name) if not r.stated_total]
+    assert "境外" in names
+
+
+def _two_up(
+    left: list[tuple[float, str, float, float]], right: list[tuple[float, str, float, float]]
+) -> list[TextItem]:
+    return [at(s, x, end, y) for y, s, x, end in left + right]
+
+
+def test_a_two_up_page_s_other_page_is_not_the_table_s() -> None:
+    """上海家化 (600315) FY2017, page 20, printed two-up: the cash-flow table and its notes at x
+    56-537, the segment tables at 659-1133. The notes joined the member names, and a note's `说明`
+    ended the product table before its first row. A pie chart's labels under the table (`0.24`) are
+    no name either."""
+    table = [
+        (458.3, "主营业务分产品情况", 659.1, 722.1),
+        (440.0, "营业收入比上年", 927.8, 976.8),
+        (440.0, "营业成本比上年", 1009.5, 1058.5),
+        (440.0, "毛利率比上年", 1091.2, 1133.2),
+        (434.4, "分产品", 659.1, 680.1),
+        (434.4, "营业收入", 743.7, 771.7),
+        (434.4, "营业成本", 821.0, 849.0),
+        (434.4, "毛利率（%）", 867.9, 909.9),
+        (429.0, "增减（%）", 941.8, 976.8),
+        (429.0, "增减（%）", 1023.5, 1058.5),
+        (429.0, "增减（%）", 1098.2, 1133.2),
+        (410.5, "护肤类", 659.1, 680.1),
+        (410.5, "2,270,735,667.89", 717.2, 771.7),
+        (410.5, "438,451,601.61", 800.3, 849.0),
+        (392.2, "洗护类", 659.1, 680.1),
+        (392.2, "2,588,518,393.11", 717.2, 771.7),
+        (392.2, "1,053,843,332.58", 794.5, 849.0),
+        (373.9, "合计", 659.1, 673.1),
+        (373.9, "4,859,254,061.00", 717.2, 771.7),
+        (373.9, "1,492,294,934.19", 794.5, 849.0),
+        (355.0, "0.24", 671.8, 685.4),
+    ]
+    notes = [
+        (443.8, "投资活动产生的现金流量净额", 58.1, 149.1),
+        (443.8, "532,139,550.40", 244.7, 293.4),
+        (425.5, "筹资活动产生的现金流量净额", 58.1, 149.1),
+        (425.5, "-2,102,637,513.20", 236.3, 293.4),
+        (405.0, "营业收入变动原因说明：公司护肤类产品", 75.1, 480.1),
+        (390.0, "研发支出", 58.1, 86.1),
+        (390.0, "161,149,882.26", 244.7, 293.4),
+    ]
+    rows = cn_pdf.parse_segment_page(_two_up(notes, table))
+    assert [(r.name, r.revenue) for r in rows if not r.stated_total] == [
+        ("护肤类", 2270735667.89),
+        ("洗护类", 2588518393.11),
+    ]
+    assert [r.revenue for r in rows if r.stated_total] == [4859254061.0]
+
+
+def test_a_table_on_the_left_of_a_two_up_page_ends_at_its_own_text() -> None:
+    """The next page, the other way round: the region table at x 58-532, a cost table at 657-1133
+    whose `说明` label ended the region table after its second row."""
+    table = [
+        (-18.9, "主营业务分地区情况", 58.1, 121.1),
+        (-37.3, "营业收入比上年", 326.8, 375.8),
+        (-37.3, "营业成本比上年", 408.6, 457.6),
+        (-37.3, "毛利率比上年", 490.2, 532.2),
+        (-42.8, "分地区", 58.1, 79.1),
+        (-42.8, "营业收入", 142.8, 170.8),
+        (-42.8, "营业成本", 220.0, 248.0),
+        (-42.8, "毛利率（%）", 267.0, 309.0),
+        (-48.3, "增减（%）", 340.8, 375.8),
+        (-66.7, "江苏", 58.1, 72.1),
+        (-66.7, "530,076,059.00", 122.1, 170.8),
+        (-66.7, "187,428,550.56", 199.4, 248.0),
+        (-85.0, "广东", 58.1, 72.1),
+        (-85.0, "476,341,066.33", 122.1, 170.8),
+        (-85.0, "177,540,338.59", 199.4, 248.0),
+        (-103.4, "北京", 58.1, 72.1),
+        (-103.4, "602,531,732.39", 122.1, 170.8),
+        (-103.4, "123,170,656.95", 199.4, 248.0),
+    ]
+    other = [
+        (-18.9, "(3)成本分析表", 657.6, 727.2),
+        (-45.3, "单位：元", 1105.9, 1133.9),
+        (-90.1, "比例(%)", 879.3, 905.7),
+        (-90.1, "说明", 1118.4, 1132.4),
+        (-108.5, "原材料", 752.6, 773.6),
+        (-108.5, "1,733,233,968.77", 789.6, 844.1),
+    ]
+    rows = cn_pdf.parse_segment_page(_two_up(table, other))
+    assert [r.name for r in rows if not r.stated_total] == ["江苏", "广东", "北京"]
+
+
+def _composition_across_a_page(between: list[tuple[float, str, float, float]]) -> list[TextItem]:
+    """9900007107 FY2023, pages 15-16 joined: the composition table, its products on page 15, the
+    page's footer or a repeated header (`between`), then its regions on page 16."""
+    lines = [
+        (284.0, "（1） 营业收入构成", 56.6, 151.4),
+        (256.6, "单位：元", 493.2, 529.2),
+        (240.4, "2023年", 200.5, 229.3),
+        (240.4, "2022年", 362.9, 391.7),
+        (224.1, "占营业收入", 238.4, 283.4),
+        (224.1, "同比增减", 479.6, 515.6),
+        (218.1, "金额", 174.7, 192.7),
+        (218.1, "金额", 329.5, 347.5),
+        (218.1, "占营业收入比重", 392.2, 455.2),
+        (212.1, "比重", 252.0, 270.0),
+        (195.8, "营业收入合计", 56.6, 110.6),
+        (195.8, "15,121,002,138.17", 156.8, 224.3),
+        (195.8, "100%", 265.8, 286.9),
+        (126.5, "分产品", 56.6, 83.6),
+        (112.3, "电力产品", 56.6, 92.6),
+        (112.3, "8,879,406,663.32", 161.3, 224.3),
+        (112.3, "58.73%", 259.1, 286.9),
+        (75.5, "贸易、服务及其他", 56.6, 128.6),
+        (75.5, "6,241,595,474.85", 161.3, 224.3),
+        (75.5, "41.27%", 259.1, 286.9),
+        *between,
+        (26.6, "分地区", 56.6, 83.6),
+        (12.3, "华东地区", 56.6, 92.6),
+        (12.3, "8,770,141,511.10", 161.3, 224.3),
+        (12.3, "58.00%", 259.1, 286.9),
+        (0.1, "其他地区", 56.6, 92.6),
+        (0.1, "6,350,860,627.07", 161.3, 224.3),
+        (0.1, "42.00%", 259.1, 286.9),
+    ]
+    return [at(s, x, end, y) for y, s, x, end in lines]
+
+
+@pytest.mark.parametrize(
+    "between",
+    [
+        # 9900007107's footer, kept by the page join because it is several items on one line.
+        [
+            (52.3, "第", 261.5, 270.5),
+            (52.3, "15", 272.8, 281.8),
+            (52.3, "页", 284.0, 293.0),
+            (52.3, "/", 295.2, 297.7),
+            (52.3, "共", 297.7, 306.7),
+            (52.3, "202", 309.0, 322.5),
+            (52.3, "页", 324.7, 333.7),
+        ],
+        # 粤高速 FY2025 (page 12-13): the header repeated where the table runs onto the next page.
+        [
+            (58.7, "2025", 201.8, 219.9),
+            (58.7, "年", 221.6, 230.6),
+            (58.7, "2024", 372.4, 390.4),
+            (58.7, "年", 392.2, 401.2),
+            (50.5, "同比增减", 484.9, 520.9),
+            (42.3, "金额", 169.8, 187.8),
+            (42.3, "占营业收入比重", 231.8, 294.8),
+            (42.3, "金额", 337.3, 355.3),
+            (42.3, "占营业收入比重", 400.8, 463.8),
+        ],
+    ],
+    ids=["page-footer", "repeated-header"],
+)
+def test_what_starts_right_of_the_name_column_does_not_end_a_table(
+    between: list[tuple[float, str, float, float]],
+) -> None:
+    """Only text set from the name column across to the share label is prose. A footer and a
+    repeated header start right of the name column, and the regions after them are the table's.
+    Ending the table at either lost these reports' regions (measured 2026-11-22)."""
+    rows = cn_pdf.parse_segment_page(_composition_across_a_page(between), composition=True)
+    assert [r.name for r in rows if not r.stated_total] == [
+        "电力产品",
+        "贸易、服务及其他",
+        "华东地区",
+        "其他地区",
+    ]
