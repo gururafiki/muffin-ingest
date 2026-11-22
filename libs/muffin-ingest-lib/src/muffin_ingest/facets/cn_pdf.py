@@ -401,8 +401,6 @@ def parse_segment_page(
     composing = composed = False
     #: The next revenue completed is negative: its sign was set on a line of its own.
     negate = False
-    #: Where the composition table's header was read: its block is not prose.
-    header_y = 0.0
     #: The table's edges, once its header is read: nothing ending left of `name_lo` or starting
     #: right of `name_hi` is the table's (`_GUTTER`).
     name_lo, name_hi = 0.0, _NO_EDGE
@@ -524,15 +522,15 @@ def parse_segment_page(
             _TABLE_ENDS.search(joined)
             or (composing and _COMPOSITION_ENDS.search(joined))
             or (_NUMBERED.match(joined) and not is_a_row(k))
-            # PROSE ENDS A MANDATED TABLE: text set from the name column across the revenue column
-            # to the cost label is no name, which stays in its cell. 中国中铁 (601390) follows its
-            # regions with a note and then its review of each line, whose figures (`5,928.32`
-            # 亿元) fell in the money columns. The last column's own text (`增加 0.44 个百分点`)
-            # starts right of the name column.
-            or (
-                not composing
-                and any(_CJK.search(i.s) and i.x < name_end and _end(i) > rev_end for i in line)
-            )
+            # PROSE ENDS A TABLE: text set from the name column across to the next label (the cost
+            # label, or the composition table's share label) is no name, which stays in its cell.
+            # 中国中铁 (601390) follows its regions with a note and its review of each line, whose
+            # figures (`5,928.32` 亿元) fell in the money columns; 华大基因 (300676) FY2020 and
+            # 翰宇药业 (300199) follow their composition tables with notes. What starts right of
+            # the name column is not prose: the last column's own text (`增加 0.44 个百分点`), a
+            # page footer (`第 15 页 / 共 202 页`), and a column header repeated where the table
+            # runs onto the next page (粤高速, its `金额 占营业收入比重` between two regions).
+            or any(_CJK.search(i.s) and i.x < name_end and _end(i) > rev_end for i in line)
         ):
             close()
             axis = ""
@@ -567,7 +565,6 @@ def parse_segment_page(
                     composed = True
                     name_end, rev_end = amount_x, min(share)
                     cost_end = rev_end  # no cost column
-                    header_y = y
                 continue
             # A group row is the label alone on its line, wherever it is set: in the name column,
             # or centred across the table (9900003433's `分行业` at x 283).
@@ -581,15 +578,6 @@ def parse_segment_page(
             if _GROUP.match(label):
                 close()
                 axis = _SKIPPED_AXIS
-                continue
-            # PROSE ENDS THE TABLE: text running past the amount column is no member's name, which
-            # stays in its cell. 华大基因 (300676) FY2020 follows its regions with a note whose line
-            # carries `31,983.13` (万元) in the amount column, read as a member worth 31,983.13
-            # yuan and placed within the split's tolerance; 翰宇药业 (300199) FY2018 likewise.
-            # The header block's own lower line (`比重` set 6 pt below `金额`) is not prose.
-            if abs(y - header_y) > 15 and any(_CJK.search(i.s) and _end(i) > rev_end for i in line):
-                close()
-                axis, composing = "", False
                 continue
             if not name_x:
                 first = next((i for i in line if _end(i) <= name_end and i.s.strip()), None)

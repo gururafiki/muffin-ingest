@@ -2381,3 +2381,82 @@ def test_a_table_on_the_left_of_a_two_up_page_ends_at_its_own_text() -> None:
     ]
     rows = cn_pdf.parse_segment_page(_two_up(table, other))
     assert [r.name for r in rows if not r.stated_total] == ["江苏", "广东", "北京"]
+
+
+def _composition_across_a_page(between: list[tuple[float, str, float, float]]) -> list[TextItem]:
+    """9900007107 FY2023, pages 15-16 joined: the composition table, its products on page 15, the
+    page's footer or a repeated header (`between`), then its regions on page 16."""
+    lines = [
+        (284.0, "（1） 营业收入构成", 56.6, 151.4),
+        (256.6, "单位：元", 493.2, 529.2),
+        (240.4, "2023年", 200.5, 229.3),
+        (240.4, "2022年", 362.9, 391.7),
+        (224.1, "占营业收入", 238.4, 283.4),
+        (224.1, "同比增减", 479.6, 515.6),
+        (218.1, "金额", 174.7, 192.7),
+        (218.1, "金额", 329.5, 347.5),
+        (218.1, "占营业收入比重", 392.2, 455.2),
+        (212.1, "比重", 252.0, 270.0),
+        (195.8, "营业收入合计", 56.6, 110.6),
+        (195.8, "15,121,002,138.17", 156.8, 224.3),
+        (195.8, "100%", 265.8, 286.9),
+        (126.5, "分产品", 56.6, 83.6),
+        (112.3, "电力产品", 56.6, 92.6),
+        (112.3, "8,879,406,663.32", 161.3, 224.3),
+        (112.3, "58.73%", 259.1, 286.9),
+        (75.5, "贸易、服务及其他", 56.6, 128.6),
+        (75.5, "6,241,595,474.85", 161.3, 224.3),
+        (75.5, "41.27%", 259.1, 286.9),
+        *between,
+        (26.6, "分地区", 56.6, 83.6),
+        (12.3, "华东地区", 56.6, 92.6),
+        (12.3, "8,770,141,511.10", 161.3, 224.3),
+        (12.3, "58.00%", 259.1, 286.9),
+        (0.1, "其他地区", 56.6, 92.6),
+        (0.1, "6,350,860,627.07", 161.3, 224.3),
+        (0.1, "42.00%", 259.1, 286.9),
+    ]
+    return [at(s, x, end, y) for y, s, x, end in lines]
+
+
+@pytest.mark.parametrize(
+    "between",
+    [
+        # 9900007107's footer, kept by the page join because it is several items on one line.
+        [
+            (52.3, "第", 261.5, 270.5),
+            (52.3, "15", 272.8, 281.8),
+            (52.3, "页", 284.0, 293.0),
+            (52.3, "/", 295.2, 297.7),
+            (52.3, "共", 297.7, 306.7),
+            (52.3, "202", 309.0, 322.5),
+            (52.3, "页", 324.7, 333.7),
+        ],
+        # 粤高速 FY2025 (page 12-13): the header repeated where the table runs onto the next page.
+        [
+            (58.7, "2025", 201.8, 219.9),
+            (58.7, "年", 221.6, 230.6),
+            (58.7, "2024", 372.4, 390.4),
+            (58.7, "年", 392.2, 401.2),
+            (50.5, "同比增减", 484.9, 520.9),
+            (42.3, "金额", 169.8, 187.8),
+            (42.3, "占营业收入比重", 231.8, 294.8),
+            (42.3, "金额", 337.3, 355.3),
+            (42.3, "占营业收入比重", 400.8, 463.8),
+        ],
+    ],
+    ids=["page-footer", "repeated-header"],
+)
+def test_what_starts_right_of_the_name_column_does_not_end_a_table(
+    between: list[tuple[float, str, float, float]],
+) -> None:
+    """Only text set from the name column across to the share label is prose. A footer and a
+    repeated header start right of the name column, and the regions after them are the table's.
+    Ending the table at either lost these reports' regions (measured 2026-11-22)."""
+    rows = cn_pdf.parse_segment_page(_composition_across_a_page(between), composition=True)
+    assert [r.name for r in rows if not r.stated_total] == [
+        "电力产品",
+        "贸易、服务及其他",
+        "华东地区",
+        "其他地区",
+    ]
