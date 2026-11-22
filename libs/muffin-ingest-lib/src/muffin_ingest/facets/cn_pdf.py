@@ -504,20 +504,23 @@ def parse_segment_page(
             if not rev_end:
                 # The amount column's label, and the share column's beside it, which a narrow
                 # table sets over two lines (`占营业收入` 6 pt above `金额`, `比重` 6 pt below).
-                amount_h = next((i for i in line if i.s.strip() == AMOUNT_HDR), None)
-                if amount_h is None:
+                # This year's columns come first, so the FIRST amount label is this year's, set as
+                # one item or letter-spaced over several (`_label_starts`).
+                amounts = _label_starts(line, AMOUNT_HDR)
+                if not amounts:
                     continue
+                amount_x = amounts[0]
                 share = [
-                    i.x
+                    x
                     for n in range(max(0, k - 3), min(len(lines), k + 4))
                     if abs(heights[n] - y) <= 15
-                    for i in lines[n]
-                    if i.s.strip().startswith(SHARE_HDR) and i.x > amount_h.x
+                    for x in _label_starts(lines[n], SHARE_HDR, prefix=True)
+                    if x > amount_x
                 ]
                 if share:
                     close()
                     composed = True
-                    name_end, rev_end = amount_h.x, min(share)
+                    name_end, rev_end = amount_x, min(share)
                     cost_end = rev_end  # no cost column
                 continue
             # A group row is the label alone on its line, wherever it is set: in the name column,
@@ -692,6 +695,42 @@ def _joined(line: list[TextItem]) -> list[TextItem]:
                 continue
         out.append(item)
     return out
+
+
+#: How far apart two glyphs of one letter-spaced label may be set: an em.
+_LABEL_GAP = 12.0
+
+
+def _label_starts(line: Sequence[TextItem], label: str, *, prefix: bool = False) -> list[float]:
+    """Where each occurrence of a header label starts on its line, in x order: set as one item,
+    or LETTER-SPACED, one glyph per item.
+
+    16 of the 22 Shenzhen reports that served last year's figures as this year's print this
+    year's `金额` as `金` and `额` (x 167.3 and 176.3, flush) beside last year's `金额` as one
+    item (x 326.7), measured 2026-11-22 (鱼跃 002223, 奥赛康 002755 among them). Looking for
+    the label as one item found last year's column, so this year's amount and share fell into
+    the name column (`其他业务16,327,089.580.36%`) and last year's amount was read as the
+    revenue. With `prefix`, the joined glyphs need only start with `label` (`占营业收入比重` for
+    `占营业`).
+    """
+    starts: list[float] = []
+    for n, first in enumerate(line):
+        text, end = "", first.x
+        for item in line[n:]:
+            piece = item.s.strip()
+            if not piece:
+                continue
+            if text and item.x - end > _LABEL_GAP:
+                break
+            text += piece
+            end = _end(item)
+            if text.startswith(label) if prefix else text == label:
+                if not starts or first.x > starts[-1]:
+                    starts.append(first.x)
+                break
+            if not label.startswith(text):
+                break
+    return starts
 
 
 def _labelled(item: TextItem, label: str) -> bool:

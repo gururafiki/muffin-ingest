@@ -2030,3 +2030,72 @@ def test_a_split_is_never_placed_against_a_total_of_zero_or_less() -> None:
     assert len(facts) == 5
     assert {f.partition_id for f in facts} == {0}
     assert {f.reconciled_to for f in facts} == {None}
+
+
+#: 奥赛康 (002755) FY2019, pages 24-25, as pdfium gives them: this year's amount label is set
+#: letter-spaced, `金` and `额` as two flush items, beside last year's `金额` as one. Read by its
+#: exact text, last year's column was taken for revenue and this year's figures fell into the names
+#: (`其他业务16,327,089.580.36%` at 30,718,110.71, measured 2026-11-22).
+AOSAIKANG = [
+    at("（", 56.6, 67.2, 640.0),
+    at("1", 67.3, 72.6, 640.0),
+    at("）营业收入构成", 72.5, 146.4, 640.0),
+    at("同比增减", 477.2, 513.2, 600.0),
+    at("金", 167.3, 176.3, 585.0),
+    at("额", 176.3, 185.3, 585.0),
+    at("占营业收入比重", 224.6, 287.6, 585.0),
+    at("金额", 326.7, 344.7, 585.0),
+    at("占营业收入比重", 384.1, 447.1, 585.0),
+    at("营业收入合计", 58.1, 112.1, 568.0),
+    at("4,518,631,692.41", 151.8, 214.8, 568.0),
+    at("100%", 273.5, 294.7, 568.0),
+    at("3,931,881,726.83", 311.2, 374.2, 568.0),
+    at("100%", 433.0, 454.2, 568.0),
+    at("14.92%", 506.0, 533.9, 568.0),
+    at("分行业", 58.1, 85.1, 552.0),
+    at("医药制造业", 58.1, 103.1, 536.0),
+    at("4,502,304,602.83", 151.8, 214.8, 536.0),
+    at("99.64%", 266.8, 294.7, 536.0),
+    at("3,901,163,616.12", 311.2, 374.2, 536.0),
+    at("99.22%", 426.3, 454.2, 536.0),
+    at("15.41%", 506.0, 533.9, 536.0),
+    at("其他业务", 58.1, 94.1, 520.0),
+    at("16,327,089.58", 163.1, 214.8, 520.0),
+    at("0.36%", 271.2, 294.6, 520.0),
+    at("30,718,110.71", 322.8, 374.2, 520.0),
+    at("0.78%", 430.8, 454.1, 520.0),
+    at("-", 503.0, 506.0, 520.0),
+    at("46.85%", 506.0, 533.9, 520.0),
+]
+
+
+def test_a_letter_spaced_amount_label_is_this_year_s_column() -> None:
+    rows = cn_pdf.parse_segment_page(AOSAIKANG, composition=True)
+    assert [(r.axis, r.name, r.revenue, r.stated_total) for r in rows] == [
+        ("cninfo:营业收入构成", "营业收入合计", 4518631692.41, True),
+        ("cninfo:分行业", "医药制造业", 4502304602.83, False),
+        ("cninfo:分行业", "其他业务", 16327089.58, False),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("pieces", "prefix", "starts"),
+    [
+        ([("金额", 10.0, 28.0)], False, [10.0]),
+        ([("金", 10.0, 19.0), ("额", 19.0, 28.0)], False, [10.0]),
+        # A space set as an item of its own between the glyphs.
+        ([("金", 10.0, 19.0), (" ", 19.0, 22.0), ("额", 23.0, 32.0)], False, [10.0]),
+        # Two glyphs further apart than an em are two words, not one label.
+        ([("金", 10.0, 19.0), ("额", 40.0, 49.0)], False, []),
+        ([("金", 10.0, 19.0), ("额", 19.0, 28.0), ("金额", 120.0, 138.0)], False, [10.0, 120.0]),
+        ([("占营业收入比", 50.0, 113.0), ("重", 113.0, 122.0)], True, [50.0]),
+        ([("占", 50.0, 59.0), ("营", 59.0, 68.0), ("业", 68.0, 77.0)], True, [50.0]),
+        ([("总金额", 10.0, 37.0)], False, []),
+    ],
+)
+def test_a_header_label_is_found_whole_or_glyph_by_glyph(
+    pieces: list[tuple[str, float, float]], prefix: bool, starts: list[float]
+) -> None:
+    line = [at(s, x, end, 500.0) for s, x, end in pieces]
+    label = cn_pdf.SHARE_HDR if prefix else cn_pdf.AMOUNT_HDR
+    assert cn_pdf._label_starts(line, label, prefix=prefix) == starts
