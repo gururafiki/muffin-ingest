@@ -158,7 +158,9 @@ def unread(conn: Any, days: int) -> Unread:
 
 #: What stage 1 adds to a document's row, and why each may be added (raw-layer rule):
 #:   `accession`    the filing the document answers for: the key to our model;
-#:   `document`     which of the fetch's requests this is (`index_json`, `index_html`, `instance`);
+#:   `document`     which of the fetch's requests this is (`index_json`, `index_html`, `instance`,
+#:                  or `instance_listed_cik`: the 404 under the CIK we hold, when the instance was
+#:                  then found under the filer the HTML index names);
 #:   `http_status`  200 or 404, which the body does not say;
 #:   `outcome`      how the fetch ENDED (`answered`, `absent`, `too_large`), on every row of it. A
 #:                  refusal by size leaves no instance body to tell it from an absence.

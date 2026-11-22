@@ -321,7 +321,104 @@ def test_an_instance_that_is_a_404_is_absent() -> None:
     routes = {f"{DIRECTORY}/index.json": (200, _index(("a-20250628_htm.xml", "9")))}
     with _documents(routes, []):
         got = sec_edgar.fetch_instance(CIK, ACCESSION)
-    assert got.outcome == "absent" and got.answers[-1][1].status == 404
+    assert got.outcome == "absent" and got.filed_under is None
+    assert [(kind, a.status) for kind, a in got.answers] == [
+        ("index_json", 200),
+        ("instance", 404),
+        ("index_html", 404),
+    ]
+
+
+SEC_FIXTURES = Path(__file__).parents[1] / "fixtures" / "sec"
+
+#: Real Brokerage's 2023 40-F as SEC's submissions list it: under Real REMAX Group (2136387), the
+#: CIK the security holds since 2026, while the filing sits under Real Brokerage's own 1862461.
+#: Captured 2026-11-22: index.json and this page answered 200 at 2136387, the instance 404 there
+#: and 200 (1,711,377 bytes) under 1862461.
+LISTED_CIK, FILER_CIK, MOVED = 2136387, 1862461, "0001493152-23-007836"
+LISTED_DIR = "/Archives/edgar/data/2136387/000149315223007836"
+FILER_DIR = "/Archives/edgar/data/1862461/000149315223007836"
+
+
+def _moved_index() -> bytes:
+    return (SEC_FIXTURES / f"index_{MOVED}_at_{LISTED_CIK}.htm").read_bytes()
+
+
+def test_an_instance_filed_under_another_cik_is_found_under_its_filer() -> None:
+    seen: list[str] = []
+    routes = {
+        f"{LISTED_DIR}/index.json": (200, _index(("form40-f_htm.xml", "1711377"))),
+        f"{LISTED_DIR}/{MOVED}-index.htm": (200, _moved_index()),
+        f"{FILER_DIR}/form40-f_htm.xml": (200, b"<xbrl/>"),
+    }
+    with _documents(routes, seen):
+        got = sec_edgar.fetch_instance(LISTED_CIK, MOVED)
+    assert (got.outcome, got.instance_name, got.filed_under) == (
+        "answered",
+        "form40-f_htm.xml",
+        FILER_CIK,
+    )
+    assert [(kind, a.status) for kind, a in got.answers] == [
+        ("index_json", 200),
+        ("instance_listed_cik", 404),
+        ("index_html", 200),
+        ("instance", 200),
+    ]
+    # Every document of one fetch has its own name: the raw file merges on (accession, document),
+    # and stage 2 reads the one called `instance`.
+    assert len({kind for kind, _ in got.answers}) == len(got.answers)
+    assert got.answers[-1][1].document.body == b"<xbrl/>"
+    assert seen == [
+        f"{LISTED_DIR}/index.json",
+        f"{LISTED_DIR}/form40-f_htm.xml",
+        f"{LISTED_DIR}/{MOVED}-index.htm",
+        f"{FILER_DIR}/form40-f_htm.xml",
+    ]
+
+
+def test_an_html_index_that_already_named_the_instance_is_not_asked_again() -> None:
+    seen: list[str] = []
+    routes = {
+        f"{LISTED_DIR}/index.json": (200, _index(("Financial_Report.xlsx", "9"))),
+        f"{LISTED_DIR}/{MOVED}-index.htm": (200, _moved_index()),
+        f"{FILER_DIR}/form40-f_htm.xml": (200, b"<xbrl/>"),
+    }
+    with _documents(routes, seen):
+        got = sec_edgar.fetch_instance(LISTED_CIK, MOVED)
+    assert (got.outcome, got.filed_under) == ("answered", FILER_CIK)
+    assert [kind for kind, _ in got.answers] == [
+        "index_json",
+        "index_html",
+        "instance_listed_cik",
+        "instance",
+    ]
+    assert seen.count(f"{LISTED_DIR}/{MOVED}-index.htm") == 1
+
+
+def test_a_404_under_the_filer_s_own_cik_is_absent_without_a_retry() -> None:
+    """The page names the CIK we asked with: the file is genuinely missing, and no other directory
+    is asked about."""
+    seen: list[str] = []
+    routes = {
+        f"{FILER_DIR}/index.json": (200, _index(("form40-f_htm.xml", "1711377"))),
+        f"{FILER_DIR}/{MOVED}-index.htm": (200, _moved_index()),
+    }
+    with _documents(routes, seen):
+        got = sec_edgar.fetch_instance(FILER_CIK, MOVED)
+    assert (got.outcome, got.filed_under) == ("absent", None)
+    assert [kind for kind, _ in got.answers] == ["index_json", "instance", "index_html"]
+    assert all(path.startswith(FILER_DIR) for path in seen)
+
+
+def test_a_404_under_the_filer_too_is_absent() -> None:
+    routes = {
+        f"{LISTED_DIR}/index.json": (200, _index(("form40-f_htm.xml", "1711377"))),
+        f"{LISTED_DIR}/{MOVED}-index.htm": (200, _moved_index()),
+    }
+    with _documents(routes, []):
+        got = sec_edgar.fetch_instance(LISTED_CIK, MOVED)
+    assert (got.outcome, got.filed_under) == ("absent", FILER_CIK)
+    assert [(kind, a.status) for kind, a in got.answers][-1] == ("instance", 404)
 
 
 def test_a_refused_index_raises_rather_than_reading_as_absent() -> None:

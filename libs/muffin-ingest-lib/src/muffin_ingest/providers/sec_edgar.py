@@ -319,24 +319,28 @@ def filing_document_url(cik: int, accession: str, name: str) -> str:
     return f"{filing_directory_url(cik, accession)}/{name}"
 
 
-InstanceDocument = Literal["index_json", "index_html", "instance"]
+InstanceDocument = Literal["index_json", "index_html", "instance", "instance_listed_cik"]
 InstanceOutcome = Literal["answered", "absent", "too_large"]
 
 
 @dataclass(frozen=True)
 class InstanceFetch:
     """Every document SEC was asked for to read one filing's XBRL instance, in order, each named
-    for what it is: `index_json`, `index_html` or `instance`.
+    for what it is: `index_json`, `index_html`, `instance`, or `instance_listed_cik` (the instance
+    asked under the CIK we hold, which answered 404 because the filing sits under another filer's;
+    `instance` is then the copy found under that filer).
 
     `outcome` is `answered` (the instance is the last answer), `absent` (no index names one, or the
-    document it names is a 404) or `too_large` (over `segments.MAX_INSTANCE_BYTES`, by the size in
-    `index.json` or the response's; the body is not read). A refusal or a transport failure raises,
-    and is never one of these.
+    document it names is a 404 under every filer) or `too_large` (over
+    `segments.MAX_INSTANCE_BYTES`, by the size in `index.json` or the response's; the body is not
+    read). A refusal or a transport failure raises, and is never one of these. `filed_under` is the
+    CIK the instance answered under when that is not the one asked with.
     """
 
     answers: tuple[tuple[InstanceDocument, SecAnswer], ...]
     instance_name: str | None
     outcome: InstanceOutcome
+    filed_under: int | None = None
 
 
 def fetch_instance(
@@ -349,6 +353,13 @@ def fetch_instance(
     INCOMPLETE for some filings (Diageo's and Infosys's FY2025 20-Fs list 4 items, not the
     instance), so when it names no instance the HTML index is asked too; that carries no size, and
     the fetch itself is bounded instead.
+
+    A 404 FOR THE INSTANCE IS NOT YET AN ABSENCE. EDGAR serves a filing's documents only under a
+    filer's CIK, while answering both indexes under any CIK the path names, so a filing made before
+    its company moved to a new CIK answers 404 at the address we built (2026-11-22: Supernus,
+    Navient, Real Brokerage, 42 filings). The HTML index names the filer; the instance is asked
+    again under each filer that is not `cik`, and only a 404 under every one of them is `absent`.
+    One extra request per 404, and none on the ordinary path.
     """
     from muffin_ingest.facets import segments
 
@@ -356,6 +367,7 @@ def fetch_instance(
     listing = fetch(filing_index_url(cik, accession), provider="sec", timeout_s=index_timeout_s)
     answers.append(("index_json", listing))
     picked: tuple[str, float | None] | None = None
+    html: SecAnswer | None = None
     if listing.status == 200:
         picked = segments.instance_from_index_json(segments.text_of(listing.document.body))
     if picked is None:
@@ -374,16 +386,47 @@ def fetch_instance(
     name, size = picked
     if segments.instance_is_too_large(size):
         return InstanceFetch(tuple(answers), name, "too_large")
-    document = fetch(
-        filing_document_url(cik, accession, name),
-        provider="sec",
-        timeout_s=timeout_s,
-        max_bytes=segments.MAX_INSTANCE_BYTES,
-    )
-    answers.append(("instance", document))
+
+    def instance_under(filer: int) -> SecAnswer:
+        return fetch(
+            filing_document_url(filer, accession, name),
+            provider="sec",
+            timeout_s=timeout_s,
+            max_bytes=segments.MAX_INSTANCE_BYTES,
+        )
+
+    document = instance_under(cik)
     if document.too_large:
-        return InstanceFetch(tuple(answers), name, "too_large")
-    return InstanceFetch(tuple(answers), name, "answered" if document.status == 200 else "absent")
+        return InstanceFetch((*answers, ("instance", document)), name, "too_large")
+    if document.status != 404:
+        outcome: InstanceOutcome = "answered" if document.status == 200 else "absent"
+        return InstanceFetch((*answers, ("instance", document)), name, outcome)
+    # The HTML index names the filer. Asked now unless the instance was found through it.
+    late_html: list[tuple[InstanceDocument, SecAnswer]] = []
+    if html is None:
+        html = fetch(
+            filing_index_html_url(cik, accession), provider="sec", timeout_s=index_timeout_s
+        )
+        late_html = [("index_html", html)]
+    filers = (
+        segments.filers_from_index_html(segments.text_of(html.document.body))
+        if html.status == 200
+        else []
+    )
+    elsewhere = next((f for f in filers if f != cik), None)
+    if elsewhere is None:
+        # Filed under the CIK we asked with, or the page names none: a genuine 404.
+        return InstanceFetch((*answers, ("instance", document), *late_html), name, "absent")
+    # ONE RETRY, under the first other filer: a co-registrant's documents sit under each of its
+    # filers, so a second would ask for the same file. The 404 keeps its own name, so the copy found
+    # under the filer is the one `instance`: stage 2 reads that name, and the file merges on
+    # (accession, document).
+    retry = instance_under(elsewhere)
+    asked = (*answers, ("instance_listed_cik", document), *late_html, ("instance", retry))
+    if retry.too_large:
+        return InstanceFetch(asked, name, "too_large", filed_under=elsewhere)
+    found: InstanceOutcome = "answered" if retry.status == 200 else "absent"
+    return InstanceFetch(asked, name, found, filed_under=elsewhere)
 
 
 def insider_dataset_url(year: int, quarter: int) -> str:

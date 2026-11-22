@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1148,6 +1149,47 @@ def test_an_incomplete_or_unreadable_index_json_falls_through_to_the_html() -> N
     )
     assert segments.instance_from_index_html(html) == "deo-20250630_htm.xml"
     assert segments.instance_from_index_html("<html></html>") is None
+
+
+INDEX_PAGES = Path(__file__).parents[1] / "fixtures" / "sec"
+
+
+@pytest.mark.parametrize(
+    ("page", "filers", "instance"),
+    [
+        # Each page answered at the CIK the security holds now, and names the old one.
+        ("index_0001493152-23-007836_at_2136387.htm", [1862461], "form40-f_htm.xml"),
+        ("index_0001356576-21-000045_at_1625297.htm", [1356576], "supn-20210331_htm.xml"),
+    ],
+)
+def test_the_html_index_names_the_cik_a_filing_was_filed_under(
+    page: str, filers: list[int], instance: str
+) -> None:
+    html = (INDEX_PAGES / page).read_text()
+    assert segments.filers_from_index_html(html) == filers
+    assert segments.instance_from_index_html(html) == instance
+
+
+def test_only_a_filer_holds_the_documents() -> None:
+    """A `Subject` or `Filed by` company is on the page too, and its directory has no copy. A name
+    carrying parentheses of its own must not end the match early."""
+
+    def block(name: str, role: str, cik: str) -> str:
+        return (
+            f'<span class="companyName">{name} ({role})\n <acronym title="Central Index Key">'
+            f'CIK</acronym>: <a href="/cgi-bin/browse-edgar?CIK={cik}&amp;action=getcompany">'
+            f"{cik} (see all company filings)</a></span>"
+        )
+
+    html = (
+        block("TARGET CO", "Subject", "0000000011")
+        + block("AGENT LLC", "Filed by", "0000000022")
+        + block("HOLDINGS CORP (DE)", "Filer", "0000000033")
+        + block("HOLDINGS CORP (DE)", "Filer", "0000000033")
+        + block("CO-REGISTRANT INC", "Filer", "0000000044")
+    )
+    assert segments.filers_from_index_html(html) == [33, 44]
+    assert segments.filers_from_index_html("<html></html>") == []
 
 
 #: Instance names filing agents gave, each from a filing the edge recorded as having no instance

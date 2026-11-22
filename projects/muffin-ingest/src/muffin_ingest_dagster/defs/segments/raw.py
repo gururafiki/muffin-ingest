@@ -154,6 +154,8 @@ def raw_sec_instance(
         transport_in_a_row = 0
         answered_any = True
         stats[f"instance_{fetch.outcome}"] += 1
+        if fetch.filed_under is not None:
+            stats["found_under_filer"] += 1
         stats["documents"] += len(fetch.answers)
         stats["bytes"] += sum(len(answer.document.body) for _, answer in fetch.answers)
         for row in sec_segments.raw_rows(
@@ -173,6 +175,9 @@ def raw_sec_instance(
             "documents": stats["documents"],
             "bytes": stats["bytes"],
             **{f"instance_{o}": stats[f"instance_{o}"] for o in INSTANCE_OUTCOMES},
+            # NOT AN OUTCOME: of the filings answered (or too large), those whose instance sat
+            # under another filer's CIK than the security's (`sec_edgar.fetch_instance`).
+            "found_under_filer": stats["found_under_filer"],
         }
     )
     stored = context.instance.get_materialized_partitions(SEC_INSTANCE)
