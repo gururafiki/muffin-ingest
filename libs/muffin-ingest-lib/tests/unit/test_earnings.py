@@ -23,9 +23,20 @@ def nasdaq_day(day: str, fetched_at: str = "2026-11-21T16:00:00+00:00") -> dict[
     return {"day": day, "body": body, "fetched_at": fetched_at, "url": f"n/{day}"}
 
 
-def summary(symbol: str, sid: str | None = None, body: bytes | None = None) -> dict[str, Any]:
+#: When the summary fixtures were captured (capture.md), which is what "past" is judged against.
+CAPTURED = "2026-10-10T12:00:00+00:00"
+
+
+def summary(
+    symbol: str, sid: str | None = None, body: bytes | None = None, fetched_at: str = CAPTURED
+) -> dict[str, Any]:
     raw = body or gzip.decompress((FIXTURES / f"yahoo_summary_{symbol}.json.gz").read_bytes())
-    return {"security_id": sid or symbol, "asked_symbol": symbol, "body": raw, "fetched_at": "x"}
+    return {
+        "security_id": sid or symbol,
+        "asked_symbol": symbol,
+        "body": raw,
+        "fetched_at": fetched_at,
+    }
 
 
 # --- the provider --------------------------------------------------------------------------------
@@ -244,6 +255,39 @@ def test_a_yahoo_calendar_row_carries_its_range_and_consensus() -> None:
     )
     assert (row["eps_consensus"], row["eps_low"], row["eps_high"]) == (1.9822, 1.93, 2.07)
     assert row["revenue_consensus"] == 113617923250 and row["is_date_estimate"] is False
+
+
+def test_a_date_already_past_when_yahoo_answered_carries_no_estimate() -> None:
+    """Yahoo keeps the last report's date until the next is set, beside the NEXT quarter's
+    estimate. SAP's capture is dated 2026-10-21 with 1.8334; read as answered on 11-19, the date is
+    past and its 1.98-style average belongs to a report not yet dated."""
+    after = earnings.normalise_yahoo(
+        [summary("SAP.DE", fetched_at="2026-11-19T04:34:04+00:00")], today=TODAY
+    )
+    (row,) = after.calendar
+    assert row["report_date"] == date(2026, 10, 21)
+    assert (row["eps_consensus"], row["eps_low"], row["eps_high"]) == (None, None, None)
+    assert row["revenue_consensus"] is None
+    assert after.stats["past_without_estimate"] == 1
+
+    # The same answer read as given before the date keeps its estimate, and a replay on a later day
+    # does not change that: the rule reads the fetch time, never `today`.
+    before = earnings.normalise_yahoo([summary("SAP.DE")], today=TODAY)
+    assert before.calendar[0]["eps_consensus"] == 1.8334
+    assert before.stats["past_without_estimate"] == 0
+
+
+def test_past_is_judged_on_the_exchange_s_calendar() -> None:
+    """On the report day itself the estimate is kept. 23:30 UTC on 21 Oct is already 22 Oct in
+    Frankfurt, so there the report is past, while the UTC date would still call it today."""
+    same_day = earnings.normalise_yahoo(
+        [summary("SAP.DE", fetched_at="2026-10-21T05:00:00+00:00")], today=TODAY
+    )
+    assert same_day.calendar[0]["eps_consensus"] == 1.8334
+    next_day_there = earnings.normalise_yahoo(
+        [summary("SAP.DE", fetched_at="2026-10-21T23:30:00+00:00")], today=TODAY
+    )
+    assert next_day_there.calendar[0]["eps_consensus"] is None
 
 
 def test_yahoo_s_surprise_is_a_fraction_and_is_stored_as_a_percent() -> None:

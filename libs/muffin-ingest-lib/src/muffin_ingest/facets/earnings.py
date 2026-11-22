@@ -293,6 +293,19 @@ def _zone(summary: yahoo_summary.Summary) -> ZoneInfo:
     return ZoneInfo("UTC")
 
 
+def _answered_on(fetched: str | None, zone: ZoneInfo) -> date | None:
+    """The day Yahoo answered, in the exchange's zone, or None when the stamp cannot be read."""
+    if not fetched:
+        return None
+    try:
+        moment = datetime.fromisoformat(fetched)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(zone).date()
+
+
 def _stamp(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int | float) or value <= 0:
         return None
@@ -312,6 +325,15 @@ def normalise_yahoo(rows: Sequence[Mapping[str, Any]], *, today: date) -> Normal
 
     `answered` lists the companies whose newest document is a summary: their Yahoo calendar rows are
     replaced by what it states, which may be nothing.
+
+    A DATE ALREADY PAST WHEN YAHOO ANSWERED CARRIES NO ESTIMATE. `calendarEvents` keeps the date
+    of the report a company last made until it sets the next one, while `earningsAverage`, `Low`,
+    `High` and `revenueAverage` are always the CURRENT quarter's, the one not yet reported.
+    Measured on SAP's answer of 2026-11-19: the date was 2026-10-21, its average 1.98 matched
+    `earningsTrend`'s `0q` (the quarter ending 2026-12-31), and the October report's own estimate
+    was 1.83 (`earningsHistory`). Pairing them put "was expected 1.98" beside the wrong report.
+    Judged by the day Yahoo answered, never the day of the parse, so a replay keeps an estimate that
+    was right when it was fetched.
     """
     stats = {
         "documents": 0,
@@ -321,6 +343,7 @@ def normalise_yahoo(rows: Sequence[Mapping[str, Any]], *, today: date) -> Normal
         "dated": 0,
         "undated": 0,
         "calendar_too_old": 0,
+        "past_without_estimate": 0,
         "quarters": 0,
         "quarters_without_actual": 0,
     }
@@ -361,6 +384,10 @@ def normalise_yahoo(rows: Sequence[Mapping[str, Any]], *, today: date) -> Normal
                 price = summary.module("price")
                 name = price.get("longName") or price.get("shortName")
                 estimate = events.get("isEarningsDateEstimate")
+                answered_on = _answered_on(fetched, zone)
+                past = answered_on is not None and days[-1] < answered_on
+                if past:
+                    stats["past_without_estimate"] += 1
                 out.calendar.append(
                     {
                         "source_code": YAHOO,
@@ -369,10 +396,10 @@ def normalise_yahoo(rows: Sequence[Mapping[str, Any]], *, today: date) -> Normal
                         "report_date_end": days[-1] if len(days) > 1 else None,
                         "security_id": sid,
                         "name": name.strip() if isinstance(name, str) and name.strip() else None,
-                        "eps_consensus": _number(events, "earningsAverage"),
-                        "eps_low": _number(events, "earningsLow"),
-                        "eps_high": _number(events, "earningsHigh"),
-                        "revenue_consensus": _number(events, "revenueAverage"),
+                        "eps_consensus": None if past else _number(events, "earningsAverage"),
+                        "eps_low": None if past else _number(events, "earningsLow"),
+                        "eps_high": None if past else _number(events, "earningsHigh"),
+                        "revenue_consensus": None if past else _number(events, "revenueAverage"),
                         "is_date_estimate": estimate if isinstance(estimate, bool) else None,
                         "as_of": fetched,
                     }
