@@ -1055,6 +1055,33 @@ def instance_from_index_html(html: str) -> str | None:
     return _pick_instance([str(m.group(1)) for m in _INDEX_HREF.finditer(html)])
 
 
+#: One company block of a filing's HTML index: its role in parentheses (`Filer`, `Filed by`,
+#: `Subject`, `Reporting`), then its CIK. A name may carry parentheses of its own ("X CORP (DE)"),
+#: which the lazy match steps past.
+_INDEX_COMPANY = re.compile(
+    r'<span class="companyName">[^<]*?\(([^()<]+)\)\s*<acronym[^>]*>CIK</acronym>:\s*'
+    r'<a href="[^"]*\bCIK=(\d+)',
+    re.A,
+)
+
+
+def filers_from_index_html(html: str) -> list[int]:
+    """The CIKs a filing was filed under, from its `<accession>-index.htm`, in page order.
+
+    EDGAR SERVES A FILING'S DOCUMENTS ONLY UNDER A FILER'S CIK, but answers `index.json` and this
+    page under whatever CIK the path names. A company that moves to a new CIK (a reorganisation,
+    a new holding company, a redomicile) keeps its old filings under the old one, while SEC's map
+    and sometimes its submissions name the new one. Measured 2026-11-22 on the three filers this
+    happened to: Supernus (1356576, now 1625297), Navient (1593538, now 2152623) and Real Brokerage
+    (1862461, listed under Real REMAX Group's 2136387). In each, the instance answered 404 under
+    the CIK we asked with and 200 under the filer this page names. Only `Filer` counts: a `Subject`
+    or a `Filed by` company does not hold the filing's documents.
+    """
+    return list(
+        dict.fromkeys(int(cik) for role, cik in _INDEX_COMPANY.findall(html) if role == "Filer")
+    )
+
+
 def instance_is_too_large(size: float | None) -> bool:
     """An unknown size is NOT too large: the HTML fallback has none, and refusing it would drop
     every foreign private issuer whose `index.json` is incomplete."""
