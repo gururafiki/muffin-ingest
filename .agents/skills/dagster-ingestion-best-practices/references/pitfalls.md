@@ -486,6 +486,18 @@ asked again. Read the partition's own counters (`fetch_materializations` with
 `asset_partitions=[key], limit=1`) and re-ask when they do not account for everything named. A check
 that reads only the newest days sees such a gap for a week and then loses it.
 
+## Do not let a floor visit be a fetch
+
+A floor that requests width-aligned chunks of a grid requests a chunk whenever ANY filer in it is on
+its floor day, which for a chunk of ~45 filers is about three days in four. If stage 1 then asks
+the provider about every filer in the range, a 30-day floor costs the whole grid daily: measured
+2026-11-22, `nse_filers_floor` ran 16-19 runs a day and `dart_filers_floor` would have spent an hour
+of DART calls each morning. Stage 1 decides by the stored answer's age (`list_max_age_days`, one day
+under the floor), as the SEC filer lane does, and plans a skipped filer's work from the stored
+answer so nothing due is left unasked (muffin-ingest#197). Age only an answer: an absence, a gateway
+page or a walk cut short is asked again at any age. And a grid a drain filled all at once comes due
+all at once a floor later: read the stored ages before predicting the daily cost.
+
 ## Dependencies
 
 - **Two kinds of openbb extension:** a *provider* supplies data (`openbb-yfinance`), a *router* supplies
