@@ -64,6 +64,23 @@ re-walked on a 30-day hash floor (SEC's is a sensor over its daily index). A who
 parser bump, is drained by an operator backfill at priority −1, and China's annual-report PDFs are
 pruned to 5 GB once read. Each lane's queue is an asset check (`every_<regulator>_…_was_read`).
 
+The macro and events lanes (since 2026-11-21) follow the same rule, and their grids show it:
+
+- **Nasdaq's earnings calendar** answers one DATE per request, so `defs/earnings/` partitions by
+  day (`nasdaq_day`, from 2012). One answer lists the companies reporting that day: forecasts for a
+  future day, actuals and surprises for a past one. A day it answers with `data: null` is an empty
+  day, not a failure. `nasdaq_earnings_window` re-asks the last 7 days and the next 21 every
+  morning.
+- **Yahoo's earnings** are already in the company lane's stored quoteSummary answers, so
+  `yahoo_earnings` is a stage-2 asset on the company grid that asks nothing.
+- **Company news** is Yahoo's RSS feed, one request per company, so `defs/news/` rides the company
+  grid and job: each company's news is re-read on its weekly visit.
+- **Macro** asks one catalogued series per request, so `defs/macro/` has one partition per enabled
+  `market.macro_indicator` row, added by a sensor. openbb is called in-process through a typed
+  dispatch (`MACRO_ROUTES`) that refuses an unknown route or parameter.
+
+Each source's rows name their provider, and the serving views pick one per company.
+
 What a provider said about a subject's IDENTIFIER is a different fact. A symbol the provider
 rejected when asked alone, with a control symbol answering in the same run, is an observation in
 `market.identifier_probe`, keyed by the symbol it was asked with. The askable population skips a
