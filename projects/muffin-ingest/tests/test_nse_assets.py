@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,7 @@ from muffin_ingest.providers import nse
 from muffin_ingest.providers.documents import Document
 
 from muffin_ingest_dagster.defs.segments import core, raw
-from muffin_ingest_dagster.defs.segments.partitions import NSE_FILER_PARTITION
+from muffin_ingest_dagster.defs.segments.partitions import FLOOR_DAYS, NSE_FILER_PARTITION
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import FIXTURES
@@ -101,8 +101,17 @@ class Nse:
         return nse.Answer(_document(link, answer[1]), answer[0])
 
 
+#: When a request's answer was fetched, by the fake's URL, where a test needs it older than now.
+FETCHED_AT: dict[str, datetime] = {}
+
+
 def _document(url: str, body: bytes) -> Document:
-    return Document(url=url, body=body, content_type="text/xml", fetched_at=datetime.now(UTC))
+    return Document(
+        url=url,
+        body=body,
+        content_type="text/xml",
+        fetched_at=FETCHED_AT.get(url, datetime.now(UTC)),
+    )
 
 
 @pytest.fixture
@@ -228,6 +237,7 @@ def _clean() -> Iterator[None]:
     FILING_ROWS.clear()
     PARSER["version"] = 20
     CALLS.clear()
+    FETCHED_AT.clear()
     yield
 
 
@@ -313,15 +323,87 @@ def test_a_first_visit_files_each_xml_result_and_reads_the_consolidated_one(
     assert FILING_ROWS[("s-in2", REL_CONS)]["filing_date"] == "2024-04-22"
 
 
-def test_a_second_visit_lists_again_and_fetches_nothing_read(tmp_path: Path, provider: Nse) -> None:
+def test_a_second_visit_inside_the_floor_asks_nothing_and_fetches_nothing_read(
+    tmp_path: Path, provider: Nse
+) -> None:
     instance = instance_with("RELIANCE")
     assert run(tmp_path, instance, ["RELIANCE"]).success
     provider.calls.clear()
     result = run(tmp_path, instance, ["RELIANCE"])
     assert result.success
-    assert provider.calls == ["list RELIANCE"]
-    assert meta(result, "raw_nse_filings")["instances_named"] == 0
+    assert provider.calls == [], "the list is fresh, and nothing is due"
+    fetched = meta(result, "raw_nse_filings")
+    assert (fetched["list_fresh"], fetched["list_outcomes"], fetched["instances_named"]) == (
+        1,
+        1,
+        0,
+    )
     assert meta(result, "nse_segment")["filings"] == 0
+
+
+@pytest.mark.parametrize(
+    ("age_days", "listed_again"),
+    # A list fetched on a filer's floor day is due on its next one, whatever the hour of the
+    # tick: an hour short of a floor period is old enough.
+    [(raw.LIST_MAX_AGE_DAYS - 1, False), (FLOOR_DAYS - 1 / 24, True)],
+)
+def test_a_list_younger_than_the_floor_is_not_asked_and_one_as_old_is(
+    tmp_path: Path, provider: Nse, age_days: float, listed_again: bool
+) -> None:
+    instance = instance_with("RELIANCE")
+    FETCHED_AT["list:RELIANCE"] = datetime.now(UTC) - timedelta(days=age_days)
+    assert run(tmp_path, instance, ["RELIANCE"]).success
+    FETCHED_AT.clear()
+    provider.calls.clear()
+
+    assert run(tmp_path, instance, ["RELIANCE"]).success
+    assert provider.calls == (["list RELIANCE"] if listed_again else [])
+
+
+def test_a_fresh_list_still_names_its_instances_when_stage_2_never_filed_them(
+    tmp_path: Path, provider: Nse
+) -> None:
+    """Stage 1 alone, every instance failing in transit: `security_filing` holds nothing for the
+    filer, so the next run can only know its results from the stored list."""
+    for link in BODIES:
+        provider.instances[link] = nse.NseTransport("reset")
+    instance = instance_with("RELIANCE")
+    first = dg.materialize(
+        [raw.raw_nse_filings],
+        instance=instance,
+        partition_key="RELIANCE",
+        run_config={"ops": {"raw_nse_filings": {"config": {"pace_seconds": 0.0}}}},
+        resources={
+            "postgres": FakePostgres(),
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "raw_store": RawStore(base_path=str(tmp_path)),
+        },
+    )
+    assert first.success and meta(first, "raw_nse_filings")["instance_transport"] == 2
+    assert FILING_ROWS == {}
+    provider.instances.update({k: (200, v) for k, v in BODIES.items()})
+    provider.calls.clear()
+
+    again = run(tmp_path, instance, ["RELIANCE"])
+    assert again.success
+    assert sorted(provider.calls) == sorted(
+        link.rsplit("/", 1)[1] for link in (REL_CONS, REL_STAND)
+    ), "planned from the stored list"
+    assert meta(again, "raw_nse_filings")["list_fresh"] == 1
+
+
+def test_a_list_that_was_not_an_answer_is_asked_again_however_young(
+    tmp_path: Path, provider: Nse
+) -> None:
+    """A gateway page in place of the results is no list to plan from."""
+    provider.lists["RELIANCE"] = (200, b"<html>Access Denied</html>")
+    instance = instance_with("RELIANCE")
+    first = run(tmp_path, instance, ["RELIANCE"])
+    assert first.success and meta(first, "raw_nse_filings")["list_not_answer"] == 1
+    provider.calls.clear()
+
+    assert run(tmp_path, instance, ["RELIANCE"]).success
+    assert provider.calls == ["list RELIANCE"]
 
 
 def test_an_instance_nse_does_not_have_is_marked_and_writes_nothing(
@@ -356,7 +438,7 @@ def test_a_body_that_is_not_an_instance_is_asked_again(tmp_path: Path, provider:
     provider.calls.clear()
     provider.instances[REL_CONS] = (200, BODIES[REL_CONS])
     assert run(tmp_path, instance, ["RELIANCE"]).success
-    assert provider.calls == ["list RELIANCE", REL_CONS.rsplit("/", 1)[1]]
+    assert provider.calls == [REL_CONS.rsplit("/", 1)[1]], "the list is fresh; the instance is due"
     assert marked() == {REL_CONS, REL_STAND}
 
 

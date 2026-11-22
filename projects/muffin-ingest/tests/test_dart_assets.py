@@ -14,7 +14,7 @@ import json
 import zipfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ from muffin_ingest.providers import dart
 from muffin_ingest.providers.documents import Document
 
 from muffin_ingest_dagster.defs.segments import automation, core, raw
-from muffin_ingest_dagster.defs.segments.partitions import DART_FILER_PARTITION
+from muffin_ingest_dagster.defs.segments.partitions import DART_FILER_PARTITION, FLOOR_DAYS
 from muffin_ingest_dagster.lib.io_managers import ParquetIOManager, RawStore
 from muffin_ingest_dagster.lib.resources import Postgres
 from tests import FIXTURES
@@ -51,11 +51,11 @@ def archive(instance: bytes = b"<xbrli:xbrl>an instance</xbrli:xbrl>") -> bytes:
     return out.getvalue()
 
 
-def listing(*filed: tuple[str, str, str]) -> bytes:
+def listing(*filed: tuple[str, str, str], pages: int = 1) -> bytes:
     return json.dumps(
         {
             "status": "000",
-            "total_page": 1,
+            "total_page": pages,
             "list": [{"rcept_no": r, "report_nm": n, "rcept_dt": d} for r, n, d in filed],
         }
     ).encode()
@@ -76,7 +76,8 @@ class Dart:
     expect."""
 
     def __init__(self) -> None:
-        self.lists: dict[str, tuple[int, bytes] | Exception] = {
+        #: By corp code, or by (corp code, page) for a page past the first.
+        self.lists: dict[str | tuple[str, int], tuple[int, bytes] | Exception] = {
             k: (200, v) for k, v in LISTS.items()
         }
         self.archives: dict[str, tuple[int, bytes, bool] | Exception] = {
@@ -85,8 +86,8 @@ class Dart:
         self.calls: list[str] = []
 
     def filings(self, corp_code: str, page: int = 1) -> dart.Answer:
-        self.calls.append(f"list {corp_code}")
-        answer = self.lists.get(corp_code)
+        self.calls.append(f"list {corp_code}" if page == 1 else f"list {corp_code} p{page}")
+        answer = self.lists.get((corp_code, page)) if page > 1 else self.lists.get(corp_code)
         if answer is None:
             raise AssertionError(f"unexpected list: {corp_code}")
         if isinstance(answer, Exception):
@@ -104,12 +105,16 @@ class Dart:
         return dart.Answer(_document(rcept_no, body), status, too_large)
 
 
+#: When a request's answer was fetched, by the fake's URL, where a test needs it older than now.
+FETCHED_AT: dict[str, datetime] = {}
+
+
 def _document(url: str, body: bytes) -> Document:
     return Document(
         url=f"http://http-cache:8080/dart/{url}?crtfc_key=REDACTED",
         body=body,
         content_type="application/x-msdownload",
-        fetched_at=datetime.now(UTC),
+        fetched_at=FETCHED_AT.get(url, datetime.now(UTC)),
     )
 
 
@@ -262,6 +267,7 @@ def _clean() -> Iterator[None]:
     FILING_ROWS.clear()
     PARSER["version"] = 20
     CALLS.clear()
+    FETCHED_AT.clear()
     yield
 
 
@@ -331,7 +337,7 @@ def test_a_first_visit_lists_each_filer_and_reads_its_annual_reports(
                .stored_rows_for(raw.DART_FILINGS, SAMSUNG))  # fmt: skip
 
 
-def test_a_second_visit_lists_again_and_fetches_nothing_read(
+def test_a_second_visit_inside_the_floor_asks_nothing_and_fetches_nothing_read(
     tmp_path: Path, provider: Dart
 ) -> None:
     instance = instance_with(SAMSUNG)
@@ -340,10 +346,76 @@ def test_a_second_visit_lists_again_and_fetches_nothing_read(
     PARSED.clear()
     result = run(tmp_path, instance, [SAMSUNG])
     assert result.success
-    assert provider.calls == [f"list {SAMSUNG}"]
-    assert meta(result, "raw_dart_filings")["archives_named"] == 0
+    assert provider.calls == [], "the list is fresh, and nothing is due"
+    fetched = meta(result, "raw_dart_filings")
+    assert (fetched["list_fresh"], fetched["list_outcomes"], fetched["archives_named"]) == (1, 1, 0)
     assert meta(result, "dart_segment")["filings"] == 0
     assert PARSED == []
+
+
+@pytest.mark.parametrize(
+    ("age_days", "listed_again"),
+    # A list fetched on a filer's floor day is due on its next one, whatever the hour of the
+    # tick: an hour short of a floor period is old enough.
+    [(raw.LIST_MAX_AGE_DAYS - 1, False), (FLOOR_DAYS - 1 / 24, True)],
+)
+def test_a_list_younger_than_the_floor_is_not_asked_and_one_as_old_is(
+    tmp_path: Path, provider: Dart, age_days: float, listed_again: bool
+) -> None:
+    instance = instance_with(SAMSUNG)
+    FETCHED_AT[f"list:{SAMSUNG}"] = datetime.now(UTC) - timedelta(days=age_days)
+    assert run(tmp_path, instance, [SAMSUNG]).success
+    FETCHED_AT.clear()
+    provider.calls.clear()
+
+    assert run(tmp_path, instance, [SAMSUNG]).success
+    assert provider.calls == ([f"list {SAMSUNG}"] if listed_again else [])
+
+
+def test_a_fresh_list_still_names_its_archives_when_stage_2_never_filed_them(
+    tmp_path: Path, provider: Dart
+) -> None:
+    """Stage 1 alone, its archives left unasked: `security_filing` holds nothing for the filer, so
+    the next run can only know its annual reports from the stored list."""
+    instance = instance_with(SAMSUNG)
+    first = dg.materialize(
+        [raw.raw_dart_filings],
+        instance=instance,
+        partition_key=SAMSUNG,
+        run_config={
+            "ops": {"raw_dart_filings": {"config": {"pace_seconds": 0.0, "budget_bytes": 0}}}
+        },
+        resources={
+            "postgres": FakePostgres(),
+            "parquet_io": ParquetIOManager(str(tmp_path)),
+            "raw_store": RawStore(base_path=str(tmp_path)),
+        },
+    )
+    assert first.success and provider.calls == [f"list {SAMSUNG}"]
+    assert FILING_ROWS == {}
+
+    again = run(tmp_path, instance, [SAMSUNG])
+    assert again.success
+    assert provider.calls[1:] == [FY25, FY24], "planned from the stored list, newest first"
+    assert meta(again, "raw_dart_filings")["list_fresh"] == 1
+
+
+def test_a_walk_a_transport_failure_cut_short_is_listed_again(
+    tmp_path: Path, provider: Dart
+) -> None:
+    """Page 1 of two answered and page 2 did not: page 1 is filed, but the walk settled nothing."""
+    provider.lists[SAMSUNG] = (200, listing((FY25, "사업보고서 (2025.12)", "20260310"), pages=2))
+    provider.lists[(SAMSUNG, 2)] = dart.DartTransport("reset")
+    instance = instance_with(SAMSUNG)
+    first = run(tmp_path, instance, [SAMSUNG])
+    assert first.success and meta(first, "raw_dart_filings")["list_transport"] == 1
+    provider.calls.clear()
+
+    provider.lists[(SAMSUNG, 2)] = (200, listing((FY24, "사업보고서 (2024.12)", "20250311")))
+    again = run(tmp_path, instance, [SAMSUNG])
+    assert again.success
+    assert provider.calls[:2] == [f"list {SAMSUNG}", f"list {SAMSUNG} p2"]
+    assert meta(again, "raw_dart_filings")["list_answered"] == 1
 
 
 def test_dart_saying_the_file_does_not_exist_marks_the_report_and_writes_nothing(
@@ -385,7 +457,7 @@ def test_a_body_that_is_neither_an_archive_nor_a_refusal_is_asked_again(
     provider.calls.clear()
     provider.archives[FY24] = (200, archive(), False)
     assert run(tmp_path, instance, [SAMSUNG]).success
-    assert provider.calls == [f"list {SAMSUNG}", FY24]
+    assert provider.calls == [FY24], "the list is fresh; the archive is due again"
     assert marked() == {FY25, FY24}
 
 
