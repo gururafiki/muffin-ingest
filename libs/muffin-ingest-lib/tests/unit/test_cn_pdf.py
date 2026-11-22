@@ -2013,3 +2013,20 @@ def test_the_composition_heading_s_wordings() -> None:
         assert cn_pdf._COMPOSITION_HEADING.match(heading), heading
         assert cn_pdf._COMPOSITION_WORDS.search(heading), heading
     assert not cn_pdf._COMPOSITION_HEADING.match("营业收入构成情况")
+
+
+def test_a_split_is_never_placed_against_a_total_of_zero_or_less() -> None:
+    """China Eastern's FY2020 report, as the reader took it: the change column read as revenue, so
+    every table, and so the target, sums below zero. Nothing is placed and nothing carries a
+    target; the rows are kept, unplaced."""
+    rows = [
+        CnSegmentRow("cninfo:分行业", "航空运输业务", -51780000.0, None),
+        CnSegmentRow("cninfo:分行业", "其他业务", -43400000.0, None),
+        CnSegmentRow("cninfo:分行业", "国内", -44580000.0, None),
+        CnSegmentRow("cninfo:分行业", "国际", 84230000.0, None),
+        CnSegmentRow("cninfo:分行业", "地区", 4050000.0, None),
+    ]
+    facts = cn_pdf.facts_from_rows(rows, "2020-12-31")
+    assert len(facts) == 5
+    assert {f.partition_id for f in facts} == {0}
+    assert {f.reconciled_to for f in facts} == {None}

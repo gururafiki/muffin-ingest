@@ -1062,8 +1062,18 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
 
     out: list[SegmentFact] = []
     for rs in by_axis.values():
-        parts = assign_partitions(
-            [(f"cninfo:{r.name}", r.revenue) for r in rs], target, TOLERANCE_FRACTION
+        # A REVENUE TOTAL IS POSITIVE, the rule SEC's path has applied since muffin-ingest#185.
+        # Partitioned against a total of zero or less, `assign_partitions` finds a subset adding up
+        # to it and places that: China Eastern's FY2020 report read its change column (-75.14%
+        # international, -44.58% domestic) as revenue, every table summed below zero, and five
+        # members were served as a split totalling -51.48 m (measured 2026-11-22, the only such
+        # split in production). Unplaced, the rows stay stored and serve as nothing.
+        parts = (
+            assign_partitions(
+                [(f"cninfo:{r.name}", r.revenue) for r in rs], target, TOLERANCE_FRACTION
+            )
+            if target > 0
+            else {}
         )
         for r in rs:
             out.extend(facts(r, None, target, parts.get(f"cninfo:{r.name}", 0)))
