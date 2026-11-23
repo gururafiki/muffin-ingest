@@ -280,8 +280,9 @@ _CN_LIGHT = ("document", "accession", "outcome", "fetched_at", "run_id", "pruned
 def cninfo_segment(
     context: AssetExecutionContext, postgres: Postgres, raw_store: RawStore
 ) -> dg.MaterializeResult[None]:
-    """Per filer: the newest search's announcements into `security_filing`, then every due full
-    report raw holds, each read in its own child process (`cn_child`), one transaction per report.
+    """Per filer: the newest search's announcements, and those of every later page the history walk
+    stored, into `security_filing`, then every due full report raw holds, each read in its own
+    child process (`cn_child`), one transaction per report.
 
     A REPORT IS MARKED READ ONLY WHEN SOMETHING SETTLED HAPPENED TO IT: parsed, absent, too large or
     unreadable. A report stage 1 did not fetch is left due, and a refusal never reaches here.
@@ -317,7 +318,13 @@ def cninfo_segment(
             )
             newest = cn.newest_list(searches)
             if newest is not None:
-                announced = cn.parse_announcements(bytes(newest["body"]))
+                # Page 1 as last asked, and every later page the history walk stored, each report
+                # once: pages shift as reports are added, and one key twice in an upsert fails it.
+                once: dict[str, cn.Announcement] = {}
+                for page in [newest, *dict(sorted(cn.history_pages(searches).items())).values()]:
+                    for a in cn.parse_announcements(bytes(page["body"])):
+                        once.setdefault(a.url, a)
+                announced = list(once.values())
                 with conn.cursor() as cur:
                     listed = upsert(
                         cur,
