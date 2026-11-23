@@ -42,6 +42,8 @@ FY25, FY24 = f"{STATIC}/2026-04-30/1225262036.PDF", f"{STATIC}/2025-04-29/122319
 SUMMARY = f"{STATIC}/2026-04-30/1225262035.PDF"
 DATA_FILE = f"{STATIC}/2020-04-30/cninfo1207701730.js"
 LONGI_FY25 = f"{STATIC}/2026-04-29/1225236001.PDF"
+FY14 = f"{STATIC}/2015-04-30/1200912345.PDF"
+SUMMARY14 = f"{STATIC}/2015-04-30/1200912344.PDF"
 PDF = b"%PDF-1.7 a report" + b"." * 100
 
 
@@ -76,11 +78,35 @@ class Cninfo:
             for org, rows in SEARCHES.items()
         }
         self.reports: dict[str, tuple[int, bytes, bool] | Exception] = {
-            url: (200, PDF, False) for url in (FY25, FY24, LONGI_FY25)
+            url: (200, PDF, False) for url in (FY25, FY24, LONGI_FY25, FY14)
         }
+        #: A later page of a search, by (org id, page).
+        self.later: dict[tuple[str, int], tuple[int, bytes] | Exception] = {}
         self.calls: list[str] = []
 
+    def paged(self, org_id: str) -> None:
+        """Yangtze's search as a filer with a decade more on page 2: page 1 says `hasMore`."""
+        rows = SEARCHES[org_id]
+        self.searches[org_id] = (200, json.dumps({"announcements": rows, "hasMore": True}).encode())
+        older = [
+            announcement(FY24, "长江电力2024年年度报告", "2025-04-29"),  # shifted down: on both
+            announcement(FY14, "长江电力2014年年度报告", "2015-04-30"),
+            announcement(SUMMARY14, "长江电力2014年年度报告摘要", "2015-04-30"),
+        ]
+        self.later[(org_id, 2)] = (
+            200,
+            json.dumps({"announcements": older, "hasMore": False}).encode(),
+        )
+
     def announcements(self, code: str, org_id: str, page: int = 1) -> cninfo.Answer:
+        if page > 1:
+            self.calls.append(f"search {org_id} p{page}")
+            later = self.later.get((org_id, page))
+            if later is None:
+                raise AssertionError(f"unexpected page {page} of {org_id}")
+            if isinstance(later, Exception):
+                raise later
+            return cninfo.Answer(_document(f"search:{org_id}:{page}", later[1]), later[0], False)
         self.calls.append(f"search {org_id}")
         answer = self.searches.get(org_id)
         if answer is None:
@@ -427,6 +453,66 @@ def test_a_report_that_was_read_is_never_fetched_again(tmp_path: Path, provider:
     assert (m["search_fresh"], m["reports_named"]) == (1, 0)
     assert m["search_outcomes"] == m["requested"]
     assert meta(again, "cninfo_segment")["filings"] == 0 and READS == []
+
+
+# --- the history walk -----------------------------------------------------------------------------
+
+
+def test_the_history_walk_files_the_later_pages_and_fetches_their_reports_once(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    provider.paged(YANGTZE)
+    instance = instance_with(YANGTZE)
+    walked = run(tmp_path, instance, [YANGTZE], config={"history_pages": 2})
+    assert walked.success
+    assert provider.calls == [f"search {YANGTZE}", f"search {YANGTZE} p2", FY25, FY24, FY14]
+    m = meta(walked, "raw_cninfo_filings")
+    assert (m["history_answered"], m["history_held"], m["search_outcomes"]) == (1, 0, 1)
+    assert {r["accession"] for r in stored(tmp_path, YANGTZE)} >= {"page-1", "page-2", FY14}
+    # Every announcement once, FY24 included although both pages list it.
+    s = meta(walked, "cninfo_segment")
+    assert s["announcements"] == 6
+    assert {acc for (_, acc) in FILING_ROWS} == {FY25, SUMMARY, FY24, DATA_FILE, FY14, SUMMARY14}
+    assert marks(FY14) == {"s-cn1": 20}
+
+    asked = len(provider.calls)
+    again = run(tmp_path, instance, [YANGTZE], config={"history_pages": 2})
+    assert again.success
+    assert provider.calls[asked:] == [], "page 1 is fresh and page 2 is held: nothing is asked"
+    assert meta(again, "raw_cninfo_filings")["history_held"] == 1
+
+
+def test_the_floor_walks_no_history_and_a_last_page_ends_the_walk(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    provider.paged(YANGTZE)
+    assert run(tmp_path, instance_with(YANGTZE), [YANGTZE]).success
+    assert f"search {YANGTZE} p2" not in provider.calls, "the floor's default asks page 1 only"
+
+    # Page 2 says it is the last: a walk of three pages asks for no third.
+    walked = run(tmp_path, instance_with(YANGTZE), [YANGTZE], config={"history_pages": 3})
+    assert walked.success
+    assert provider.calls.count(f"search {YANGTZE} p2") == 1
+    assert f"search {YANGTZE} p3" not in provider.calls
+
+
+def test_a_refused_later_page_stops_the_run_and_is_asked_on_the_next_walk(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    provider.paged(YANGTZE)
+    answer = provider.later[(YANGTZE, 2)]
+    provider.later[(YANGTZE, 2)] = cninfo.CninfoRefused(403, "search")
+    instance = instance_with(YANGTZE)
+    first = run(tmp_path, instance, [YANGTZE], config={"history_pages": 2})
+    assert first.success
+    m = meta(first, "raw_cninfo_filings")
+    assert (m["history_refused"], m["report_unasked"]) == (1, 2), "a refusal stops the run"
+    assert "page-2" not in {r["accession"] for r in stored(tmp_path, YANGTZE)}
+
+    provider.later[(YANGTZE, 2)] = answer
+    asked = len(provider.calls)
+    assert run(tmp_path, instance, [YANGTZE], config={"history_pages": 2}).success
+    assert provider.calls[asked:][:1] == [f"search {YANGTZE} p2"], "the page not held is asked"
 
 
 # --- the floor asks each filer's search once a floor --------------------------------------------

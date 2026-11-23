@@ -331,6 +331,38 @@ def report_row(answer: cninfo.Answer, *, url: str, code: str, run_id: str) -> di
     }
 
 
+def has_more(body: bytes) -> bool:
+    """Whether a search page says the category holds more announcements than it showed.
+
+    `hasMore` is the field to trust: measured 2026-11-23, `totalpages` reads 1 for 689 of the
+    1,418 filers whose `totalAnnouncement` is above one page (38 to 57 against a page of 30)."""
+    try:
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return False
+    return isinstance(data, dict) and data.get("hasMore") is True
+
+
+def history_pages(rows: Sequence[Mapping[str, Any]]) -> dict[int, Mapping[str, Any]]:
+    """The answered search pages after the first a filer's file holds, by page number.
+
+    History is walked once: a report reaches a later page only by being pushed down by newer ones,
+    which page 1 has already listed, so a stored page never needs asking again."""
+    out: dict[int, Mapping[str, Any]] = {}
+    for r in rows:
+        accession = str(r.get("accession") or "")
+        if (
+            r.get("document") == "announcements"
+            and accession.startswith("page-")
+            and accession[5:].isdigit()
+            and int(accession[5:]) > 1
+            and r.get("http_status") == 200
+            and r.get("body") is not None
+        ):
+            out[int(accession[5:])] = r
+    return out
+
+
 def newest_list(rows: Sequence[Mapping[str, Any]]) -> Mapping[str, Any] | None:
     """The newest answered search page 1 a filer's file holds."""
     answered = [

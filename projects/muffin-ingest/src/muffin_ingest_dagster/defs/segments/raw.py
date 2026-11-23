@@ -270,6 +270,9 @@ class CninfoRun(dg.Config):
     #: A filer whose stored search is younger than this is not searched; its reports are planned
     #: from the stored search. 0 searches every filer.
     list_max_age_days: float = LIST_MAX_AGE_DAYS
+    #: Search pages after the first to walk for each filer, once: a page raw already holds is read
+    #: from raw, never asked again. 0 (the floor) walks none; the history backfill sets it.
+    history_pages: int = 0
 
 
 #: How a search and a report fetch can end. Each set partitions what it counts. `fresh` is a filer
@@ -293,6 +296,9 @@ REPORT_OUTCOMES = (
     "held_already",
     "unasked",
 )
+#: How a later search page can end: asked and answered or absent, read from raw (`held`), or not
+#: asked (refused, a transport failure, or the budget). Counted apart: pages per filer vary.
+HISTORY_OUTCOMES = ("answered", "absent", "held", "refused", "transport", "unasked")
 
 
 def _round_robin(queues: dict[str, list[str]]) -> list[tuple[str, str]]:
@@ -333,6 +339,11 @@ def raw_cninfo_filings(
     A FILER WHOSE STORED SEARCH IS YOUNGER THAN `list_max_age_days` IS NOT SEARCHED: its reports
     are planned from that search, so the due reports are fetched exactly as if it had been asked.
 
+    WITH `history_pages`, THE SEARCH'S LATER PAGES ARE WALKED ONCE per filer: page 1 reaches back
+    about a decade, and page 2 holds ~8 more full reports a filer (2003-2019, measured
+    2026-11-23). A page raw holds is read from raw; one not held is asked while the page before it
+    says there is more (`history_*` counts them, apart from the outcomes).
+
     THE OUTCOMES PARTITION WHAT THEY COUNT (`SEARCH_OUTCOMES` sums to `requested`,
     `REPORT_OUTCOMES` to `reports_named`). A refusal stops the run and leaves the rest `unasked`;
     nothing is filed for a fetch that did not finish.
@@ -360,34 +371,71 @@ def raw_cninfo_filings(
         if filer is None:
             stats["search_not_askable"] += 1
             continue
-        searched = cn.newest_list(
-            raw_store.stored_rows_where(CNINFO_FILINGS, key, {"document": "announcements"})
-        )
+        lists_held = raw_store.stored_rows_where(CNINFO_FILINGS, key, {"document": "announcements"})
+        searched = cn.newest_list(lists_held)
+        first: bytes | None = None
         if searched is not None and _younger_than(searched, now, config.list_max_age_days):
             stats["search_fresh"] += 1
-            listed[key] = cn.parse_announcements(bytes(searched["body"]))
+            first = bytes(searched["body"])
+        else:
+            if stopped is None and time.monotonic() >= deadline:
+                stopped = "the time budget is spent"
+            if stopped is not None:
+                stats["search_unasked"] += 1
+                continue
+            try:
+                answer = cninfo.announcements(filer.code, key)
+            except cninfo.CninfoRefused as exc:
+                stats["search_refused"] += 1
+                stopped = f"CNINFO refused us ({exc})"
+                continue
+            except cninfo.CninfoTransport:
+                stats["search_transport"] += 1
+                continue
+            row = cn.list_row(answer, code=filer.code, page=1, run_id=run_id)
+            rows.append(row)
+            placed[id(row)] = key
+            stats["search_answered" if answer.status == 200 else "search_absent"] += 1
+            if answer.status == 200:
+                first = answer.document.body
+            time.sleep(config.pace_seconds)
+        if first is None:
             continue
-        if stopped is None and time.monotonic() >= deadline:
-            stopped = "the time budget is spent"
-        if stopped is not None:
-            stats["search_unasked"] += 1
-            continue
-        try:
-            answer = cninfo.announcements(filer.code, key)
-        except cninfo.CninfoRefused as exc:
-            stats["search_refused"] += 1
-            stopped = f"CNINFO refused us ({exc})"
-            continue
-        except cninfo.CninfoTransport:
-            stats["search_transport"] += 1
-            continue
-        row = cn.list_row(answer, code=filer.code, page=1, run_id=run_id)
-        rows.append(row)
-        placed[id(row)] = key
-        stats["search_answered" if answer.status == 200 else "search_absent"] += 1
-        if answer.status == 200:
-            listed[key] = cn.parse_announcements(answer.document.body)
-        time.sleep(config.pace_seconds)
+        listed[key] = cn.parse_announcements(first)
+        more, held_pages = cn.has_more(first), cn.history_pages(lists_held)
+        for page in range(2, 2 + config.history_pages):
+            if not more:
+                break
+            page_held = held_pages.get(page)
+            if page_held is not None:
+                stats["history_held"] += 1
+                body = bytes(page_held["body"])
+            else:
+                if stopped is None and time.monotonic() >= deadline:
+                    stopped = "the time budget is spent"
+                if stopped is not None:
+                    stats["history_unasked"] += 1
+                    break
+                try:
+                    answer = cninfo.announcements(filer.code, key, page)
+                except cninfo.CninfoRefused as exc:
+                    stats["history_refused"] += 1
+                    stopped = f"CNINFO refused us ({exc})"
+                    break
+                except cninfo.CninfoTransport:
+                    stats["history_transport"] += 1
+                    break
+                row = cn.list_row(answer, code=filer.code, page=page, run_id=run_id)
+                rows.append(row)
+                placed[id(row)] = key
+                time.sleep(config.pace_seconds)
+                if answer.status != 200:
+                    stats["history_absent"] += 1
+                    break
+                stats["history_answered"] += 1
+                body = answer.document.body
+            listed[key] += cn.parse_announcements(body)
+            more = cn.has_more(body)
 
     with postgres.connect() as conn:
         listed_full = [a.url for anns in listed.values() for a in anns if a.is_report]
@@ -467,6 +515,7 @@ def raw_cninfo_filings(
             "bytes": stats["bytes"],
             **{f"search_{o}": stats[f"search_{o}"] for o in SEARCH_OUTCOMES},
             **{f"report_{o}": stats[f"report_{o}"] for o in REPORT_OUTCOMES},
+            **{f"history_{o}": stats[f"history_{o}"] for o in HISTORY_OUTCOMES},
         }
     )
     stored = context.instance.get_materialized_partitions(CNINFO_FILINGS)

@@ -67,7 +67,11 @@ _DIGITS = re.compile(r"^\d+$")
 #: its table in 万元, so its 75,846.29 is 758,462,900 yuan and was stored ten thousand times too
 #: small, in the right currency, looking ordinary. The last statement above or inside a table holds;
 #: a page that states none is read as 元, as the edge read every page.
-_UNIT = re.compile(r"单位\s*[:：]\s*(?:人民币)?\s*(亿元|千万元|百万元|万元|千元|元)")
+#: `人民币` may be bracketed (深物业 000591 FY2010: `单位：（人民币）万元`); missing it read a
+#: 万元 table as yuan, every figure 10,000 times too small.
+_UNIT = re.compile(
+    r"单位\s*[:：]\s*[（(]?\s*(?:人民币)?\s*[)）]?\s*(亿元|千万元|百万元|万元|千元|元)"
+)
 _SCALE = {
     "元": 1,
     "千元": 1_000,
@@ -166,13 +170,137 @@ _NUMBERED = re.compile(r"^\s*[（(]\s*[0-9一二三四五六七八九十]+\s*[)�
 #: The tallest cell a numbered row can have: four wrapped name lines at 11 pt, with margins.
 _CELL_HEIGHT = 60.0
 
+#: THE OLDER FORMS, FY2007-2014, read only when the current forms give nothing (`older`). Measured
+#: 2026-11-23 on 55 reports from CNINFO's second search page (2003-2019): the current reader read
+#: none of them. The common layouts, read off the PDFs:
+#:   - ONE TABLE FOR INDUSTRY AND PRODUCT, headed `主营业务分行业、产品情况` (also `、分产品`,
+#:     `及分产品`): its name column is `分行业或分产品`, set over two or three lines
+#:     (`分 行 业 或` / `分产品`, `分行业或分` / `产品`), and `分行业` and `分产品` are rows of
+#:     their own above each group
+#:     (大同煤业 601001 FY2010, 16 of 31 FY2010-2014 reports);
+#:   - one table per axis, headed `主营业务分行业情况`, `主营业务收入分行业情况` or
+#:     `分行业经营情况（单位：人民币万元）` (永新股份 002014 FY2010);
+#:   - the revenue columns labelled `主营业务收入` and `主营业务成本` as often as `营业收入` and
+#:     `营业成本` (太钢不锈 000825 FY2010);
+#:   - the region table with a revenue column and no cost (`地区 | 营业收入 | 营业收入比上年增减`).
+#: Many of these tables list only the lines at or above 10% of revenue (601001: `注：分别按照行业、
+#: 产品列示占营业收入或营业利润10%以上的主要行业和产品`), so a table here is often a part.
+#: FY2006 and earlier print the split in too many wordings to read (`占主营业务收入10%以上的主要
+#: 产品`, `按产品或业务类别列示…`, `主营业务收入、利润构成情况表`): not read.
+_OLDER_HEADING = re.compile(
+    r"^\s*(?:[（(]?\s*[0-9一二三四五六七八九十]*\s*[)）]|[0-9一二三四五六七八九十]+\s*[、.\uff0e]"
+    r"|[①②③④⑤⑥⑦⑧⑨⑩])?\s*(?:报告期内?)?\s*(?:公司)?\s*(?:主营业务(?:收入)?)?\s*"
+    r"(?P<what>分行业[、及和与]\s*分?产品(?:[、及和与][^：:（(]{0,10})?|分(?:行业|产品|地区)"
+    r"|按(?:主要)?(?:行业|产品|地区)(?:列示)?的?)"
+    r"(?:经营)?情况\s*表?\s*[:：]?\s*"
+    r"(?:[（(][^（）()]*单位[^（）()]*[)）]|单位\s*[:：]\s*\S{1,8})?\s*[:：]?\s*$"
+)
+#: A memo line under a row, never a member (永新股份 002014 FY2010: `其中：关联交易 0`).
+_RELATED_MEMO = re.compile(r"^其中\s*[:：]?\s*关联交易")
+#: The revenue and cost labels the older forms print beside `营业收入` and `营业成本`.
+OLDER_REV_HDR = ("营业收入", "主营业务收入")
+OLDER_COST_HDR = ("营业成本", "主营业务成本")
+#: The name column's label, whole or in the pieces a header set over lines prints it in.
+_OLDER_NAME_HDR = frozenset(
+    (
+        "分行业",
+        "分产品",
+        "分地区",
+        "地区",
+        "行业",
+        "产品",
+        "分行业或分产品",
+        "分行业或",
+        "分行业或分",
+        "或分产品",
+        "分产品或分行业",
+    )
+)
+#: A table with no cost column: only the region table prints one.
+_REVENUE_ONLY_NAME_HDR = frozenset(("地区", "分地区"))
+
+
+def _older_axis(joined: str) -> str | None:
+    """The axis an older form's heading line opens, or None. The combined table opens on industry;
+    its `分产品` row moves it."""
+    m = _OLDER_HEADING.match(joined)
+    if m is None:
+        return None
+    what = m.group("what")
+    if "行业" in what:
+        return "cninfo:分行业"
+    return "cninfo:分产品" if "产品" in what else "cninfo:分地区"
+
+
+def _older_header(
+    lines: Sequence[Sequence[TextItem]], k: int, heights: Sequence[float]
+) -> tuple[float, float, float, float, float] | None:
+    """An older form's header on line `k`, as (name_x, name_end, rev_end, cost_end, name_hi), or
+    None.
+
+    The line holds a revenue label (`OLDER_REV_HDR`), and a cost label right of it unless the name
+    column is the region's; the name label is anywhere in the header block left of the revenue
+    label, since 大同煤业 sets `分 行 业 或` 6 pt above the labels and `分产品` 6 pt below them. A
+    revenue-only table's revenue column ends where the next label starts."""
+    line = lines[k]
+    rev_h = next((i for i in line if any(_labelled(i, h) for h in OLDER_REV_HDR)), None)
+    if rev_h is None:
+        return None
+    cost_h = next(
+        (i for i in line if i.x > rev_h.x and any(_labelled(i, h) for h in OLDER_COST_HDR)), None
+    )
+    near = [
+        n
+        for n in range(max(0, k - 3), min(len(lines), k + 4))
+        if abs(heights[n] - heights[k]) <= 15
+    ]
+    block = [i for n in near for i in lines[n]]
+    # Each header line's text left of the revenue label, joined: 永新股份 sets `地` and `区` as two
+    # items 10 pt apart. And all of them joined top to bottom: 凤凰光学 (600071) sets
+    # `分行业或分产` 6 pt above the labels and `品` 6 pt below them.
+    labels: list[tuple[str, float]] = []
+    pieces: list[TextItem] = []
+    for n in near:
+        left = [i for i in lines[n] if _end(i) <= rev_h.x + 1 and i.s.strip()]
+        pieces += left
+        text = re.sub(r"\s", "", "".join(i.s for i in left))
+        if text in _OLDER_NAME_HDR:
+            labels.append((text, (left[0].x + _end(left[-1])) / 2))
+    whole = re.sub(r"\s", "", "".join(i.s for i in pieces))
+    if not labels and pieces and whole in _OLDER_NAME_HDR:
+        first = min(pieces, key=lambda i: i.x)
+        labels.append((whole, (first.x + _end(first)) / 2))
+    if not labels:
+        return None
+    name_x = min(labels, key=lambda t: t[1])[1]
+    if cost_h is None:
+        if not any(text in _REVENUE_ONLY_NAME_HDR for text, _ in labels):
+            return None
+        beyond = [
+            i.x
+            for i in block
+            if i.x > rev_h.x + 1 and _CJK.search(i.s) and not _NUMERIC.match(i.s.strip())
+        ]
+        if not beyond:
+            return None
+        return name_x, rev_h.x, min(beyond), min(beyond), _end(rev_h) + _GUTTER
+    beyond = [i.x for i in block if i.x > cost_h.x and not _NUMERIC.match(i.s.strip())]
+    cost_end = min(beyond) if beyond else cost_h.x + (cost_h.x - rev_h.x)
+    return name_x, rev_h.x, cost_h.x, cost_end, _end(cost_h) + _GUTTER
+
+
 #: How far the page scan goes. The mandated table is in 管理层讨论与分析; measured on page 13, 23
 #: and (Canadian Solar's 327-page report) 68. A bound is still right: its cost falls on every report
 #: with no table.
 SCAN_PAGES = 90
 
 _CJK = re.compile(r"[㐀-鿿豈-﫿]")
-_YEAR = re.compile(r"(\d{4,})\s*年?\s*年度报告")
+#: The year before `年度报告`, which older covers letter-space (`2010 年 年 度 报 告`, `2010年 度 报
+#: 告`) or write in Chinese numerals (`二○一○年度报告`); read as `2009`, a later page's mention of
+#: last year's report, all three FY2010 reports would have filed their splits a year early.
+_YEAR = re.compile(r"(\d{4,})\s*年?\s*年\s*度\s*报\s*告")
+_CN_YEAR = re.compile(r"([〇○零一二三四五六七八九]{4})\s*年?\s*年\s*度\s*报\s*告")
+_CN_DIGIT = {c: str(n) for n, c in enumerate("〇一二三四五六七八九")} | {"○": "0", "零": "0"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,11 +470,19 @@ def parse_segment_page(
     rules: Sequence[Rule] = (),
     scale: int = 1,
     composition: bool = False,
+    older: bool = False,
 ) -> list[CnSegmentRow]:
     """Rebuild the mandated tables from one page's positioned text, or with `composition` the
     Shenzhen `营业收入构成` table (`COMPOSITION`), read with the same machinery: its amount column
     is the revenue column, it has no cost column, and its group rows (`GROUPS`) open each table.
     Without `composition` nothing of that reading runs, so the mandated tables read as before.
+
+    With `older`, the FY2007-2014 forms (`_OLDER_HEADING`): a heading is a line of its own and
+    keeps the columns of the header before it (太钢不锈's product table shares its industry
+    table's header); a header is found across its block, with the older labels; the region table
+    may have no cost column; `分行业`/`分产品` rows move the combined table's axis; and a row of
+    labels that is no header (the share table after it) ends the table. Without `older` none of
+    it runs.
 
     AN ITEM IS PLACED IN A COLUMN BY WHERE IT ENDS, between where two header labels START. A money
     cell is right-aligned, so where it starts depends on its length (中免's 17-digit revenue starts
@@ -404,6 +540,8 @@ def parse_segment_page(
     #: The table's edges, once its header is read: nothing ending left of `name_lo` or starting
     #: right of `name_hi` is the table's (`_GUTTER`).
     name_lo, name_hi = 0.0, _NO_EDGE
+    #: Where the older form's header line was: the header's other lines are no rows.
+    header_y: float | None = None
 
     def close() -> None:
         nonlocal rows, names, rev, cost, cost_held, top, owed, negate
@@ -441,7 +579,9 @@ def parse_segment_page(
                     out.append(fragment + "0")
                 else:
                     out.append(fragment)
-            elif scale > 1 and (_WHOLE.match(so_far) or _WHOLE.match(fragment)):
+            elif (scale > 1 or (older and not to_the_fen)) and (
+                _WHOLE.match(so_far) or _WHOLE.match(fragment)
+            ):
                 # A table in 千元 or larger may print whole numbers, the composition table and the
                 # mandated one alike (中国中铁 (601390) FY2022 and FY2023, `1,087,585,457` 千元).
                 # Whole unless the next fragment in its column continues it.
@@ -481,6 +621,10 @@ def parse_segment_page(
             scale = _SCALE[unit.group(1)]
         heading = next((h for h, _ in CN_TABLES if h in joined), None)
         table = None if heading is None else dict(CN_TABLES)[heading]
+        if older:
+            # A heading line of its own, never a phrase in prose.
+            table = _older_axis(joined)
+            heading = joined.strip() if table is not None else None
         if table is not None and table in read and joined.strip().endswith(heading or ""):
             # The heading of a table already read is another year's: 厦门钨业 restates 2024 on
             # the page after its 2025 tables (`2024 年（调整后）`, `2024 年（调整前）`), and
@@ -493,8 +637,9 @@ def parse_segment_page(
             close()
             axis = table
             opened_at = scale
-            name_end = rev_end = cost_end = name_lo = 0.0
-            name_hi = _NO_EDGE
+            if not older:
+                name_end = rev_end = cost_end = name_lo = 0.0
+                name_hi = _NO_EDGE
             continue
         if composition and _COMPOSITION_HEADING.match(joined):
             close()
@@ -518,6 +663,42 @@ def parse_segment_page(
             if not line:
                 continue
             joined = "".join(i.s for i in line)
+        if older:
+            found = _older_header(lines, k, heights)
+            if found is not None:
+                close()
+                read.add(axis)
+                name_x, name_end, rev_end, cost_end, name_hi = found
+                name_lo = max(0.0, name_x - (name_end - name_x))
+                header_y = y
+                continue
+            if (
+                header_y is not None
+                and abs(y - header_y) <= 15
+                and not column(k, name_end, rev_end)
+                and re.sub(r"\s", "", "".join(i.s for i in line if _end(i) <= name_end))
+                in _OLDER_NAME_HDR | {""}
+            ):
+                # The header's other lines (`分产品`, `润率(%)`), which hold no figure and no name.
+                # Not a row set close under a one-line header: 大同煤业's region table puts `国内`
+                # 13.6 pt below it.
+                continue
+            if rows and any(_labelled(i, h) for i in line for h in OLDER_REV_HDR):
+                # A row of labels that is no header, after this table's rows: the next table
+                # (太钢不锈's shares by industry and product, `主营业务收入 | 主营业务利润`). Before
+                # any row it is the header's upper line: 永新股份 labels its growth columns
+                # `营业收入` / `比上年增`, 15.6 pt above the line holding `分产品`.
+                close()
+                axis = ""
+                continue
+            if _RELATED_MEMO.match(joined.strip()):
+                continue  # `其中：关联交易 0`, a memo under a row (永新股份 002014): no member
+            group_row = _GROUP_NOTE.sub("", _label(tidy_member_name(joined)))
+            if rev_end and group_row in GROUPS and not column(k, name_end, cost_end):
+                # The combined table's `分行业` and `分产品` rows (大同煤业 601001 FY2010).
+                close()
+                axis = GROUPS[group_row] or ""
+                continue
         if rev_end and (
             _TABLE_ENDS.search(joined)
             or (composing and _COMPOSITION_ENDS.search(joined))
@@ -1041,8 +1222,11 @@ def fiscal_year_end_from(text: str) -> str | None:
     THE YEAR IS THE FIRST PLAUSIBLE FOUR DIGITS OF THE RUN BEFORE `年年度报告`, not its last four:
     measured 2026-11-15, 中信建投's running header draws `2025` and then `025` over it, which pdfium
     reports as `2025025年年度报告` (pdf.js dropped the second), and a stock code can run into it."""
-    for match in _YEAR.finditer(text):
-        digits = match.group(1)
+    found = [(m.start(), m.group(1)) for m in _YEAR.finditer(text)]
+    found += [
+        (m.start(), "".join(_CN_DIGIT[c] for c in m.group(1))) for m in _CN_YEAR.finditer(text)
+    ]
+    for _, digits in sorted(found):
         for start in range(len(digits) - 3):
             year = int(digits[start : start + 4])
             if 1990 <= year <= 2100:
@@ -1086,7 +1270,9 @@ def _merged(rows: Sequence[CnSegmentRow]) -> list[CnSegmentRow]:
     return out
 
 
-def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[SegmentFact]:
+def facts_from_rows(
+    rows: Sequence[CnSegmentRow], period_ending: str, *, partial_lists: bool = False
+) -> list[SegmentFact]:
     """Rows -> facts, each table partitioned against the LARGEST table's total.
 
     The tables cover 主营业务 (main business), while consolidated `营业收入` includes 其他业务, so
@@ -1099,6 +1285,12 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
     the parent as `parent_member` (on the same axis), and its own split is reconciled against the
     parent's revenue, never against the table's. One whose whole is no row of the table is kept at
     the table's level in partition 0, outside the target.
+
+    With `partial_lists` (the older forms), the target is the largest table's total. Those forms
+    list only the lines at or above 10% of revenue, so two partial tables can agree with each
+    other: 大同煤业 601001 FY2010 lists one coal line of 10,290.0 m in both its industry and its
+    product table, against a region table of 10,322.2 m, the main-business revenue its text
+    states. The total most tables agree on would have served the two partial lists as whole.
     """
     period_start = f"{int(period_ending[:4])}-01-01"
     rows = _merged(rows)
@@ -1125,6 +1317,8 @@ def facts_from_rows(rows: Sequence[CnSegmentRow], period_ending: str) -> list[Se
     # stated, the total most tables agree on, the largest of those, else the largest.
     if stated:
         target = max(stated)
+    elif partial_lists:
+        target = max(totals) if totals else 0.0
     else:
         target = max(totals, key=lambda t: (totals.count(t), t)) if totals else 0.0
 
@@ -1266,6 +1460,17 @@ def join_pages(
     )
 
 
+def _older_heading_on(items: Sequence[TextItem]) -> bool:
+    """Whether a page sets an older form's heading (`_OLDER_HEADING`) as a line of its own."""
+    buckets: dict[int, list[TextItem]] = {}
+    for item in items:
+        buckets.setdefault(_js_round(item.y / 3), []).append(item)
+    return any(
+        _older_axis("".join(i.s for i in sorted(line, key=lambda i: i.x))) is not None
+        for line in buckets.values()
+    )
+
+
 def _composition_heading_on(items: Sequence[TextItem]) -> bool:
     """Whether a page sets `营业收入构成` as a heading line of its own. A page mentioning it in
     prose is not where the table is, and reading the table from the page before its own would
@@ -1291,7 +1496,11 @@ def segment_facts_from_pdf(
     Shenzhen's form, and the only split most Shenzhen reports state. Never both: the mandated
     tables win wherever they are printed, so a report read from them is read exactly as before.
     The phrase also appears in prose, so each page carrying it is tried in order until one holds
-    the table."""
+    the table.
+
+    A report neither yields anything from is read in the older forms (`_OLDER_HEADING`, FY2007-2014)
+    from the first page holding one of their headings that gives rows. Every report the current
+    forms read is read exactly as before."""
     import pypdfium2 as pdfium
 
     read_items = items_of or page_items
@@ -1305,6 +1514,18 @@ def segment_facts_from_pdf(
                     items, rules, read_items(document, index + 1), page_rules(document, index + 1)
                 )
             return items, rules
+
+        def older(period: str) -> CnParseResult | None:
+            carried = 1
+            for index in range(min(scan_pages, len(document))):
+                items = read_items(document, index)
+                if _older_heading_on(items):
+                    rows = parse_segment_page(*joined(index, items), carried, older=True)
+                    if rows:
+                        facts = facts_from_rows(rows, period, partial_lists=True)
+                        return CnParseResult(facts, index + 1, period)
+                carried = unit_stated_last(items, carried)
+            return None
 
         period: str | None = None
         carried = 1  # the unit the previous page stated last
@@ -1321,8 +1542,10 @@ def segment_facts_from_pdf(
                 carried = unit_stated_last(items, carried)
                 continue
             rows = parse_segment_page(*joined(index, items), carried)
-            if not rows or period is None:
+            if period is None:
                 return CnParseResult([], index + 1, period)
+            if not rows:
+                return older(period) or CnParseResult([], index + 1, period)
             return CnParseResult(facts_from_rows(rows, period), index + 1, period)
         for index, unit in candidates:
             rows = parse_segment_page(
@@ -1332,6 +1555,8 @@ def segment_facts_from_pdf(
                 if period is None:
                     return CnParseResult([], index + 1, period)
                 return CnParseResult(facts_from_rows(rows, period), index + 1, period)
+        if period is not None and (found := older(period)) is not None:
+            return found
         return CnParseResult([], None, period)
     finally:
         document.close()

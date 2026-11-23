@@ -99,7 +99,7 @@ target-version = "py313"
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 # CHINESE DOCUMENTS ARE SET IN FULLWIDTH PUNCTUATION, and the CNINFO reader matches their text as
 # printed (`（2）产销量情况`, `年度报告（英文版）`): "fixing" these to ASCII would make it match nothing.
-allowed-confusables = ["（", "）", "：", "；", "，", "－"]
+allowed-confusables = ["（", "）", "：", "；", "，", "－", "％", "〇"]
 
 [tool.mypy]
 python_version = "3.13"
