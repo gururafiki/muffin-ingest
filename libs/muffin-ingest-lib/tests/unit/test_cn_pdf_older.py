@@ -569,6 +569,41 @@ def test_partial_lists_are_reconciled_against_the_largest_table() -> None:
     assert ("cninfo:分行业", True) in agreed, "the current rule picks the lists"
 
 
+def test_a_total_stated_for_a_part_does_not_hide_the_table_of_the_whole() -> None:
+    """新城控股 (601155) FY2025: the industry table sums to 52.0 bn and states no total; the region
+    table covers real estate alone and states `合计` 39.0 bn. The stated total alone would serve
+    the industry split as 100% real estate."""
+    found = [
+        cn_pdf.CnSegmentRow("cninfo:分行业", "房地产开发销售", 39004337972.0, 33920226786.0),
+        cn_pdf.CnSegmentRow("cninfo:分行业", "物业出租及管理", 13035869956.0, 3940814646.0),
+        cn_pdf.CnSegmentRow("cninfo:分地区", "江苏省", 10413910028.0, 9812834853.0),
+        cn_pdf.CnSegmentRow("cninfo:分地区", "其他", 28590427944.0, 24107391933.0),
+        cn_pdf.CnSegmentRow("cninfo:分地区", "合计", 39004337972.0, None, stated_total=True),
+    ]
+    placed = {
+        (f.axis, f.member_code, f.partition_id > 0)
+        for f in cn_pdf.facts_from_rows(found, "2025-12-31", partial_lists=True)
+        if f.metric_code == "revenue"
+    }
+    assert placed == {
+        ("cninfo:分行业", "cninfo:房地产开发销售", True),
+        ("cninfo:分行业", "cninfo:物业出租及管理", True),
+        ("cninfo:分地区", "cninfo:江苏省", False),
+        ("cninfo:分地区", "cninfo:其他", False),
+    }
+
+
+def test_a_table_that_states_a_total_is_judged_by_it_not_by_its_own_sum() -> None:
+    """凤凰光学 prints its eliminations positive: each table sums past its stated `合计`, and
+    nothing is placed rather than a sum no total supports."""
+    found = cn_pdf.parse_segment_page(FENGHUANG, [], older=True)
+    assert not any(
+        f.partition_id > 0
+        for f in cn_pdf.facts_from_rows(found, "2010-12-31", partial_lists=True)
+        if f.metric_code == "revenue"
+    )
+
+
 def test_a_product_table_with_no_header_of_its_own_uses_the_industry_tables_columns() -> None:
     read = rows(TAIGANG)
     assert read[0] == ("cninfo:分行业", "冶金钢铁行业", 87108880561.31, 79389141359.20)

@@ -1286,11 +1286,16 @@ def facts_from_rows(
     parent's revenue, never against the table's. One whose whole is no row of the table is kept at
     the table's level in partition 0, outside the target.
 
-    With `partial_lists` (the older forms), the target is the largest table's total. Those forms
-    list only the lines at or above 10% of revenue, so two partial tables can agree with each
-    other: 大同煤业 601001 FY2010 lists one coal line of 10,290.0 m in both its industry and its
-    product table, against a region table of 10,322.2 m, the main-business revenue its text
-    states. The total most tables agree on would have served the two partial lists as whole.
+    With `partial_lists` (the older forms), the target is the largest of the totals tables state
+    and the sums of the tables that state none. Those forms list only the lines at or above 10% of
+    revenue, so two partial tables can agree with each other: 大同煤业 601001 FY2010 lists one
+    coal line of 10,290.0 m in both its industry and its product table, against a region table of
+    10,322.2 m, the main-business revenue its text states. The total most tables agree on would
+    have served the two partial lists as whole. And a table may state the total of a part:
+    新城控股's FY2025 region table covers real estate alone and states `合计` 39.0 bn, while its
+    industry table sums to 52.0 bn with property income; the stated total alone would have served
+    the industry split as 100% real estate. A table that states a total is judged by it, never
+    by its own sum (凤凰光学's positive `合并抵消` sums past its stated `合计`).
     """
     period_start = f"{int(period_ending[:4])}-01-01"
     rows = _merged(rows)
@@ -1315,10 +1320,14 @@ def facts_from_rows(
     # 2.72 bn `总计`), nor is one table detailing a part (1225011770's product and geography tables
     # both cover only steel, 37.24 bn, against the industry `合计` of 57.86 bn). With no total
     # stated, the total most tables agree on, the largest of those, else the largest.
-    if stated:
+    if partial_lists:
+        stating = {r.axis for r in rows if r.stated_total}
+        candidates = stated + [
+            t for axis, t in zip(by_axis, totals, strict=True) if axis not in stating
+        ]
+        target = max(candidates) if candidates else 0.0
+    elif stated:
         target = max(stated)
-    elif partial_lists:
-        target = max(totals) if totals else 0.0
     else:
         target = max(totals, key=lambda t: (totals.count(t), t)) if totals else 0.0
 
