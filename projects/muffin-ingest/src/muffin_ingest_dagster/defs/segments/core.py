@@ -346,6 +346,7 @@ def cninfo_segment(
             due = cn.filings(conn, filer.security_ids, fetched_now)
 
         with postgres.connect() as conn:
+            revenue = cn.annual_revenue(conn, filer.security_ids) if due else {}
             for filing in due:
                 stats["filings"] += 1
                 held = cn.held_report(light, filing.accession)
@@ -371,9 +372,20 @@ def cninfo_segment(
                             "report %s of %s unreadable: %s", filing.accession, key, result.reason
                         )
                     else:
-                        facts = result.facts
+                        facts, rescaled = cn.rescale_misstated_units(result.facts, revenue)
                         outcome = "read"
                         stats["no_table"] += not facts
+                        stats["units_rescaled"] += len(rescaled)
+                        for (axis, ending), factor in sorted(rescaled.items()):
+                            context.log.info(
+                                "report %s of %s: %s %s read as x%s, the table's unit line "
+                                "disagreeing with the company's revenue",
+                                filing.accession,
+                                key,
+                                axis,
+                                ending,
+                                factor,
+                            )
                 try:
                     with conn.cursor() as cur:
                         written = segment_tables.file_filing(
@@ -410,6 +422,7 @@ def cninfo_segment(
                 "filings",
                 *CNINFO_OUTCOMES,
                 "no_table",
+                "units_rescaled",
                 "rows",
                 "changed",
                 "kept_by_newer",

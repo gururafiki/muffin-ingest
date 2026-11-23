@@ -4,13 +4,14 @@ which, what raw holds, and what retention may drop. Over a captured answer where
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from muffin_ingest.facets import cninfo as cn
+from muffin_ingest.facets.segments import SegmentFact
 from muffin_ingest.providers import cninfo
 
 FIXTURES = Path(__file__).parent.parent / "fixtures"
@@ -256,3 +257,75 @@ def test_the_search_form_is_the_one_the_edge_sent() -> None:
         "pageNum": 1,
         "category": "category_ndbg_szsh",
     }
+
+
+# --- a table whose stated unit is wrong -----------------------------------------------------------
+
+
+def _fact(
+    axis: str,
+    member: str,
+    value: float,
+    *,
+    metric: str = "revenue",
+    partition: int = 1,
+    ending: str = "2025-12-31",
+) -> SegmentFact:
+    return SegmentFact(
+        axis=axis, member_code=member, metric_code=metric, period_type="annual",
+        period_start=ending[:4] + "-01-01", period_ending=ending, value=value, currency="CNY",
+        parent_axis=None, parent_member=None, reconciled_to=None if metric != "revenue" else 1.0,
+        partition_id=partition,
+    )  # fmt: skip
+
+
+def test_a_split_ten_thousand_times_too_small_is_put_right_by_the_company_s_revenue() -> None:
+    # 航天长峰 FY2025: `单位：元` over figures its own text states in 万元.
+    facts = [
+        _fact("cninfo:分行业", "cninfo:军工电子", 54_294.31),
+        _fact("cninfo:分行业", "cninfo:其他", 68_000.00),
+        _fact("cninfo:分行业", "cninfo:军工电子", 40_000.00, metric="cost_of_revenue"),
+        # Another table of the same report, stated in the right unit: left alone.
+        _fact("cninfo:分地区", "cninfo:境内", 1_222_943_100.00),
+    ]
+    revenue = {date(2025, 12, 31): 1_249_406_904.66}
+    out, rescaled = cn.rescale_misstated_units(facts, revenue)
+    assert rescaled == {("cninfo:分行业", "2025-12-31"): 10_000}
+    assert [f.value for f in out] == [542_943_100.0, 680_000_000.0, 400_000_000.0, 1_222_943_100.0]
+    assert out[0].reconciled_to == 10_000.0 and out[3].reconciled_to == 1.0
+
+
+def test_a_split_a_thousand_times_too_small_is_put_right_too() -> None:
+    facts = [_fact("cninfo:分行业", "cninfo:医药", 4_829_871.79)]
+    out, rescaled = cn.rescale_misstated_units(facts, {date(2022, 12, 31): 4_829_871_790.0})
+    assert rescaled == {} and out == facts  # wrong year: nothing to compare with
+    facts = [_fact("cninfo:分行业", "cninfo:医药", 4_829_871.79, ending="2022-12-31")]
+    out, rescaled = cn.rescale_misstated_units(facts, {date(2022, 12, 31): 4_829_871_790.0})
+    assert rescaled == {("cninfo:分行业", "2022-12-31"): 1_000}
+    assert out[0].value == 4_829_871_790.0
+
+
+@pytest.mark.parametrize(
+    ("revenue", "why"),
+    [
+        ({}, "no stated revenue: no evidence, no change"),
+        ({date(2025, 12, 31): 122_294.31 * 1.01}, "a split that is right"),
+        ({date(2025, 12, 31): 122_294.31 * 10_000 * 5}, "a fifth of revenue is not this table"),
+        ({date(2026, 1, 31): 122_294.31 * 10_000}, "a revenue a month away is another year"),
+    ],
+)
+def test_a_split_is_left_as_read_without_evidence_that_its_unit_is_wrong(
+    revenue: dict[date, float], why: str
+) -> None:
+    facts = [
+        _fact("cninfo:分行业", "cninfo:军工电子", 54_294.31),
+        _fact("cninfo:分行业", "cninfo:其他", 68_000.00),
+    ]
+    out, rescaled = cn.rescale_misstated_units(facts, revenue)
+    assert rescaled == {} and out == facts, why
+
+
+def test_a_revenue_dated_within_ten_days_of_the_period_end_is_that_year() -> None:
+    facts = [_fact("cninfo:分行业", "cninfo:军工电子", 122_294.31)]
+    _, rescaled = cn.rescale_misstated_units(facts, {date(2025, 12, 28): 1_222_943_100.0})
+    assert rescaled == {("cninfo:分行业", "2025-12-31"): 10_000}
