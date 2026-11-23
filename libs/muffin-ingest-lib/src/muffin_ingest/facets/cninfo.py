@@ -23,10 +23,11 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
+from muffin_ingest.facets.segments import SegmentFact
 from muffin_ingest.providers import cninfo
 from muffin_ingest.providers.documents import Document
 
@@ -488,3 +489,102 @@ def choose_prunes(
             chosen.append(h)
             total -= h.bytes
     return chosen
+
+
+# ── A table whose stated unit is wrong ─────────────────────────────────────────────────────────
+#
+# 航天长峰 (600855) heads its FY2025 table `单位：元` over `军工电子 54,294.31`, two lines below
+# its own text stating `军工电子业务主营业务收入54,294.31万元`. The reader takes the unit a table
+# states, as it must, so the split was stored at 1/10,000: 0.12 m yuan for a 1.23 bn line. In the
+# table nothing separates that from a small company. The company's own revenue does: it is stated
+# apart from the table (the user's decision, 2026-11-23).
+#
+# Measured on production's 25 such reports: one more is off by exactly 1,000 (千元 figures under a
+# 元 line), and the nine whose year has a stated revenue sit at 0.47 to 1.14 of it once corrected.
+# A main-business split (主营业务) is not 营业收入, so a band of 1% would have caught two. The band
+# is wide because the alternative is four orders of magnitude away: a split that is right sits near
+# 1.0 of revenue unscaled, and the two factors' bands cannot overlap.
+UNIT_FACTORS = (10_000, 1_000)
+UNIT_REVENUE_BAND = (0.3, 1.2)
+#: How far a stated revenue's date may sit from the split's period end and still be that year.
+UNIT_REVENUE_DAYS = 10
+
+ANNUAL_REVENUE = """
+select distinct on (m.as_of) m.as_of, m.value::float8
+  from market.security_metric m
+ where m.security_id = any(%s::uuid[]) and m.metric_code = 'revenue'
+   and m.period_type = 'annual' and m.value > 0
+ order by m.as_of, market.source_priority(m.source_code) desc, m.security_id
+"""
+
+
+def annual_revenue(conn: Any, security_ids: Sequence[str]) -> dict[date, float]:
+    """The company's stated annual revenue by period end, from the best source per year."""
+    if not security_ids:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(ANNUAL_REVENUE, (list(security_ids),))
+        return {as_of: float(value) for as_of, value in cur.fetchall()}
+
+
+def _revenue_for(revenue: Mapping[date, float], ending: str) -> float | None:
+    try:
+        end = date.fromisoformat(ending)
+    except ValueError:
+        return None
+    near = [
+        (abs((as_of - end).days), value)
+        for as_of, value in revenue.items()
+        if abs((as_of - end).days) <= UNIT_REVENUE_DAYS
+    ]
+    return min(near)[1] if near else None
+
+
+def rescale_misstated_units(
+    facts: Sequence[SegmentFact], revenue: Mapping[date, float]
+) -> tuple[list[SegmentFact], dict[tuple[str, str], int]]:
+    """Facts with every table read in the wrong unit put right, and which (axis, period) were.
+
+    A table is judged by its placed revenue split: annual, top level, `partition_id > 0`. When its
+    total times a factor lands in `UNIT_REVENUE_BAND` of that year's stated revenue, every fact of
+    that axis and period, of every metric, is multiplied by the factor. A year with no stated
+    revenue is left as read: no evidence, no change.
+    """
+    totals: dict[tuple[str, str], float] = {}
+    for f in facts:
+        if (
+            f.metric_code == "revenue"
+            and f.period_type == "annual"
+            and f.partition_id > 0
+            and f.parent_member is None
+        ):
+            key = (f.axis, f.period_ending)
+            totals[key] = totals.get(key, 0.0) + f.value
+    factor_of: dict[tuple[str, str], int] = {}
+    low, high = UNIT_REVENUE_BAND
+    for (axis, ending), total in totals.items():
+        stated = _revenue_for(revenue, ending)
+        if stated is None or total <= 0:
+            continue
+        for factor in UNIT_FACTORS:
+            if low <= total * factor / stated <= high:
+                factor_of[(axis, ending)] = factor
+                break
+    if not factor_of:
+        return list(facts), {}
+    out: list[SegmentFact] = []
+    for f in facts:
+        scale = factor_of.get((f.axis, f.period_ending))
+        if scale is None:
+            out.append(f)
+            continue
+        out.append(
+            replace(
+                f,
+                value=round(f.value * scale, 2),
+                reconciled_to=None
+                if f.reconciled_to is None
+                else round(f.reconciled_to * scale, 2),
+            )
+        )
+    return out, factor_of

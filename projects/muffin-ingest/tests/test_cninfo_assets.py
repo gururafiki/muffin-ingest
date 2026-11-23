@@ -13,6 +13,7 @@ import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -186,6 +187,8 @@ PARSER = {"version": 20}
 CALLS: list[tuple[str, Any]] = []
 #: Per accession, when it was marked read (for retention).
 READ_AT: dict[str, datetime] = {}
+#: The company's stated annual revenue, per security: what the unit check compares a split with.
+REVENUE: dict[str, dict[date, float]] = {}
 
 
 def _unread(row: dict[str, Any]) -> bool:
@@ -253,6 +256,11 @@ class Cursor:
             self.rows = [(r["member_code"], r["class"]) for r in VOCABULARY["member_roles"]]
         elif "from market.segment_parser" in text:
             self.rows = [(PARSER["version"],)]
+        elif "from market.security_metric m" in text:
+            by_date: dict[date, float] = {}
+            for sid in params[0]:
+                by_date.update(REVENUE.get(sid, {}))
+            self.rows = sorted(by_date.items())
         elif text.startswith("select code from market.currency"):
             self.rows = [("USD",), ("CNY",)]
         elif text.startswith("insert into market.security_filing"):
@@ -306,6 +314,7 @@ def _clean() -> Iterator[None]:
     CALLS.clear()
     READ_AT.clear()
     FETCHED_AT.clear()
+    REVENUE.clear()
     yield
 
 
@@ -439,6 +448,39 @@ def test_a_filer_is_searched_once_and_only_its_full_pdf_reports_are_fetched_and_
     assert marks(SUMMARY) == {"s-cn1": None} and marks(DATA_FILE) == {"s-cn1": None}
     assert len(READS) == 2 and len(segment_inserts()) == 2
     assert "cninfo" in segment_inserts()[0] and "CNY" in segment_inserts()[0]
+
+
+def test_a_split_whose_unit_line_is_wrong_is_written_at_the_company_s_revenue(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    # The table says 元 and its figures are 万元: the split reads 10,000 times too small, and the
+    # company's own revenue for the year is what says so.
+    rows = [
+        CnSegmentRow("cninfo:分行业", "境内水电行业", 7_566_156.33, 2_588_157.81),
+        CnSegmentRow("cninfo:分行业", "其他行业", 1_032_337.64, 706_707.24),
+    ]
+    READER["result"] = cn_pdf.CnParseResult(
+        cn_pdf.facts_from_rows(rows, "2025-12-31"), 13, "2025-12-31"
+    )
+    REVENUE["s-cn1"] = {date(2025, 12, 31): 87_000_000_000.0}
+
+    result = run(tmp_path, instance_with(YANGTZE), [YANGTZE])
+    assert result.success
+    assert meta(result, "cninfo_segment")["units_rescaled"] == 2  # FY25 and FY24 both read so
+    values = {Decimal(str(v)) for params in segment_inserts() for v in params
+              if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)}  # fmt: skip
+    assert Decimal("75661563300") in values and Decimal("7566156.33") not in values
+
+
+def test_a_split_is_written_as_read_when_the_company_s_revenue_says_nothing(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    result = run(tmp_path, instance_with(YANGTZE), [YANGTZE])
+    assert result.success
+    assert meta(result, "cninfo_segment")["units_rescaled"] == 0
+    values = {Decimal(str(v)) for params in segment_inserts() for v in params
+              if isinstance(v, (int, float, Decimal)) and not isinstance(v, bool)}  # fmt: skip
+    assert Decimal("75661563315.43") in values
 
 
 def test_a_report_that_was_read_is_never_fetched_again(tmp_path: Path, provider: Cninfo) -> None:
