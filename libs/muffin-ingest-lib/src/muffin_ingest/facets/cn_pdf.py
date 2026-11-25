@@ -69,8 +69,10 @@ _DIGITS = re.compile(r"^\d+$")
 #: a page that states none is read as 元, as the edge read every page.
 #: `人民币` may be bracketed (深物业 000591 FY2010: `单位：（人民币）万元`); missing it read a
 #: 万元 table as yuan, every figure 10,000 times too small.
+#: The colon is optional: older reports print `单位（万元）` (000603 FY2011), and read without it
+#: every figure was stored ten thousand times too small.
 _UNIT = re.compile(
-    r"单位\s*[:：]\s*[（(]?\s*(?:人民币)?\s*[)）]?\s*(亿元|千万元|百万元|万元|千元|元)"
+    r"单位\s*(?:[:：]\s*)?[（(]?\s*(?:人民币)?\s*[)）]?\s*(亿元|千万元|百万元|万元|千元|元)"
 )
 _SCALE = {
     "元": 1,
@@ -193,7 +195,8 @@ _OLDER_HEADING = re.compile(
     r"(?P<what>分行业[、及和与]\s*分?产品(?:[、及和与][^：:（(]{0,10})?|分(?:行业|产品|地区)"
     r"|按(?:主要)?(?:行业|产品|地区)(?:列示)?的?)"
     r"(?:经营)?情况\s*表?\s*[:：]?\s*"
-    r"(?:[（(][^（）()]*单位[^（）()]*[)）]|单位\s*[:：]\s*\S{1,8})?\s*[:：]?\s*$"
+    r"(?:[（(][^（）()]*单位[^（）()]*[)）]|单位\s*[:：]\s*\S{1,8}|单位\s*[（(][^（）()]{1,8}[)）])?"
+    r"\s*[:：]?\s*$"
 )
 #: A memo line under a row, never a member (永新股份 002014 FY2010: `其中：关联交易 0`).
 _RELATED_MEMO = re.compile(r"^其中\s*[:：]?\s*关联交易")
@@ -1219,15 +1222,18 @@ def fiscal_year_end_from(text: str) -> str | None:
     """The period a report covers, from its own title: `2025年年度报告` is the year to 2025-12-31.
     Read from the document, never from the announcement date (the following April).
 
-    THE YEAR IS THE FIRST PLAUSIBLE FOUR DIGITS OF THE RUN BEFORE `年年度报告`, not its last four:
-    measured 2026-11-15, 中信建投's running header draws `2025` and then `025` over it, which pdfium
-    reports as `2025025年年度报告` (pdf.js dropped the second), and a stock code can run into it."""
+    THE YEAR IS THE LAST PLAUSIBLE FOUR DIGITS OF THE RUN BEFORE `年年度报告`. A stock code runs
+    into the year on older covers: 002053's FY2010 cover reads `0020532010年年度报告` and 600720's
+    `6007202010`, and the first plausible window (`2053`, `2020`) filed twelve reports decades
+    ahead of their publication (measured 2026-11-25). Not simply the last four digits either:
+    中信建投's running header draws `2025` and then `025` over it, which pdfium reports as
+    `2025025年年度报告`, and of its windows only `2025` is a year."""
     found = [(m.start(), m.group(1)) for m in _YEAR.finditer(text)]
     found += [
         (m.start(), "".join(_CN_DIGIT[c] for c in m.group(1))) for m in _CN_YEAR.finditer(text)
     ]
     for _, digits in sorted(found):
-        for start in range(len(digits) - 3):
+        for start in range(len(digits) - 4, -1, -1):
             year = int(digits[start : start + 4])
             if 1990 <= year <= 2100:
                 return f"{year}-12-31"
