@@ -719,3 +719,24 @@ def test_the_year_of_a_cover_set_letter_spaced_or_in_chinese_numerals(cover: str
 def test_a_bracketed_currency_in_the_unit_line_still_names_the_unit() -> None:
     found = cn_pdf._UNIT.search("单位：（人民币）万元")
     assert found is not None and found.group(1) == "万元"
+
+
+def test_a_unit_printed_without_a_colon_still_scales_the_table() -> None:
+    """000603 FY2011 prints `单位（万元）`; read without the colon, 941,829,500 yuan was stored
+    as 94,182.95."""
+    found = cn_pdf._UNIT.search(" 单位（万元）")
+    assert found is not None and found.group(1) == "万元"
+    restated = [
+        TextItem("单位（万元）", i.x, i.y, i.end) if i.s == "（单位：人民币万元）" else i
+        for i in YONGXIN
+    ]
+    assert restated != YONGXIN
+    assert rows(restated) == rows(YONGXIN)
+
+
+def test_a_stock_code_running_into_the_year_does_not_date_the_report() -> None:
+    """002053's FY2010 cover reads `0020532010年年度报告` and 600720's `6007202010`: the first
+    plausible window filed them under 2053 and 2020."""
+    assert cn_pdf.fiscal_year_end_from("0020532010年年度报告") == "2010-12-31"
+    assert cn_pdf.fiscal_year_end_from("6007202010年年度报告") == "2010-12-31"
+    assert cn_pdf.fiscal_year_end_from("2000792011年年度报告") == "2011-12-31"
