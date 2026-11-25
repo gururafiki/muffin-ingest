@@ -93,6 +93,8 @@ CACHE_LOCATIONS: dict[str, str] = {
     # Phase 6b: per-company RSS headlines (not cached) and nasdaq's earnings calendar by date.
     "yahoo-rss": "feeds.finance.yahoo.com",
     "nasdaq": "api.nasdaq.com",
+    # Japan's monthly CPI, which OECD stopped publishing in 2021-06 (BIS's WS_LONG_CPI).
+    "bis": "stats.bis.org",
     "alphavantage": "www.alphavantage.co",
     "tiingo": "api.tiingo.com",
     "openbb": "openbb-api",

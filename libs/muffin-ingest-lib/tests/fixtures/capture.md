@@ -220,3 +220,16 @@ Captured for Phase 6b's macro lane (umbrella docs/specs/2026-11-21-macro-and-eve
 To capture again: the probe in the umbrella spec's validation section, in a throwaway container from
 the code location's image (`docker run --rm -i --memory 1g -e FRED_API_KEY <image>`), never inside
 the code location itself.
+
+## `macro/bis_*` — BIS's statistics API for Japan's CPI, captured 2026-11-25
+
+`jp-cpi` asked OECD, whose Japan CPI ends at 2021-06. BIS's `WS_LONG_CPI` carries it monthly
+(umbrella docs/specs/2026-11-21-macro-and-events.md, "jp-cpi from BIS").
+
+| file | what it pins |
+|---|---|
+| `bis_ws_long_cpi_m_jp_771.csv` | `M.JP.771` from 2025-10: 12 months, `TIME_PERIOD` `YYYY-MM`, `OBS_VALUE` a PERCENT (2.097902 for 2026-09), `UNIT_MULT` 0 |
+| `bis_no_data.xml` | the same series from 2027-01: **HTTP 404**, an SDMX error with `code="100"`, "No data for data query", which BIS also answers for an unknown country or unit |
+
+To capture again: `curl -sA 'muffin-market-data' 'https://stats.bis.org/api/v1/data/WS_LONG_CPI/M.JP.771?startPeriod=2025-10&format=csv'`,
+and `startPeriod=2027-01` for the absence.

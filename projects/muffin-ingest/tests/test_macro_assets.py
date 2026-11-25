@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -17,7 +18,8 @@ from dagster._core.storage.tags import (
     ASSET_PARTITION_RANGE_START_TAG,
 )
 from muffin_ingest.facets import macro
-from muffin_ingest.providers import openbb
+from muffin_ingest.providers import bis, openbb
+from muffin_ingest.providers.documents import Document, DocumentRefused
 
 from muffin_ingest_dagster.defs.macro import automation as macro_automation
 from muffin_ingest_dagster.defs.macro import checks as macro_checks
@@ -352,6 +354,137 @@ def test_a_re_parse_of_a_stored_answer_asks_no_provider(tmp_path: Path) -> None:
             )
     assert fake.calls == []
     assert len(OFFERED) == 11
+
+
+# --- BIS, asked directly --------------------------------------------------------------------------
+
+BIS_ROUTE = "/api/v1/data/WS_LONG_CPI"
+JAPAN = (FIXTURES / "macro" / "bis_ws_long_cpi_m_jp_771.csv").read_bytes()
+#: The catalogue as migration `20261125130000` leaves it: `jp-cpi` asks BIS, `us-cpi` still OECD.
+BIS_CATALOGUE: list[tuple[Any, ...]] = [
+    ("us-cpi", CPI, "oecd", {}, "united_states", True),
+    ("jp-cpi", BIS_ROUTE, "bis", {"key": "M.JP.771"}, "japan", True),
+]
+
+
+class Bis:
+    """`bis.fetch`, answering from the capture, stating no data, or refusing, recording each ask."""
+
+    def __init__(self, answer: bytes | None | Exception) -> None:
+        self.answer = answer
+        self.calls: list[tuple[str, str, Any]] = []
+
+    def fetch(self, flow: str, key: str, start: Any, **_: Any) -> Document | None:
+        self.calls.append((flow, key, start))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        if self.answer is None:
+            return None
+        return Document(
+            url=bis.url_for(flow, key, start),
+            body=self.answer,
+            content_type="text/csv;charset=UTF-8",
+            fetched_at=datetime.now(UTC),
+        )
+
+
+@contextmanager
+def bis_answering(fake: Bis, monkeypatch: pytest.MonkeyPatch) -> Iterator[Bis]:
+    monkeypatch.setattr(bis, "fetch", fake.fetch)
+    monkeypatch.setattr(sys.modules[__name__], "CATALOGUE", BIS_CATALOGUE)
+    with hub(Hub({"us-cpi": captured_rows("us-cpi")})):
+        yield fake
+
+
+def stored_bodies(tmp_path: Path, code: str) -> list[bytes]:
+    path = tmp_path / "raw_macro_series" / f"{code}.parquet"
+    return [bytes(b) for (b,) in duckdb.sql(f"select body from read_parquet('{path}')").fetchall()]
+
+
+def test_a_bis_series_is_asked_directly_and_its_csv_kept_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with bis_answering(Bis(JAPAN), monkeypatch) as fake:
+        result = run(tmp_path, ["us-cpi", "jp-cpi"])
+    # openbb is never asked for the BIS row, and BIS only for it, from the lane's window.
+    assert fake.calls == [("WS_LONG_CPI", "M.JP.771", datetime.now(UTC).date() - macro.WINDOW)]
+    m = meta(result, "raw_macro_series")
+    assert (m["answered"], m["empty"], m["failed"], m["unroutable"]) == (2, 0, 0, 0)
+    assert stored_bodies(tmp_path, "jp-cpi") == [JAPAN]
+    # Stage 2 reads the stored CSV: 12 months, in percent, Japan's newest 2.097902 for 2026-09.
+    jp = sorted(
+        (row["as_of"], row["value"]) for row in OFFERED if row["indicator_code"] == "jp-cpi"
+    )
+    assert len(jp) == 12 and jp[-1] == ("2026-09-01", pytest.approx(2.097902))
+    assert meta(result, "macro_observation")["answered"] == 2
+
+
+def test_bis_stating_no_data_is_empty_and_replaces_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with bis_answering(Bis(JAPAN), monkeypatch):
+        run(tmp_path, ["us-cpi", "jp-cpi"], stage_two=False)
+    with bis_answering(Bis(None), monkeypatch):
+        result = run(tmp_path, ["us-cpi", "jp-cpi"], stage_two=False)
+    assert (meta(result, "raw_macro_series")["empty"], stored_bodies(tmp_path, "jp-cpi")) == (
+        1,
+        [JAPAN],
+    )
+
+
+@pytest.mark.parametrize(
+    ("refusal", "counted"),
+    [("HTTP 429", "throttled"), ("HTTP 503", "failed"), ("ConnectError: refused", "failed")],
+)
+def test_a_bis_refusal_is_counted_and_never_read_as_an_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, refusal: str, counted: str
+) -> None:
+    with bis_answering(Bis(DocumentRefused(f"https://stats.bis.org/...: {refusal}")), monkeypatch):
+        result = run(tmp_path, ["us-cpi", "jp-cpi"], stage_two=False)
+    m = meta(result, "raw_macro_series")
+    assert (m[counted], m["empty"], m["errors"]) == (1, 0, "jp-cpi")
+
+
+def test_a_bis_row_this_lane_cannot_read_is_unroutable_and_never_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with bis_answering(Bis(JAPAN), monkeypatch) as fake:
+        monkeypatch.setattr(
+            sys.modules[__name__],
+            "CATALOGUE",
+            [
+                BIS_CATALOGUE[0],
+                ("jp-cpi", "/api/v1/data/WS_CBPOL", "bis", {"key": "M.JP"}, None, True),
+            ],
+        )
+        result = run(tmp_path, ["us-cpi", "jp-cpi"], stage_two=False)
+    assert fake.calls == []
+    assert meta(result, "raw_macro_series")["unroutable"] == 1
+
+
+def test_a_re_parse_of_a_stored_bis_answer_asks_no_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with bis_answering(Bis(JAPAN), monkeypatch):
+        run(tmp_path, ["us-cpi", "jp-cpi"], stage_two=False)
+    OFFERED.clear()
+    with (
+        bis_answering(Bis(RuntimeError("asked")), monkeypatch) as fake,
+        dg.instance_for_test() as instance,
+    ):
+        instance.add_dynamic_partitions(macro_partitions.MACRO_PARTITIONS, ["jp-cpi"])
+        dg.materialize(
+            [macro_raw.raw_macro_series.to_source_asset(), macro_core.macro_observation],
+            instance=instance,
+            partition_key="jp-cpi",
+            resources={
+                "postgres": FakePostgres(),
+                "parquet_io": ParquetIOManager(str(tmp_path)),
+                "raw_store": RawStore(base_path=str(tmp_path)),
+            },
+        )
+    assert fake.calls == []
+    assert len(OFFERED) == 12
 
 
 # --- the schedule, the sensor, the check ---------------------------------------------------------

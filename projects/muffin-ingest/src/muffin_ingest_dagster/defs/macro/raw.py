@@ -1,4 +1,4 @@
-"""Stage 1 of the macro family: what openbb's providers sent, kept whole."""
+"""Stage 1 of the macro family: what openbb's providers, and BIS, sent, kept whole."""
 
 from datetime import UTC, datetime
 from typing import Any
@@ -6,7 +6,8 @@ from typing import Any
 import dagster as dg
 from dagster import AssetExecutionContext
 from muffin_ingest.facets import macro
-from muffin_ingest.providers import openbb
+from muffin_ingest.providers import bis, openbb
+from muffin_ingest.providers.documents import DocumentRefused
 from muffin_ingest.providers.outcome import Outcome
 
 from muffin_ingest_dagster.defs.macro.partitions import FRESH, SERIES_PER_RUN, macro_series
@@ -43,7 +44,9 @@ class MacroRun(dg.Config):
     group_name="macro",
     kinds={"openbb", "parquet"},
     freshness_policy=FRESH,
-    description="Each catalogued macro series' last 400 days, as openbb's provider answered.",
+    description=(
+        "Each catalogued macro series' last 400 days, as openbb's provider (or BIS) answered."
+    ),
 )
 def raw_macro_series(context: AssetExecutionContext, config: MacroRun, postgres: Postgres) -> Any:
     """One request per enabled series, in the catalogue's order.
@@ -71,6 +74,36 @@ def raw_macro_series(context: AssetExecutionContext, config: MacroRun, postgres:
     errors: dict[str, str] = {}
     for code in asked:
         series = catalogue[code]
+        if series.provider == bis.PROVIDER:
+            # BIS, ASKED DIRECTLY: Japan's CPI, which OECD stopped publishing (`providers.bis`).
+            # The answer is stored as one document row, its CSV whole; stage 2 reads it.
+            try:
+                flow, key = bis.series_key(series.route, series.params)
+                document = bis.fetch(flow, key, start)
+            except bis.UnknownSeries as exc:
+                stats["unroutable"] += 1
+                errors[code] = str(exc)
+                continue
+            except DocumentRefused as exc:
+                stats["throttled" if "HTTP 429" in str(exc) else "failed"] += 1
+                errors[code] = str(exc)[:300]
+                continue
+            if document is None:
+                stats["empty"] += 1
+                continue
+            row = document.as_row(context.run.run_id)
+            row.update(
+                {
+                    "indicator_code": code,
+                    "route": series.route,
+                    "provider": series.provider,
+                    "asked_from": start.isoformat(),
+                }
+            )
+            rows.append(row)
+            answered.add(code)
+            stats["answered"] += 1
+            continue
         try:
             answer = openbb.macro_series(
                 series.route,
