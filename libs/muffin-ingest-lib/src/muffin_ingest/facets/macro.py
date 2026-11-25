@@ -12,7 +12,10 @@ dispatched to a typed call by `providers.openbb.macro_series`.
 
 from __future__ import annotations
 
+import csv
+import io
 import math
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -91,6 +94,39 @@ def _number(value: Any) -> float | None:
     return n if math.isfinite(n) else None
 
 
+#: An SDMX `TIME_PERIOD` as BIS writes it: a year, a quarter or a month.
+_PERIOD = re.compile(r"^(\d{4})(?:-(?:Q([1-4])|(\d{2})))?$")
+
+
+def _period_start(period: str) -> str | None:
+    """The first day of an SDMX period: `2026-09` -> 2026-09-01, `2026-Q3` -> 2026-07-01."""
+    m = _PERIOD.match(period.strip())
+    if m is None:
+        return None
+    year, quarter, month = m.groups()
+    if quarter:
+        return f"{year}-{(int(quarter) - 1) * 3 + 1:02d}-01"
+    return f"{year}-{month or '01'}-01"
+
+
+def sdmx_csv_rows(body: bytes) -> list[dict[str, Any]]:
+    """BIS's CSV answer as `date`/`value` rows, the shape `points` reads.
+
+    `OBS_VALUE` is scaled by `10 ** UNIT_MULT`, SDMX's power-of-ten multiplier (0 for a percentage
+    change, measured on `WS_LONG_CPI`). A row with no parseable period or value is dropped: BIS
+    leaves `OBS_VALUE` empty for a missing observation.
+    """
+    out: list[dict[str, Any]] = []
+    for record in csv.DictReader(io.StringIO(body.decode("utf-8-sig"))):
+        as_of = _period_start(record.get("TIME_PERIOD") or "")
+        value = _number(record.get("OBS_VALUE"))
+        if as_of is None or value is None:
+            continue
+        mult = _number(record.get("UNIT_MULT")) or 0.0
+        out.append({"date": as_of, "value": value * 10**mult})
+    return out
+
+
 def points(rows: Iterable[Mapping[str, Any]]) -> list[Point]:
     """The points an answer's rows hold, ported from the edge (`extractMacroPoints`).
 
@@ -111,7 +147,16 @@ def points(rows: Iterable[Mapping[str, Any]]) -> list[Point]:
         seen.add((as_of, dimension))
         out.append(Point(as_of=as_of, dimension=dimension, value=value))
 
+    expanded: list[Mapping[str, Any]] = []
     for row in rows:
+        # A DOCUMENT ROW (BIS): stage 1 stored the provider's CSV whole, and its points are here.
+        body = row.get("body")
+        if isinstance(body, bytes | bytearray):
+            expanded.extend(sdmx_csv_rows(bytes(body)))
+        else:
+            expanded.append(row)
+
+    for row in expanded:
         as_of = _day(row.get("date"))
         if as_of is None:
             continue
@@ -136,8 +181,19 @@ def points(rows: Iterable[Mapping[str, Any]]) -> list[Point]:
 
 #: What stage 1 adds to each of openbb's rows: which series it answers, what was asked, and when.
 #: `asked_from` is the start of the window asked, which stage 2 needs to know what it may retract.
+#: A BIS answer is one document row, whose `url`, `content_type` and `sha256` are provenance.
 CONTEXT_COLUMNS = frozenset(
-    {"indicator_code", "route", "provider", "asked_from", "fetched_at", "run_id"}
+    {
+        "indicator_code",
+        "route",
+        "provider",
+        "asked_from",
+        "fetched_at",
+        "run_id",
+        "url",
+        "content_type",
+        "sha256",
+    }
 )
 
 
