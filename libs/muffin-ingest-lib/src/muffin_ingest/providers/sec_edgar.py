@@ -348,7 +348,7 @@ def fetch_instance(
 ) -> InstanceFetch:
     """A filing's XBRL instance, found as the edge found it (`segments.ts::findInstanceUrl`).
 
-    `index.json` first, for its sizes: the 32 MB gate is applied before the body is fetched, which
+    `index.json` first, for its sizes: the size gate is applied before the body is fetched, which
     is what kept AEP's 127.72 MB 2015 10-K from killing the edge worker on every run. It is
     INCOMPLETE for some filings (Diageo's and Infosys's FY2025 20-Fs list 4 items, not the
     instance), so when it names no instance the HTML index is asked too; that carries no size, and

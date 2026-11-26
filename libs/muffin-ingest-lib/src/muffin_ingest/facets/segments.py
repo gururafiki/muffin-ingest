@@ -949,9 +949,13 @@ def _derived_fallback(
 
 #: The largest instance read. AEP's 2015 10-K (`aep-20151231.xml`, 127.72 MB) killed the edge
 #: worker on every firing for two days, and a killed worker stamps nothing, so the same filing
-#: headed the queue for ever. 32 MB is ~3x the largest document known to parse (Diageo's 20-F,
-#: 10.92 MB).
-MAX_INSTANCE_BYTES = 32 * 1024 * 1024
+#: headed the queue for ever.
+#:
+#: 64 MB SINCE 2026-11-26 (it was 32). Measured in a 2 GB container on the production image: HSBC's
+#: FY2024 20-F instance (54.7 MB) peaks at 168 MB and parses in 0.5 s, Santander's FY2022 (35.7
+#: MB) at 124 MB. At 32 MB, 60 filings of 28 filers were refused, HSBC's and Santander's every
+#: annual report among them; 56 of the 60 fit under 64 MB. The four that do not are 69-91 MB.
+MAX_INSTANCE_BYTES = 64 * 1024 * 1024
 
 _LINKBASE = re.compile(r"_(cal|def|lab|pre|ref)\.xml\Z", re.A)
 _FILING_SUMMARY = re.compile(r"FilingSummary\.xml\Z", re.A | re.I)

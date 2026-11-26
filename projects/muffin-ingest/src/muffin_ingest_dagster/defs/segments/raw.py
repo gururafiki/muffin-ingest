@@ -63,7 +63,7 @@ class SecInstanceRun(dg.Config):
     #: Wall-clock budget. A filing is two or three requests at 5 a second.
     budget_seconds: int = 900
     #: Stop asking once the run holds this many bytes of documents: a run returns everything it
-    #: fetched at once, and an instance is up to 32 MB (median 1.7 MB, measured 2026-11-09).
+    #: fetched at once, and an instance is up to 64 MB (median 1.7 MB, measured 2026-11-09).
     budget_bytes: int = 400_000_000
 
 
