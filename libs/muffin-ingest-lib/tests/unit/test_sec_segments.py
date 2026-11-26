@@ -75,7 +75,28 @@ def test_a_filing_is_due_only_as_an_xbrl_accounts_form_of_an_equity_unread_at_th
         assert "where source_code = 'sec' and carries_segments" in text
         assert "f.source_code" not in text
         assert "f.segments_parsed_at is null" in text
-        assert "coalesce(f.segments_parser_version, 0) < (select max(version)" in text
+        # SEC'S OWN VERSION, never the highest of all regulators': a bump for one reader re-queues
+        # that regulator's filings and no other's (Phase 6c decision 4).
+        assert (
+            "coalesce(f.segments_parser_version, 0) < (select p.version from market.segment_parser "
+            "p where p.regulator = 'sec')" in text
+        )
+        assert "max(version)" not in text
+    assert "filter (where f.filing_date >= current_date - 14)" in " ".join(
+        sec_segments.DUE_BY_FILER.split()
+    )
+
+
+def test_each_regulator_s_queue_compares_against_its_own_parser_version() -> None:
+    """A regulator's due predicate names that regulator and no other, so a bump of one row moves
+    only its queue."""
+    from muffin_ingest.facets import cninfo, dart, nse
+
+    for module in (sec_segments, cninfo, dart, nse):
+        text = " ".join(module._UNREAD.split())
+        assert f"where p.regulator = '{module.REGULATOR}'" in text, module.__name__
+        others = {m.REGULATOR for m in (sec_segments, cninfo, dart, nse)} - {module.REGULATOR}
+        assert not any(f"'{o}'" in text for o in others), module.__name__
 
 
 def test_filings_come_oldest_first_with_the_securities_to_write_them_for() -> None:
@@ -106,7 +127,10 @@ def test_no_filers_asks_nothing() -> None:
 
 
 def test_due_by_filer_and_what_is_unread() -> None:
-    assert sec_segments.due_by_filer(Conn([(320193, 2), (1652044, 1)])) == {320193: 2, 1652044: 1}
+    assert sec_segments.due_by_filer(Conn([(320193, 2, 1), (1652044, 1, None)])) == {
+        320193: sec_segments.Due(2, 1),
+        1652044: sec_segments.Due(1, 0),
+    }
     conn = Conn([(3, 2, date(2026, 11, 3), 41)])
     assert sec_segments.unread(conn, 1) == sec_segments.Unread(3, 2, date(2026, 11, 3), 41)
     assert conn.calls[0][1] == {"days": 1}
@@ -267,15 +291,33 @@ def test_the_vocabulary_is_read_ordered_and_refuses_an_empty_control_table() -> 
     concepts = [("revenue", "Revenues", 100)]
     roles = [("us-gaap:AllOtherSegmentsMember", "residual")]
     conn = Conn(axes, concepts, roles, [(20,)])
-    got = segments.vocabulary(conn)
+    got = segments.vocabulary(conn, "dart")
     assert got.parser_version == 20
     assert got.axes[0].axis == "srt:ProductOrServiceAxis" and got.axes[0].required_member is None
     assert got.concepts[0].concept == "Revenues" and got.roles[0].role == "residual"
-    assert conn.calls[1][1] == (list(segments.SEGMENT_METRICS),)
+    # THE GLOBAL CONCEPTS PLUS THIS REGULATOR'S OWN, and the version of this regulator's row.
+    metrics = list(segments.SEGMENT_METRICS)
+    assert conn.calls[1][1] == (metrics, "dart", metrics)
+    assert "from market.segment_total_concept where regulator = %s" in conn.calls[1][0]
+    assert conn.calls[3] == (
+        "select version from market.segment_parser where regulator = %s",
+        ("dart",),
+    )
     assert all("order by" in sql for sql, _ in conn.calls[:3])
 
     with pytest.raises(segments.VocabularyEmpty, match="segment_axis"):
-        segments.vocabulary(Conn([], concepts, roles, [(20,)]))
+        segments.vocabulary(Conn([], concepts, roles, [(20,)]), "sec")
     with pytest.raises(segments.VocabularyEmpty, match="xbrl_concept"):
-        segments.vocabulary(Conn(axes, [], roles, [(20,)]))
-    assert segments.vocabulary(Conn(axes, concepts, [], [(None,)])).parser_version == 1
+        segments.vocabulary(Conn(axes, [], roles, [(20,)]), "sec")
+    # A REGULATOR WITH NO PARSER ROW IS REFUSED, never stamped with a made-up version.
+    with pytest.raises(segments.VocabularyEmpty, match="no row for edinet"):
+        segments.vocabulary(Conn(axes, concepts, [], []), "edinet")
+
+
+def test_two_regulators_reads_what_it_found_and_an_empty_answer() -> None:
+    found = segments.two_regulators(Conn([(2, 1, ["s 2025-12-31 dart+sec-segments"])]))
+    assert found == segments.TwoRegulators(2, 1, ("s 2025-12-31 dart+sec-segments",))
+    assert segments.two_regulators(Conn([(0, 0, None)])) == segments.TwoRegulators(0, 0, ())
+    text = " ".join(segments.TWO_REGULATORS.split())
+    assert "partition_id > 0" in text and "parent_member is null" in text
+    assert "having count(distinct g.source_code) > 1" in text

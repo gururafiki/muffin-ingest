@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
+from muffin_ingest.facets import segments
 from muffin_ingest.facets.segments import SegmentFact
 from muffin_ingest.providers import cninfo
 from muffin_ingest.providers.documents import Document
@@ -159,11 +160,7 @@ select sf.filer_id, min(l.symbol), array_agg(distinct sf.security_id::text)
  group by sf.filer_id
 """
 
-_UNREAD = """
-       (f.segments_parsed_at is null
-        or coalesce(f.segments_parser_version, 0)
-           < (select max(version) from market.segment_parser))
-"""
+_UNREAD = segments.unread_sql(REGULATOR)
 
 #: Only a PDF link is a report the parser can read (`Announcement.is_report`). Both `%` are
 #: escaped: every query this joins takes parameters.

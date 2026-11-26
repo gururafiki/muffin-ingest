@@ -1109,10 +1109,11 @@ class Vocabulary:
     """The control tables one parse reads, for every regulator: a new axis, concept or member role
     is a row, never a release.
 
-    `parser_version` is `market.segment_parser.version`. Every filing read is stamped with it
-    (`security_filing.segments_parser_version`), and raising it makes every filing due again. It
-    is a row and not a `code_version` because the unit of work is the FILING, and a filer's
-    partition holds many: 226,000 SEC accounts filings cannot be a partition each.
+    `parser_version` is the regulator's row of `market.segment_parser` (one per regulator since
+    2026-11-26). Every filing read is stamped with it (`security_filing.segments_parser_version`),
+    and raising it makes that regulator's filings due again, and no other's. It is a row and not a
+    `code_version` because the unit of work is the FILING, and a filer's partition holds many:
+    226,000 SEC accounts filings cannot be a partition each.
     """
 
     axes: tuple[AxisSpec, ...]
@@ -1126,32 +1127,102 @@ class VocabularyEmpty(RuntimeError):
     stamp it as read."""
 
 
-def vocabulary(conn: Any) -> Vocabulary:
-    """`segment_axis`, the segment metrics' `xbrl_concept` rows, `segment_member_class` and the
-    parser version. Ordered, so two runs read them identically."""
+def unread_sql(regulator: str) -> str:
+    """The SQL predicate over `market.security_filing f`: not yet read at `regulator`'s parser
+    version. Every queue, sensor and check of a regulator's lane builds on this one piece of SQL,
+    so they cannot disagree about what is left.
+
+    `regulator` is a module constant (`REGULATOR`), never input. A regulator with no
+    `segment_parser` row compares against NULL, so only never-read filings would be due; the
+    deployment's guard test keeps a row for every enabled regulator.
+    """
+    return f"""
+       (f.segments_parsed_at is null
+        or coalesce(f.segments_parser_version, 0)
+           < (select p.version from market.segment_parser p where p.regulator = '{regulator}'))
+"""
+
+
+def vocabulary(conn: Any, regulator: str) -> Vocabulary:
+    """`segment_axis`, the segment metrics' `xbrl_concept` rows plus `regulator`'s own
+    `segment_total_concept` rows, `segment_member_class`, and `regulator`'s parser version.
+    Ordered, so two runs read them identically.
+
+    THE TOTAL CONCEPTS ARE SCOPED PER REGULATOR because `xbrl_concept` is read by every
+    regulator's segment parser and by the SEC statement lane: `RevenueFromSaleOfGoods` is a
+    component of revenue in DART instances, so a concept added for one regulator must not reach the
+    others. A concept in both tables takes the higher priority.
+    """
     with conn.cursor() as cur:
         cur.execute(
             "select axis, kind, priority, required_member from market.segment_axis order by axis"
         )
         axes = tuple(AxisSpec(str(a), str(k), int(p), r) for a, k, p, r in cur.fetchall())
         cur.execute(
-            "select metric_code, concept, priority from market.xbrl_concept "
-            "where metric_code = any(%s) order by metric_code, concept",
-            (list(SEGMENT_METRICS),),
+            "select metric_code, concept, max(priority) from ("
+            "  select metric_code, concept, priority from market.xbrl_concept"
+            "   where metric_code = any(%s)"
+            "  union all"
+            "  select metric_code, concept, priority from market.segment_total_concept"
+            "   where regulator = %s and metric_code = any(%s)"
+            ") c group by metric_code, concept order by metric_code, concept",
+            (list(SEGMENT_METRICS), regulator, list(SEGMENT_METRICS)),
         )
         concepts = tuple(ConceptSpec(str(m), str(c), int(p)) for m, c, p in cur.fetchall())
         cur.execute(
             "select member_code, class from market.segment_member_class order by member_code"
         )
         roles = tuple(MemberRole(str(m), str(c)) for m, c in cur.fetchall())
-        cur.execute("select max(version) from market.segment_parser")
+        cur.execute("select version from market.segment_parser where regulator = %s", (regulator,))
         found = cur.fetchone()
     if not axes:
         raise VocabularyEmpty("market.segment_axis is empty: every filing would yield nothing")
     if not concepts:
         raise VocabularyEmpty("market.xbrl_concept has no segment metric: nothing would be read")
-    version = 1 if found is None or found[0] is None else int(found[0])
-    return Vocabulary(axes, concepts, roles, version)
+    if found is None or found[0] is None:
+        raise VocabularyEmpty(
+            f"market.segment_parser has no row for {regulator}: its filings would be stamped with "
+            "a version nothing compares against"
+        )
+    return Vocabulary(axes, concepts, roles, int(found[0]))
+
+
+#: Periods for which a security holds placed revenue splits from more than one regulator (Phase 6c
+#: decision 2: one regulator per security). The home lanes skip a company the SEC covers and the
+#: sibling extension fills holes only, so this must stay empty; if it is not, the stock page shows
+#: two splits for one year. Measured 2026-11-26: 0 periods, 6.9 s over 2.28 M rows, which is why
+#: the check runs with the daily classification and not with every SEC wave.
+TWO_REGULATORS = """
+select count(*), count(distinct security_id),
+       (array_agg(security_id::text || ' ' || period_type || ' ' || period_ending || ' '
+                  || sources order by period_ending desc))[1:10]
+  from (select g.security_id, g.period_type, g.period_ending,
+               string_agg(distinct g.source_code, '+' order by g.source_code) sources
+          from market.security_segment g
+         where g.metric_code = 'revenue' and g.partition_id > 0 and g.parent_member is null
+         group by 1, 2, 3
+        having count(distinct g.source_code) > 1) x
+"""
+
+
+@dataclass(frozen=True)
+class TwoRegulators:
+    """Periods holding placed revenue splits from two regulators, with up to ten examples."""
+
+    periods: int
+    securities: int
+    sample: tuple[str, ...]
+
+
+def two_regulators(conn: Any) -> TwoRegulators:
+    """What `TWO_REGULATORS` finds."""
+    with conn.cursor() as cur:
+        cur.execute(TWO_REGULATORS)
+        found = cur.fetchone()
+    if found is None:
+        return TwoRegulators(0, 0, ())
+    periods, securities, sample = found
+    return TwoRegulators(int(periods or 0), int(securities or 0), tuple(sample or ()))
 
 
 #: `market.security_segment`'s key. `parent_key` is generated (`coalesce(parent_member, '')`): it
