@@ -902,6 +902,23 @@ def test_a_unit_stated_at_the_foot_of_the_page_before_scales_the_table() -> None
     assert cn_pdf.unit_stated_last([], 10000) == 10000
 
 
+def test_a_unit_line_drawn_as_several_items_is_read_as_one_line() -> None:
+    """000735 FY2011 draws `单位：（人民币）万元` as four items, none of which names a unit alone;
+    read item by item, the table on the next page was stored in yuan."""
+    split = [
+        TextItem("单位：", 410.0, 85.2, 434.0),
+        TextItem("（人民币）", 434.0, 85.0, 484.0),
+        TextItem("万", 484.0, 85.1, 494.0),
+        TextItem("元", 494.0, 85.1, 504.0),
+    ]
+    assert cn_pdf.unit_stated_last(split, 1) == 10000
+    # Reading down the page: a later unit line holds, also when it is split.
+    later = [TextItem("单位：", 383.0, 40.0, 407.0), TextItem("（人民币）元", 409.0, 40.0, 470.0)]
+    assert cn_pdf.unit_stated_last([*split, *later], 1) == 1
+    # Items of one line in reverse x order still read in print order.
+    assert cn_pdf.unit_stated_last(list(reversed(split)), 1) == 10000
+
+
 def test_one_row_is_a_part_only_when_it_carries_its_parent_s_figures() -> None:
     """江海's `信用业务` is all interest income: one row, the same revenue and cost. A row with the
     same revenue and another cost is a different line that happens to equal it."""

@@ -74,6 +74,11 @@ _DIGITS = re.compile(r"^\d+$")
 _UNIT = re.compile(
     r"单位\s*(?:[:：]\s*)?[（(]?\s*(?:人民币)?\s*[)）]?\s*(亿元|千万元|百万元|万元|千元|元)"
 )
+#: An older table's unit stated in its column header, with no `单位`: `营业收入（万元）`, or a
+#: `（万元）（万元）` line under the labels (002020 FY2007-2011, 000636 FY2011; measured
+#: 2026-11-26). Read only from the header block, outside the name column. The bracket closes on the
+#: unit, so a price's `（元/吨）` is no unit.
+_HEADER_UNIT = re.compile(r"[（(]\s*(亿元|千万元|百万元|万元|千元|元)\s*[)）]")
 _SCALE = {
     "元": 1,
     "千元": 1_000,
@@ -194,10 +199,18 @@ _OLDER_HEADING = re.compile(
     r"|[①②③④⑤⑥⑦⑧⑨⑩])?\s*(?:报告期内?)?\s*(?:公司)?\s*(?:主营业务(?:收入)?)?\s*"
     r"(?P<what>分行业[、及和与]\s*分?产品(?:[、及和与][^：:（(]{0,10})?|分(?:行业|产品|地区)"
     r"|按(?:主要)?(?:行业|产品|地区)(?:列示)?的?)"
-    r"(?:经营)?情况\s*表?\s*[:：]?\s*"
+    r"(?:经营|构成)?情况\s*表?\s*[:：]?\s*"
     r"(?:[（(][^（）()]*单位[^（）()]*[)）]|单位\s*[:：]\s*\S{1,8}|单位\s*[（(][^（）()]{1,8}[)）])?"
     r"\s*[:：]?\s*$"
 )
+#: WHAT ELSE ENDS AN OLDER TABLE: the next numbered section
+#: (`3、主要会计数据及财务指标变动情况表`), which `_NUMBERED` misses because it is not
+#: bracketed, and a financial indicator's row, which no segment is named
+#: (`营业总收入（元）`, `基本每股收益（元/股）`, `股本（股）`). 雅化集团 (002497) FY2011 sets
+#: its key accounting data under its region table, and before 2026-11-26 every row of it was read
+#: as a product, this year's figure fused into the name: 41 reports carried such names.
+_OLDER_SECTION = re.compile(r"^\s*[0-9一二三四五六七八九十]+\s*[、.\uff0e]")
+_INDICATOR_ROW = re.compile(r"[（(]\s*(?:元|股|元\s*/\s*股|%|％)\s*[)）]")
 #: A memo line under a row, never a member (永新股份 002014 FY2010: `其中：关联交易 0`).
 _RELATED_MEMO = re.compile(r"^其中\s*[:：]?\s*关联交易")
 #: The revenue and cost labels the older forms print beside `营业收入` and `营业成本`.
@@ -246,11 +259,17 @@ def _older_header(
     label, since 大同煤业 sets `分 行 业 或` 6 pt above the labels and `分产品` 6 pt below them. A
     revenue-only table's revenue column ends where the next label starts."""
     line = lines[k]
-    rev_h = next((i for i in line if any(_labelled(i, h) for h in OLDER_REV_HDR)), None)
-    if rev_h is None:
+    # A LABEL SET GLYPH BY GLYPH IS STILL THE LABEL: 雅化集团 (002497) FY2011 prints `营业收入` as
+    # `营` and `业收入`, so looking for it as one item found no header, and its industry and product
+    # rows were never read (`_label_spans`).
+    revs = sorted((s for h in OLDER_REV_HDR for s in _label_spans(line, h)), key=lambda s: s.x)
+    if not revs:
         return None
-    cost_h = next(
-        (i for i in line if i.x > rev_h.x and any(_labelled(i, h) for h in OLDER_COST_HDR)), None
+    rev_h = revs[0]
+    cost_h = min(
+        (s for h in OLDER_COST_HDR for s in _label_spans(line, h) if s.x > rev_h.x),
+        key=lambda s: s.x,
+        default=None,
     )
     near = [
         n
@@ -674,6 +693,22 @@ def parse_segment_page(
                 name_x, name_end, rev_end, cost_end, name_hi = found
                 name_lo = max(0.0, name_x - (name_end - name_x))
                 header_y = y
+                # A UNIT IN THE HEADER IS THIS TABLE'S, and wins over one stated above it: of 142
+                # CNINFO splits stored under 10 m yuan after the history walk (2026-11-26), the
+                # older ones state `（万元）` here and nowhere a `单位` line reaches. The header
+                # block runs from 15 pt above the labels' line down to the first row (002020 sets
+                # its four header lines over 31 pt, the unit 15.6 pt under the revenue label).
+                for n in range(max(0, k - 3), min(len(lines), k + 8)):
+                    if heights[n] > y + 15:
+                        continue
+                    if heights[n] < y - 30 or (n > k and column(n, name_end, rev_end)):
+                        break
+                    stated = _HEADER_UNIT.search(
+                        "".join(i.s for i in lines[n] if _end(i) > name_end)
+                    )
+                    if stated is not None:
+                        scale = opened_at = _SCALE[stated.group(1)]
+                        break
                 continue
             if (
                 header_y is not None
@@ -706,6 +741,14 @@ def parse_segment_page(
             _TABLE_ENDS.search(joined)
             or (composing and _COMPOSITION_ENDS.search(joined))
             or (_NUMBERED.match(joined) and not is_a_row(k))
+            or (older and _OLDER_SECTION.match(joined) and not is_a_row(k))
+            # In the NAME column only: a growth column's header prints `（%）` too (大同煤业 sets
+            # `(%)` on a line of its own, 18 pt under its header).
+            or (
+                older
+                and _INDICATOR_ROW.search("".join(i.s for i in line if _end(i) <= name_end + 1))
+                is not None
+            )
             # PROSE ENDS A TABLE: text set from the name column across to the next label (the cost
             # label, or the composition table's share label) is no name, which stays in its cell.
             # 中国中铁 (601390) follows its regions with a note and its review of each line, whose
@@ -970,6 +1013,24 @@ def _label_starts(line: Sequence[TextItem], label: str, *, prefix: bool = False)
     return starts
 
 
+def _label_spans(line: Sequence[TextItem], label: str) -> list[TextItem]:
+    """Each occurrence of a header label on its line, as one item spanning it: an item that is the
+    label (`_labelled`), or the label set glyph by glyph (`_label_starts`), from where its first
+    glyph starts to where its last ends."""
+    spans = [i for i in line if _labelled(i, label)]
+    for start in _label_starts(line, label):
+        if any(abs(s.x - start) < 0.5 for s in spans):
+            continue
+        text, end = "", start
+        for item in (i for i in line if i.x >= start - 0.5):
+            text += item.s.strip()
+            end = _end(item)
+            if text == label:
+                break
+        spans.append(TextItem(label, start, line[0].y, end))
+    return sorted(spans, key=lambda i: i.x)
+
+
 def _labelled(item: TextItem, label: str) -> bool:
     """A header item that IS the label, or starts with it as a word: 中科软's FY2025 header sets
     `营业成本 毛利率` as one run (pdf.js kept the two apart), and a column is placed by where its
@@ -1203,11 +1264,18 @@ def unit_stated_last(items: Sequence[TextItem], default: int) -> int:
     A UNIT LINE CAN END ONE PAGE AND ITS TABLE START THE NEXT: measured 2026-11-15 on 1225062013,
     `单位：万元` is the last line of page 38 and `主营业务分行业情况` opens page 39. Read from the
     table's page alone, every figure was taken as yuan, ten thousand times too small, by both the
-    edge and this reader."""
+    edge and this reader.
+
+    READ BY LINE, NOT BY ITEM: a report can draw `单位：`, `（人民币）`, `万` and `元` as four items
+    (000735 FY2011, measured 2026-11-26), and no one of them names a unit. Read item by item, the
+    unit was lost and the table on the next page was stored in yuan, ten thousand times too small.
+    Lines are the ~3 pt buckets `parse_segment_page` reads."""
+    buckets: dict[int, list[TextItem]] = {}
+    for item in items:
+        buckets.setdefault(_js_round(item.y / 3), []).append(item)
     scale = default
-    for item in sorted(items, key=lambda i: -i.y):
-        unit = _UNIT.search(item.s)
-        if unit is not None:
+    for _, line in sorted(buckets.items(), key=lambda kv: -kv[0]):
+        for unit in _UNIT.finditer("".join(i.s for i in sorted(line, key=lambda i: i.x))):
             scale = _SCALE[unit.group(1)]
     return scale
 
