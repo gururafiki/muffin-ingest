@@ -1124,6 +1124,9 @@ class Vocabulary:
     concepts: tuple[ConceptSpec, ...]
     roles: tuple[MemberRole, ...]
     parser_version: int
+    #: Totals consulted only when `concepts` place no revenue split in a filing
+    #: (`segment_total_concept.fallback`): see `segment_facts`.
+    fallback_concepts: tuple[ConceptSpec, ...] = ()
 
 
 class VocabularyEmpty(RuntimeError):
@@ -1155,7 +1158,8 @@ def vocabulary(conn: Any, regulator: str) -> Vocabulary:
     THE TOTAL CONCEPTS ARE SCOPED PER REGULATOR because `xbrl_concept` is read by every
     regulator's segment parser and by the SEC statement lane: `RevenueFromSaleOfGoods` is a
     component of revenue in DART instances, so a concept added for one regulator must not reach the
-    others. A concept in both tables takes the higher priority.
+    others. A concept in both tables takes the higher priority. A `fallback` row is kept apart in
+    `fallback_concepts` (`segment_facts`).
     """
     with conn.cursor() as cur:
         cur.execute(
@@ -1168,11 +1172,18 @@ def vocabulary(conn: Any, regulator: str) -> Vocabulary:
             "   where metric_code = any(%s)"
             "  union all"
             "  select metric_code, concept, priority from market.segment_total_concept"
-            "   where regulator = %s and metric_code = any(%s)"
+            "   where regulator = %s and metric_code = any(%s) and not fallback"
             ") c group by metric_code, concept order by metric_code, concept",
             (list(SEGMENT_METRICS), regulator, list(SEGMENT_METRICS)),
         )
         concepts = tuple(ConceptSpec(str(m), str(c), int(p)) for m, c, p in cur.fetchall())
+        cur.execute(
+            "select metric_code, concept, priority from market.segment_total_concept"
+            " where regulator = %s and metric_code = any(%s) and fallback"
+            " order by metric_code, concept",
+            (regulator, list(SEGMENT_METRICS)),
+        )
+        fallback = tuple(ConceptSpec(str(m), str(c), int(p)) for m, c, p in cur.fetchall())
         cur.execute(
             "select member_code, class from market.segment_member_class order by member_code"
         )
@@ -1188,7 +1199,39 @@ def vocabulary(conn: Any, regulator: str) -> Vocabulary:
             f"market.segment_parser has no row for {regulator}: its filings would be stamped with "
             "a version nothing compares against"
         )
-    return Vocabulary(axes, concepts, roles, int(found[0]))
+    return Vocabulary(axes, concepts, roles, int(found[0]), fallback)
+
+
+def segment_facts(xml: str, vocabulary: Vocabulary) -> list[SegmentFact]:
+    """`segment_facts_from` with the vocabulary's own concepts, and with its fallback totals added
+    only when those place no revenue split in this filing.
+
+    WHY A FALLBACK AND NOT ONE MORE CONCEPT. Measured 2026-11-26 over every held SEC annual filing
+    of FY2023+: adding bank and utility revenue totals (`RevenuesNetOfInterestExpense`,
+    `RevenueAndOperatingIncome`, `RegulatedAndUnregulatedOperatingRevenue`) to the vocabulary gave
+    15 filings of 6 companies their first split (Goldman, Nomura, NextEra, DTE, XP, Community
+    Financial), and also changed 24 filings of 13 companies that already had one. A second total
+    the members sum to competes with the first: Equinor's served FY2023 split moved from
+    155.9 bn to 106.8 bn and NatWest's from 16.6 bn to 13.2 bn, and Enel Chile lost a year. As a
+    fallback, a filing that places a revenue split keeps exactly what it placed.
+    """
+    facts = segment_facts_from(xml, vocabulary.axes, vocabulary.concepts, vocabulary.roles)
+    if not vocabulary.fallback_concepts or places_a_revenue_split(facts):
+        return facts
+    widened = segment_facts_from(
+        xml,
+        vocabulary.axes,
+        vocabulary.concepts + vocabulary.fallback_concepts,
+        vocabulary.roles,
+    )
+    return widened if places_a_revenue_split(widened) else facts
+
+
+def places_a_revenue_split(facts: Sequence[SegmentFact]) -> bool:
+    """A flat revenue member placed in a partition: what the stock page serves."""
+    return any(
+        f.metric_code == "revenue" and f.partition_id > 0 and not f.parent_member for f in facts
+    )
 
 
 #: Periods for which a security holds placed revenue splits from more than one regulator (Phase 6c

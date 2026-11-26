@@ -290,28 +290,35 @@ def test_the_vocabulary_is_read_ordered_and_refuses_an_empty_control_table() -> 
     axes = [("srt:ProductOrServiceAxis", "product", 100, None)]
     concepts = [("revenue", "Revenues", 100)]
     roles = [("us-gaap:AllOtherSegmentsMember", "residual")]
-    conn = Conn(axes, concepts, roles, [(20,)])
+    fallback = [("revenue", "RevenuesNetOfInterestExpense", 60)]
+    conn = Conn(axes, concepts, fallback, roles, [(20,)])
     got = segments.vocabulary(conn, "dart")
     assert got.parser_version == 20
     assert got.axes[0].axis == "srt:ProductOrServiceAxis" and got.axes[0].required_member is None
     assert got.concepts[0].concept == "Revenues" and got.roles[0].role == "residual"
-    # THE GLOBAL CONCEPTS PLUS THIS REGULATOR'S OWN, and the version of this regulator's row.
+    # THE GLOBAL CONCEPTS PLUS THIS REGULATOR'S OWN NON-FALLBACK ROWS; its fallback rows apart.
     metrics = list(segments.SEGMENT_METRICS)
     assert conn.calls[1][1] == (metrics, "dart", metrics)
     assert "from market.segment_total_concept where regulator = %s" in conn.calls[1][0]
-    assert conn.calls[3] == (
+    assert "and not fallback" in conn.calls[1][0]
+    assert conn.calls[2][1] == ("dart", metrics) and conn.calls[2][0].endswith(
+        "and fallback order by metric_code, concept"
+    )
+    assert [c.concept for c in got.fallback_concepts] == ["RevenuesNetOfInterestExpense"]
+    assert all(c.concept != "RevenuesNetOfInterestExpense" for c in got.concepts)
+    assert conn.calls[4] == (
         "select version from market.segment_parser where regulator = %s",
         ("dart",),
     )
-    assert all("order by" in sql for sql, _ in conn.calls[:3])
+    assert all("order by" in sql for sql, _ in conn.calls[:4])
 
     with pytest.raises(segments.VocabularyEmpty, match="segment_axis"):
-        segments.vocabulary(Conn([], concepts, roles, [(20,)]), "sec")
+        segments.vocabulary(Conn([], concepts, [], roles, [(20,)]), "sec")
     with pytest.raises(segments.VocabularyEmpty, match="xbrl_concept"):
-        segments.vocabulary(Conn(axes, [], roles, [(20,)]), "sec")
+        segments.vocabulary(Conn(axes, [], [], roles, [(20,)]), "sec")
     # A REGULATOR WITH NO PARSER ROW IS REFUSED, never stamped with a made-up version.
     with pytest.raises(segments.VocabularyEmpty, match="no row for edinet"):
-        segments.vocabulary(Conn(axes, concepts, [], []), "edinet")
+        segments.vocabulary(Conn(axes, concepts, [], [], []), "edinet")
 
 
 def test_two_regulators_reads_what_it_found_and_an_empty_answer() -> None:
