@@ -60,9 +60,14 @@ id that regulator files under: `sec_filer` (CIK, shared with the SEC filer lane)
 read at `market.segment_parser.version`, merging them into that filer's raw file one row group per
 document, so reading one filing never decodes the rest. Stage 2 parses each held document, retracts
 that filing's rows by accession only when the document was read, and stamps the filing. A filer is
-re-walked on a 30-day hash floor (SEC's is a sensor over its daily index). A whole history, or a
-parser bump, is drained by an operator backfill at priority −1, and China's annual-report PDFs are
-pruned to 5 GB once read. Each lane's queue is an asset check (`every_<regulator>_…_was_read`).
+re-walked on a 30-day hash floor (SEC's is a sensor over its daily index); stage 1 then skips a
+filing list younger than 29 days, but still fetches the documents the stored list names that are
+behind the parser. A whole history, or a re-read after a reader fix, is drained by an operator
+backfill at priority −1: the re-read is a one-shot re-queue in muffin-deployment, sized from a gate
+over held documents (`.agents/skills/dagster-pipeline-local-test`). CNINFO's older search pages
+(reports back to 2003) are walked only when the backfill asks for them with
+`raw_cninfo_filings.history_pages`. China's annual-report PDFs are pruned to 5 GB once read. Each
+lane's queue is an asset check (`every_<regulator>_…_was_read`).
 
 The macro and events lanes (since 2026-11-21) follow the same rule, and their grids show it:
 
