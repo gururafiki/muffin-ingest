@@ -523,6 +523,135 @@ ZPMC = [
 ]
 
 
+#: 雅化集团 (002497) FY2011, page 51 (filed 2012-04-07): the combined table's heading ends in
+#: `构成情况`, its revenue label is set as `营` and `业收入`, the region table is headed
+#: `（2）主营业务分地区构成情况`, and the key accounting data table follows under `3、`. Read before
+#: 2026-11-26 as the regions and the accounting rows under `分产品`, with this year's figure fused
+#: into each accounting row's name (`营业总收入（元）1,105,596,009.01`), and no industry or product.
+YAHUA = [
+    TextItem("（", 96.0, 697.4, 108.0),
+    TextItem("1", 108.0, 697.4, 114.0),
+    TextItem("）", 114.0, 697.4, 126.0),
+    TextItem("主", 126.0, 697.4, 138.0),
+    TextItem("营", 138.0, 697.4, 150.0),
+    TextItem("业务", 150.0, 697.4, 174.0),
+    TextItem("分行业、", 174.1, 697.4, 222.1),
+    TextItem("分", 222.1, 697.4, 234.1),
+    TextItem("产品构成情况", 234.1, 697.4, 306.0),
+    TextItem("单位：", 381.1, 675.6, 412.8),
+    TextItem("（人民币）", 412.7, 675.6, 465.2),
+    TextItem("万元", 465.2, 675.6, 486.2),
+    TextItem("主营业务分行业情况", 249.6, 653.0, 344.7),
+    TextItem("营业收入比", 358.6, 630.6, 411.4),
+    TextItem("营业成本", 420.1, 630.6, 462.3),
+    TextItem("毛利率比", 469.5, 630.6, 511.8),
+    TextItem("分行业", 105.7, 623.7, 137.4),
+    TextItem("毛利率", 315.2, 623.7, 346.9),
+    TextItem("营", 177.1, 616.9, 187.6),
+    TextItem("业收入", 187.6, 616.9, 219.3),
+    TextItem("营业成本", 249.1, 616.9, 291.3),
+    TextItem("上年增减", 363.9, 616.9, 406.1),
+    TextItem("比上年增", 420.1, 616.9, 462.3),
+    TextItem("上年增减", 469.5, 616.9, 511.8),
+    TextItem("或分产品", 100.5, 610.2, 142.7),
+    TextItem("（", 315.3, 610.2, 325.9),
+    TextItem("%", 325.9, 610.2, 336.4),
+    TextItem("）", 336.3, 610.2, 346.9),
+    TextItem("（", 369.2, 603.3, 379.8),
+    TextItem("%", 379.8, 603.3, 390.3),
+    TextItem("）", 390.2, 603.3, 400.8),
+    TextItem("减（", 420.1, 603.3, 441.2),
+    TextItem("%", 441.2, 603.3, 451.8),
+    TextItem("）", 451.7, 603.3, 462.2),
+    TextItem("（", 474.8, 603.3, 485.4),
+    TextItem("%", 485.4, 603.3, 495.9),
+    TextItem("）", 495.8, 603.3, 506.4),
+    TextItem("106,907.72", 185.4, 578.8, 232.9),
+    TextItem("61,011.91", 263.1, 578.8, 304.9),
+    TextItem("42.93", 331.0, 578.8, 354.8),
+    TextItem("46.04", 389.0, 578.8, 412.8),
+    TextItem("58.90", 443.1, 578.8, 466.9),
+    TextItem("-6.74", 489.9, 578.8, 511.8),
+    TextItem("民爆行业", 82.5, 578.5, 124.6),
+    TextItem("主营业务分产品情况", 249.6, 546.1, 344.7),
+    TextItem("75,159.97", 190.7, 516.8, 232.9),
+    TextItem("45,948.36", 262.7, 516.8, 304.9),
+    TextItem("38.87", 331.0, 516.8, 354.8),
+    TextItem("70.17", 389.0, 516.8, 412.8),
+    TextItem("88.02", 443.1, 516.8, 466.9),
+    TextItem("-7.94", 489.9, 516.8, 511.8),
+    TextItem("工业炸药", 82.5, 516.5, 124.6),
+    TextItem("22,750.37", 190.7, 487.4, 232.9),
+    TextItem("9,757.07", 268.0, 487.4, 304.9),
+    TextItem("57.11", 331.4, 487.4, 354.8),
+    TextItem("7.68", 394.3, 487.4, 412.8),
+    TextItem("18.87", 443.1, 487.4, 466.9),
+    TextItem("-4.04", 489.9, 487.4, 511.8),
+    TextItem("工业起爆器材", 82.5, 487.0, 145.6),
+    TextItem("8,997.38", 196.0, 457.9, 232.9),
+    TextItem("5,306.48", 268.0, 457.9, 304.9),
+    TextItem("41.02", 331.0, 457.9, 354.8),
+    TextItem("13.81", 389.0, 457.9, 412.8),
+    TextItem("26.48", 443.1, 457.9, 466.9),
+    TextItem("-5.91", 489.9, 457.9, 511.8),
+    TextItem("工程爆破", 82.5, 457.5, 124.6),
+    TextItem("2,737.30", 196.0, 428.4, 232.9),
+    TextItem("2,408.40", 268.0, 428.4, 304.9),
+    TextItem("12.02", 331.0, 428.4, 354.8),
+    TextItem("15.52", 389.0, 428.4, 412.8),
+    TextItem("35.70", 443.1, 428.4, 466.9),
+    TextItem("-13.08", 484.7, 428.4, 511.8),
+    TextItem("其他", 82.5, 428.0, 103.6),
+    TextItem("（", 96.0, 398.8, 108.0),
+    TextItem("2", 108.0, 398.8, 114.0),
+    TextItem("）", 114.0, 398.8, 126.0),
+    TextItem("主营业务分地区构成情况", 126.0, 398.8, 258.0),
+    TextItem("单位：", 381.1, 376.9, 412.8),
+    TextItem("（人民币）", 412.7, 376.9, 465.2),
+    TextItem("万元", 465.2, 376.9, 486.2),
+    TextItem("地区", 151.5, 359.1, 172.6),
+    TextItem("主营业务收入", 269.9, 359.1, 333.3),
+    TextItem("比上年增减（", 394.5, 359.1, 457.9),
+    TextItem("%", 457.9, 359.1, 468.5),
+    TextItem("）", 468.3, 359.1, 478.9),
+    TextItem("78,906.95", 280.6, 337.9, 322.8),
+    TextItem("16.57", 424.8, 337.9, 448.5),
+    TextItem("四川省内", 141.0, 337.6, 183.1),
+    TextItem("30,738.06", 280.6, 316.4, 322.7),
+    TextItem("290.06", 422.1, 316.4, 451.2),
+    TextItem("四川省外", 141.0, 316.0, 183.1),
+    TextItem("109,645.01", 278.0, 294.9, 325.4),
+    TextItem("45.09", 424.8, 294.9, 448.5),
+    TextItem("合计", 151.6, 294.5, 172.7),
+    TextItem("3", 96.0, 254.6, 102.0),
+    TextItem("、", 102.0, 254.6, 114.0),
+    TextItem("主要会计数据及财务指标变动情况表", 114.0, 254.6, 306.0),
+    TextItem("主要会计数据变动情况表", 226.5, 231.3, 358.5),
+    TextItem("单位：（人民币）元", 400.5, 209.3, 495.2),
+    TextItem("本年比上年增减", 346.3, 195.3, 420.2),
+    TextItem("增减变化的", 441.8, 195.3, 494.6),
+    TextItem("2011", 203.4, 188.4, 224.6),
+    TextItem("年", 227.1, 188.4, 237.6),
+    TextItem("2010", 285.0, 188.4, 306.2),
+    TextItem("年", 308.7, 188.4, 319.3),
+    TextItem("（％）", 367.3, 181.6, 398.9),
+    TextItem("主要原因", 447.1, 181.6, 489.3),
+    TextItem("公司成功并购柯达", 424.5, 167.5, 511.8),
+    TextItem(" 1,105,596,009.01", 183.8, 154.2, 257.5),
+    TextItem(" 763,097,888.72", 269.3, 154.2, 335.1),
+    TextItem("44.88", 371.4, 154.2, 395.1),
+    TextItem("营业总收入（元）", 82.5, 153.9, 166.6),
+    TextItem("化工及传统市场业", 424.5, 153.9, 511.8),
+    TextItem("务量的增长", 424.5, 140.3, 477.2),
+    TextItem("销售收入的增长，", 424.5, 121.6, 511.8),
+    TextItem(" 240,940,135.94", 187.7, 115.1, 253.5),
+    TextItem(" 184,078,320.37", 269.3, 115.1, 335.1),
+    TextItem("30.89", 371.4, 115.1, 395.1),
+    TextItem("利润总额（元）", 82.5, 114.9, 156.2),
+    TextItem("引起利润的增长", 424.5, 108.0, 498.2),
+]
+
+
 def rows(
     items: list[TextItem], *, older: bool = True
 ) -> list[tuple[str, str, float, float | None]]:
@@ -698,6 +827,8 @@ def test_whole_yuan_figures_are_read_on_a_page_that_prints_no_fen() -> None:
         ("公司主营业务分行业情况良好，收入稳步增长", None),
         ("主营业务分行业情况的说明", None),
         ("（二）行业发展情况", None),
+        ("（1）主营业务分行业、分产品构成情况", "cninfo:分行业"),
+        ("（2）主营业务分地区构成情况", "cninfo:分地区"),
     ],
 )
 def test_an_older_heading_is_a_line_of_its_own(line: str, axis: str | None) -> None:
@@ -734,9 +865,50 @@ def test_a_unit_printed_without_a_colon_still_scales_the_table() -> None:
     assert rows(restated) == rows(YONGXIN)
 
 
+@pytest.mark.parametrize("depth", [6.5, 20.5])
+def test_a_unit_stated_in_the_column_header_scales_the_table(depth: float) -> None:
+    """002020 FY2007-2011 and 000636 FY2011 print `（万元）（万元）` under the labels and no `单位`
+    line: read in yuan, every split was stored ten thousand times too small. Here YONGXIN's
+    `（单位：人民币万元）` headings are replaced by a header line of that shape, `depth` pt under
+    the labels' line (002020 sets it 15.6 pt under, in a header 31 pt deep)."""
+    unheaded = [i for i in YONGXIN if i.s != "（单位：人民币万元）"]
+    assert len(unheaded) == len(YONGXIN) - 2
+    headed = [
+        *unheaded,
+        TextItem("（万元）", 185.7, 461.5 - depth, 227.9),
+        TextItem("（万元）", 249.2, 461.5 - depth, 291.4),
+        TextItem("（万元）", 189.9, 329.0 - depth, 232.1),
+        TextItem("（万元）", 250.4, 329.0 - depth, 292.6),
+    ]
+    assert rows(headed) == rows(YONGXIN)
+    # Under the first row it is no header: a unit there leaves the table in yuan.
+    under = [*unheaded, TextItem("（万元）", 185.7, 405.0, 227.9)]
+    assert [r[2] for r in rows(under)][:1] == [r[2] for r in rows(unheaded)][:1]
+    # The rules disagree: without the header's unit the same table reads in yuan.
+    assert [r[2] for r in rows(unheaded)] == [r[2] / 10000 for r in rows(YONGXIN)]
+    # A price's unit is no unit: `（万元/吨）` leaves the table in yuan.
+    priced = [TextItem("（万元/吨）", i.x, i.y, i.end) if i.s == "（万元）" else i for i in headed]
+    assert [r[2] for r in rows(priced)] == [r[2] for r in rows(unheaded)]
+
+
 def test_a_stock_code_running_into_the_year_does_not_date_the_report() -> None:
     """002053's FY2010 cover reads `0020532010年年度报告` and 600720's `6007202010`: the first
     plausible window filed them under 2053 and 2020."""
     assert cn_pdf.fiscal_year_end_from("0020532010年年度报告") == "2010-12-31"
     assert cn_pdf.fiscal_year_end_from("6007202010年年度报告") == "2010-12-31"
     assert cn_pdf.fiscal_year_end_from("2000792011年年度报告") == "2011-12-31"
+
+
+def test_an_older_table_headed_composition_with_a_split_label_reads_every_axis() -> None:
+    """The industry and product tables are read from a revenue label set as `营` and `业收入`,
+    `构成情况` opens the region table, and `3、主要会计数据…` ends it: no accounting row is a
+    member, and no member name carries a figure."""
+    assert rows(YAHUA) == [
+        ("cninfo:分行业", "民爆行业", 1069077200.0, 610119100.0),
+        ("cninfo:分产品", "工业炸药", 751599700.0, 459483600.0),
+        ("cninfo:分产品", "工业起爆器材", 227503700.0, 97570700.0),
+        ("cninfo:分产品", "工程爆破", 89973800.0, 53064800.0),
+        ("cninfo:分产品", "其他", 27373000.0, 24084000.0),
+        ("cninfo:分地区", "四川省内", 789069500.0, None),
+        ("cninfo:分地区", "四川省外", 307380600.0, None),
+    ]

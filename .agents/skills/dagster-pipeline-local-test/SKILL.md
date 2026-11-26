@@ -4,8 +4,9 @@ description:
   Use when running a muffin-ingest lane locally before shipping it — standing up Postgres for the
   pipeline, applying the committed migrations, materialising one partition of a tiny subset, and
   reading what it wrote. Also the way to find out what a database rebuilt from what is committed
-  actually does, to prove one SQL change on the node when Docker here is wedged, and to drive a
-  branch's assets read-only against production before shipping them.
+  actually does, to prove one SQL change on the node when Docker here is wedged, to drive a
+  branch's assets read-only against production before shipping them, and to gate a parser or
+  reader change by diffing its output over the documents production already holds.
 license: AGPL-3.0-or-later
 metadata:
   author: muffin
@@ -242,4 +243,30 @@ scripts/branch_on_node.sh /tmp/my_harness.py
   real into a temporary directory, then the library's own parse over those files against the
   table, reporting insert, change, unchanged and would-retract per subject. That is how the macro
   lane was shown to match the edge on 2,146 of 2,147 points before it shipped.
+
+## Gate a reader change over the documents production holds
+
+A parser fix is written from the documents it fails on, and a rule written that way is too broad
+until the documents it already reads have been read again. Every CNINFO reader change was gated
+this way (muffin-ingest#183, #196, #199, and the older forms of 2026-11-26). #196's gate found two
+golden reports a new prose rule cut short, which no fixture could have shown.
+
+```bash
+cp scripts/example_cninfo_gate.py /tmp/my_gate.py      # change the glob and the reader call
+scripts/gate_reader.sh /tmp/my_gate.py /tmp/claude-cngate/pdf /tmp/claude-oldcn/pdf
+ssh muffin 'cat /tmp/claude-gate/DONE; wc -l /tmp/claude-gate/out/*.jsonl'
+ssh muffin 'python3 /tmp/claude-gate/gate_compare.py /tmp/claude-gate/out --quiet pdf'
+```
+
+- **The set is three groups, each its own directory on the node:** the golden set (a few hundred
+  documents the current reader reads, which must come out identical), the cases the change is for
+  (which must change, and each change must be read), and the documents it was written against.
+  Fetch a missing one through http-cache from the node, not from here.
+- **The base is the RUNNING image's library**, so roll anything merged first or the gate reports it
+  as yours. The two runs are parallel throwaway containers with no network, detached on the node.
+- **Read every LOST and every CHANGED line**, not the count: a changed value with unchanged facts
+  counts is a column read differently. Then gate once more after each rule you add for what the
+  gate found, because a fix for one loss can cost another.
+- **Leave the set on the node** until the change has rolled. Deleting it means fetching it again,
+  and most of a CNINFO set misses the cache and goes to the provider.
 
