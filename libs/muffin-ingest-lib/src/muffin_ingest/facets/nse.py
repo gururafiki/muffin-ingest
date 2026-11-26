@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any, Literal
 
+from muffin_ingest.facets import segments
 from muffin_ingest.facets.segments import _trim
 from muffin_ingest.providers import nse
 
@@ -198,11 +199,7 @@ select sf.filer_id, array_agg(distinct sf.security_id::text)
  group by sf.filer_id
 """
 
-_UNREAD = """
-       (f.segments_parsed_at is null
-        or coalesce(f.segments_parser_version, 0)
-           < (select max(version) from market.segment_parser))
-"""
+_UNREAD = segments.unread_sql(REGULATOR)
 
 #: Of some filings, those read at the current parser version: the rest are due.
 READ_ALREADY = f"""

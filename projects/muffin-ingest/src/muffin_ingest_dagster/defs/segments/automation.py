@@ -6,7 +6,7 @@ and the edge's `security-segments` resource was retired (muffin-deployment#511):
 read one queue.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from datetime import UTC, date, datetime
 
 import dagster as dg
@@ -82,7 +82,7 @@ sec_segments_job = dg.define_asset_job(
 )
 
 
-def chunks_due(grid: Sequence[str], due: Mapping[int, int]) -> list[list[str]]:
+def chunks_due(grid: Sequence[str], due: Iterable[int]) -> list[list[str]]:
     """The `FILERS_PER_RUN`-aligned chunks of the grid that hold a filer with a filing due.
 
     A run covers a contiguous range, and Dagster gives a scattered set one run per key (254 runs
@@ -123,14 +123,32 @@ def sec_instances_due(
         return dg.SkipReason(f"run {unfinished[0].run_id[:8]} of the last wave has not finished")
     with postgres.connect() as conn:
         due = sec_segments.due_by_filer(conn)
-    filings = sum(due.values())
+    filings = sum(d.filings for d in due.values())
     if not due:
         return dg.SkipReason("no filing is due")
     if filings > MAX_DUE_PER_TICK:
-        return dg.SkipReason(
-            f"{filings} filings of {len(due)} filers are due, more than {MAX_DUE_PER_TICK}: a "
-            "queue that size is a history, which is a paced backfill and never one tick"
+        # A HISTORY IS A BACKFILL, BUT A NEW 10-K IS NOT. Above the cap only the filers holding a
+        # filing filed in the last `RECENT_DAYS` are asked, so a parser bump or a large re-queue
+        # never stops the daily filings being read. Their runs read whatever else of theirs is due,
+        # bounded by each run's byte budget like any other run.
+        recent = {cik: d for cik, d in due.items() if d.recent}
+        if not recent:
+            return dg.SkipReason(
+                f"{filings} filings of {len(due)} filers are due, more than {MAX_DUE_PER_TICK}, "
+                f"and none was filed in the last {sec_segments.RECENT_DAYS} days: a queue that "
+                "size is a history, which is a paced backfill and never one tick"
+            )
+        context.log.info(
+            "%s filings of %s filers are due, more than %s: asking only the %s filers with a "
+            "filing filed in the last %s days; the rest is a paced backfill",
+            filings,
+            len(due),
+            MAX_DUE_PER_TICK,
+            len(recent),
+            sec_segments.RECENT_DAYS,
         )
+        due = recent
+        filings = sum(d.filings for d in due.values())
     grid = context.instance.get_dynamic_partitions(SEC_FILER_PARTITION)
     chunks = chunks_due(grid, due)
     wave = int(context.cursor or 0) + 1

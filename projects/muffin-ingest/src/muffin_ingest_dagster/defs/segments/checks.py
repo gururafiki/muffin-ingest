@@ -8,7 +8,7 @@ import dagster as dg
 from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import dart as fd
 from muffin_ingest.facets import nse as fn
-from muffin_ingest.facets import sec_segments
+from muffin_ingest.facets import sec_segments, segments
 
 from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION
 from muffin_ingest_dagster.defs.segments.raw import CNINFO_FILINGS
@@ -44,6 +44,34 @@ def every_sec_filing_was_read(postgres: Postgres) -> dg.AssetCheckResult:
             if found.oldest_filed is None
             else found.oldest_filed.isoformat(),
             "behind_the_parser": found.behind_the_parser,
+        },
+    )
+
+
+#: The daily asset that reads every segment row (`derive_segment_classification`): the check that
+#: no period carries two regulators' splits rides it, once or twice a day, instead of every SEC
+#: wave (6.9 s over the whole table, measured 2026-11-26).
+SECURITY_CLASSIFICATION = dg.AssetKey("security_classification")
+
+
+@dg.asset_check(asset=SECURITY_CLASSIFICATION, blocking=False)
+def no_period_has_splits_from_two_regulators(postgres: Postgres) -> dg.AssetCheckResult:
+    """No security holds placed revenue splits from two regulators for one period.
+
+    ONE REGULATOR PER SECURITY (Phase 6c decision 2): EDINET and ESEF skip a company the SEC
+    covers, and the sibling extension fills holes only. A period with two regulators' splits means
+    one of those rules failed, and the stock page then shows two splits for one year. A WARN: the
+    rows are each right, only the choice between them is missing.
+    """
+    with postgres.connect() as conn:
+        found = segments.two_regulators(conn)
+    return dg.AssetCheckResult(
+        passed=found.periods == 0,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={
+            "periods": found.periods,
+            "securities": found.securities,
+            "sample": ", ".join(found.sample) or "none",
         },
     )
 

@@ -80,6 +80,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "security_classification:no_period_has_splits_from_two_regulators": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "security_fundamentals:fundamental_units_are_conventional": {
       "additional_deps": [],
       "blocking": false

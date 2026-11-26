@@ -14,7 +14,7 @@ import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -154,11 +154,14 @@ class Cursor:
             oldest = min((f["filed"] for f in never), default=None)
             self.rows = [(len(never), len({f["cik"] for f in never}), oldest, len(behind))]
         elif "from market.security_filing f" in text and "group by s.cik" in text:
-            counts: dict[int, int] = {}
+            counts: dict[int, list[int]] = {}
+            since = date.today() - timedelta(days=sec_segments.RECENT_DAYS)
             for f in FILINGS:
                 if any(_due(m) for m in f["marks"].values()):
-                    counts[f["cik"]] = counts.get(f["cik"], 0) + 1
-            self.rows = sorted(counts.items())
+                    count = counts.setdefault(f["cik"], [0, 0])
+                    count[0] += 1
+                    count[1] += f["filed"] >= since
+            self.rows = sorted((cik, n, recent) for cik, (n, recent) in counts.items())
         elif "from market.segment_axis" in text:
             self.rows = [
                 (a["axis"], a["kind"], a["priority"], a["required_member"])
@@ -631,6 +634,37 @@ def test_the_sensor_asks_nothing_when_nothing_is_due_or_the_queue_is_a_history(
 
     FILINGS.pop()
     assert isinstance(_sensor(instance), dg.SensorResult), "at the bound it is still a day"
+
+
+def test_above_the_bound_the_sensor_still_asks_for_the_filers_with_a_recent_filing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A HISTORY IS A BACKFILL, BUT A NEW 10-K IS NOT: while a parser bump or a re-queue holds the
+    queue above the bound, the chunks holding a filing filed in the last `RECENT_DAYS` are still
+    requested, and the history's chunks are not."""
+    grid = _grid(2 * FILERS_PER_RUN + 5)
+    instance = instance_with(*grid)
+    monkeypatch.setattr(automation, "MAX_DUE_PER_TICK", 2)
+    new_filer, history_filer = 1003, 1000 + FILERS_PER_RUN + 1
+    fresh = (date.today() - timedelta(days=2)).isoformat()
+    stale = (date.today() - timedelta(days=sec_segments.RECENT_DAYS + 30)).isoformat()
+    FILINGS[:] = [
+        filing(new_filer, "new-10k", fresh, "s1"),
+        filing(new_filer, "old-10k", stale, "s1"),
+        *(filing(history_filer, f"h-{n}", stale, "s2") for n in range(5)),
+    ]
+    result = _sensor(instance)
+    assert isinstance(result, dg.SensorResult)
+    requests = result.run_requests or []
+    assert [r.run_key for r in requests] == [f"1:{grid[0]}"], "only the chunk with a new filing"
+
+    # A filing filed exactly `RECENT_DAYS` ago still counts; one day older does not.
+    edge = (date.today() - timedelta(days=sec_segments.RECENT_DAYS)).isoformat()
+    FILINGS[0] = filing(new_filer, "new-10k", edge, "s1")
+    assert isinstance(_sensor(instance), dg.SensorResult)
+    older = (date.today() - timedelta(days=sec_segments.RECENT_DAYS + 1)).isoformat()
+    FILINGS[0] = filing(new_filer, "new-10k", older, "s1")
+    assert isinstance(_sensor(instance), dg.SkipReason)
 
 
 def test_the_sensor_runs_and_the_bound_is_above_the_busiest_day() -> None:

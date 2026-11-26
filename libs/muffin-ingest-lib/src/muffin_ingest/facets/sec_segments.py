@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, get_args
 
+from muffin_ingest.facets import segments
 from muffin_ingest.providers.sec_edgar import InstanceFetch, InstanceOutcome
 
 REGULATOR = "sec"
@@ -40,15 +41,19 @@ _ACCOUNTS_FILING = """
    and f.report_type in (select form_code from market.filing_form
                           where source_code = 'sec' and carries_segments)
 """
-_UNREAD = """
-       (f.segments_parsed_at is null
-        or coalesce(f.segments_parser_version, 0)
-           < (select max(version) from market.segment_parser))
-"""
+_UNREAD = segments.unread_sql(REGULATOR)
 
-#: Every filer with a filing to read, and how many: what the due sensor asks.
+#: A filing counts as RECENT for this many days after its filing date: what the due sensor still
+#: asks for while a history too large for one tick is due (a parser bump, a re-queue), so a new
+#: 10-K is read within a wave instead of waiting for the backfill.
+RECENT_DAYS = 14
+
+#: Every filer with a filing to read, how many, and how many of them were filed recently: what the
+#: due sensor asks.
 DUE_BY_FILER = f"""
-select s.cik, count(distinct f.accession_number)
+select s.cik, count(distinct f.accession_number),
+       count(distinct f.accession_number)
+         filter (where f.filing_date >= current_date - {RECENT_DAYS})
   from market.security_filing f
   join market.security s on s.security_id = f.security_id
  where {_ACCOUNTS_FILING}
@@ -100,11 +105,19 @@ class Filing:
     due: bool
 
 
-def due_by_filer(conn: Any) -> dict[int, int]:
-    """CIK -> its count of filings to read."""
+@dataclass(frozen=True)
+class Due:
+    """A filer's filings to read, and how many of them were filed in the last `RECENT_DAYS`."""
+
+    filings: int
+    recent: int
+
+
+def due_by_filer(conn: Any) -> dict[int, Due]:
+    """CIK -> its filings to read."""
     with conn.cursor() as cur:
         cur.execute(DUE_BY_FILER)
-        return {int(cik): int(n) for cik, n in cur.fetchall()}
+        return {int(cik): Due(int(n), int(r or 0)) for cik, n, r in cur.fetchall()}
 
 
 def filings(conn: Any, ciks: Sequence[int], named: Sequence[str] = ()) -> dict[int, list[Filing]]:

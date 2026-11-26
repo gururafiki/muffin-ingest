@@ -105,7 +105,7 @@ def sec_segment(
         if any(r.get("run_id") == run_id for r in rows)
     )
     with postgres.connect() as conn:
-        vocabulary = segments.vocabulary(conn)
+        vocabulary = segments.vocabulary(conn, sec_segments.REGULATOR)
         known = fx.known_currencies(conn)
         wanted = sec_segments.filings(conn, [int(k) for k in keys], fetched_now)
 
@@ -294,7 +294,7 @@ def cninfo_segment(
     with postgres.connect() as conn:
         found = cn.filers(conn, keys)
         known = fx.known_currencies(conn)
-        vocabulary = segments.vocabulary(conn)
+        vocabulary = segments.vocabulary(conn, cn.REGULATOR)
 
     for key in keys:
         filer = found.get(key)
@@ -533,7 +533,7 @@ def dart_segment(
     with postgres.connect() as conn:
         found = fd.filers(conn, keys)
         known = fx.known_currencies(conn)
-        vocabulary = segments.vocabulary(conn)
+        vocabulary = segments.vocabulary(conn, fd.REGULATOR)
 
     for key in keys:
         security_ids = found.get(key)
@@ -700,7 +700,7 @@ def nse_segment(
     with postgres.connect() as conn:
         found = fn.filers(conn, keys)
         known = fx.known_currencies(conn)
-        vocabulary = segments.vocabulary(conn)
+        vocabulary = segments.vocabulary(conn, fn.REGULATOR)
 
     for key in keys:
         security_ids = found.get(key)
