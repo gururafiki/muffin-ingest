@@ -136,12 +136,7 @@ def sec_segment(
                         if body is None:
                             stats["not_held"] += 1
                             continue
-                        facts = segments.segment_facts_from(
-                            segments.text_of(body),
-                            vocabulary.axes,
-                            vocabulary.concepts,
-                            vocabulary.roles,
-                        )
+                        facts = segments.segment_facts(segments.text_of(body), vocabulary)
                     with conn.cursor() as cur:
                         written = segment_tables.file_filing(
                             cur,
@@ -598,12 +593,7 @@ def dart_segment(
                         else:
                             outcome = "read" if instance is not None else "no_instance"
                         if instance is not None:
-                            facts = segments.segment_facts_from(
-                                segments.text_of(instance),
-                                vocabulary.axes,
-                                vocabulary.concepts,
-                                vocabulary.roles,
-                            )
+                            facts = segments.segment_facts(segments.text_of(instance), vocabulary)
                             stats["no_segments"] += not facts
                     with conn.cursor() as cur:
                         written = segment_tables.file_filing(
@@ -773,12 +763,7 @@ def nse_segment(
                             outcome = "read"
                             stats["members_named"] += normalised.named
                             stats["contexts_annualised"] += normalised.annualised
-                            facts = segments.segment_facts_from(
-                                normalised.xml,
-                                vocabulary.axes,
-                                vocabulary.concepts,
-                                vocabulary.roles,
-                            )
+                            facts = segments.segment_facts(normalised.xml, vocabulary)
                             stats["no_segments"] += not facts
                     with conn.cursor() as cur:
                         written = segment_tables.file_filing(

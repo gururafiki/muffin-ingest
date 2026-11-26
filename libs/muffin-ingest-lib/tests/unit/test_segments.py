@@ -1435,3 +1435,69 @@ def test_when_nothing_reconciles_the_narrow_derived_total_is_the_target() -> Non
     )
     placed = {f.member_code: f.reconciled_to for f in out if f.partition_id == 1}
     assert placed == {"x:AMember": 1200, "x:BMember": 1200}
+
+
+# A FALLBACK TOTAL IS CONSULTED ONLY WHERE THE VOCABULARY PLACES NO REVENUE SPLIT (2026-11-26).
+# Bank and utility totals added as ordinary concepts changed 24 filings that already had a split
+# (Equinor's FY2023 target 155.9 bn -> 106.8 bn); as fallbacks they only fill a filing with none.
+NET = "RevenuesNetOfInterestExpense"
+
+
+def _vocabulary(fallback: tuple[ConceptSpec, ...]) -> segments.Vocabulary:
+    return segments.Vocabulary(tuple(AXES), tuple(CONCEPTS), (), 20, fallback)
+
+
+def test_a_fallback_total_gives_a_filing_with_no_split_its_split() -> None:
+    xml = instance(
+        [
+            fact(NET, 100, **YEAR),
+            fact(NET, 70, {BIZ: "x:BankingMember"}, **YEAR),
+            fact(NET, 30, {BIZ: "x:MarketsMember"}, **YEAR),
+        ]
+    )
+    assert not segments.places_a_revenue_split(segments.segment_facts(xml, _vocabulary(())))
+    got = segments.segment_facts(xml, _vocabulary((ConceptSpec("revenue", NET, 60),)))
+    placed = [f for f in got if f.metric_code == "revenue" and f.partition_id > 0]
+    assert sorted(f.member_code for f in placed) == ["x:BankingMember", "x:MarketsMember"]
+    assert {f.reconciled_to for f in placed} == {100}
+
+
+def test_a_filing_that_places_a_split_keeps_exactly_what_it_placed() -> None:
+    """The fixture makes the rules disagree: with the fallback merged in, a second split appears on
+    the business axis; as a fallback it does not, because the product split already placed."""
+    xml = instance(
+        [
+            fact(REV, 100, **YEAR),
+            fact(REV, 60, prod("x:AMember"), **YEAR),
+            fact(REV, 40, prod("x:BMember"), **YEAR),
+            fact(NET, 80, **YEAR),
+            fact(NET, 50, {BIZ: "x:BankingMember"}, **YEAR),
+            fact(NET, 30, {BIZ: "x:MarketsMember"}, **YEAR),
+        ]
+    )
+    fallback = (ConceptSpec("revenue", NET, 60),)
+    base = segment_facts_from(xml, AXES, CONCEPTS)
+    merged = segment_facts_from(xml, AXES, [*CONCEPTS, *fallback])
+    assert merged != base, "the fixture must make the two rules disagree"
+    assert segments.segment_facts(xml, _vocabulary(fallback)) == base
+
+
+def test_a_filing_whose_only_split_is_nested_still_consults_the_fallback() -> None:
+    """The stock page serves FLAT splits. Cross-tab cells reconciled to their parent are placed
+    without one, so a filing holding only those has no split to serve and gets its fallback."""
+    gs = {BIZ: "x:ServicesMember"}
+    xml = instance(
+        [
+            fact(NET, 150, **YEAR),
+            fact(REV, 100, gs, **YEAR),
+            fact(REV, 50, {BIZ: "x:CloudMember"}, **YEAR),
+            fact(REV, 70, {**gs, PROD: "x:SearchMember"}, **YEAR),
+            fact(REV, 30, {**gs, PROD: "x:VideoMember"}, **YEAR),
+        ]
+    )
+    base = segment_facts_from(xml, AXES, CONCEPTS)
+    assert any(f.partition_id > 0 and f.parent_member for f in base), "a nested split is placed"
+    assert not segments.places_a_revenue_split(base), "and no flat one"
+    got = segments.segment_facts(xml, _vocabulary((ConceptSpec("revenue", NET, 60),)))
+    flat = [f for f in got if f.partition_id > 0 and not f.parent_member]
+    assert sorted(f.member_code for f in flat) == ["x:CloudMember", "x:ServicesMember"]
