@@ -559,7 +559,9 @@ def test_a_readable_split_beats_a_generated_one_of_equal_size() -> None:
 def test_the_instance_size_gate() -> None:
     mb = 1024 * 1024
     assert instance_is_too_large(127.72 * mb)  # AEP 2015 10-K killed the worker
-    assert not instance_is_too_large(10.92 * mb)  # Diageo 20-F, the largest known to parse
+    assert not instance_is_too_large(10.92 * mb)  # Diageo 20-F
+    assert not instance_is_too_large(54.7 * mb)  # HSBC's FY2024 20-F: 168 MB peak to parse
+    assert instance_is_too_large(69 * mb)  # the smallest of the four still refused
     assert not instance_is_too_large(6.53 * mb)
     assert not instance_is_too_large(0.74 * mb)
     assert not instance_is_too_large(None)  # the HTML fallback carries no size
