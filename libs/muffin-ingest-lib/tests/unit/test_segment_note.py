@@ -450,3 +450,37 @@ def test_an_of_which_group_over_countries_keeps_them_out_of_the_split() -> None:
         "<tr><td>60</td><td>40</td><td>25</td><td>10</td><td>100</td></tr></table>"
     )
     assert _members(_one(html, _revenue(100e6))) == {"日本": 60e6, "海外": 40e6}
+
+
+#: Tokio Marine's shape (FY2026): the segments, their 計, an adjustment and a 連結合計 column. Read
+#: with 連結合計 as a member, its profit row summed to within 0.02% of an unrelated operating
+#: cash-flow subtotal and was stored as the split (2026-11-27).
+CONSOLIDATED_TOTAL = (
+    "<p>報告セグメントごとの損益等に関する情報</p><table>"
+    "<tr><td></td><td></td><td></td><td></td><td>(単位:百万円)</td><td>(単位:百万円)</td></tr>"
+    "<tr><td></td><td>国内損害 保険事業</td><td>海外 保険事業</td><td>計</td><td>調整額</td>"
+    "<td>連結合計</td></tr>"
+    "<tr><td>売上高</td><td>600</td><td>400</td><td>1,000</td><td>△10</td><td>990</td></tr>"
+    "</table>"
+)
+
+
+def test_a_consolidated_total_column_is_no_member() -> None:
+    """The 連結合計 cell is the line's total and anchors it; read as a member, the line sums to
+    nothing tagged and the segments are lost."""
+    r = _one(CONSOLIDATED_TOTAL, _revenue(990e6))
+    assert _members(r) == {"国内損害保険事業": 600e6, "海外保険事業": 400e6}
+
+
+def test_a_sum_matches_a_tagged_figure_to_the_table_s_own_rounding_and_no_further() -> None:
+    """Two members truncated to 百万円 miss the figure by at most a unit each; 0.05% of a large
+    figure is far more than that, and a coincidence within it is not a match."""
+    html = (
+        "<p>報告セグメント</p><p>(単位：百万円)</p>"
+        "<table><tr><td></td><td>A</td><td>B</td></tr>"
+        "<tr><td>売上高</td><td>600,000</td><td>400,000</td></tr></table>"
+    )
+    truncated = _one(html, _revenue(1_000_002e6))
+    assert _members(truncated) == {"A": 600_000e6, "B": 400_000e6}
+    near = _one(html, _revenue(1_000_400e6))
+    assert (near.facts, near.no_anchor) == ([], 1)
