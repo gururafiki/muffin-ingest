@@ -109,11 +109,12 @@ def every_cninfo_report_was_read(postgres: Postgres) -> dg.AssetCheckResult:
 def cninfo_reports_within_cap(
     context: dg.AssetCheckExecutionContext, raw_store: RawStore
 ) -> dg.AssetCheckResult:
-    """The reports held whole stay within the 5 GB cap (Phase 6 decision 4).
+    """A GAUGE of the reports held whole, since China's reports are kept (Phase 6c decision 5).
 
-    Retention prunes read reports every 15 minutes, and never an unread one, so the total can pass
-    the cap while a backfill fetches faster than runs read: a WARN up to half again over it, an
-    ERROR beyond, which is a retention that stopped or reports that fail to be read.
+    It was a cap (Phase 6 decision 4: 5 GB, an ERROR past half again over it) while retention
+    pruned read reports. Kept reports only grow, so a cap would go red for good and be ignored; the
+    disk alert covers growth. The check always passes and records `held_bytes`, so the growth has a
+    history. The name stays: it is state Dagster keys check history on.
     """
     held = 0
     count = 0
@@ -124,13 +125,10 @@ def cninfo_reports_within_cap(
             if row.get("document") == "report" and row.get("pruned_at") is None:
                 held += int(row.get("body_bytes", 0))
                 count += row.get("outcome") == "answered"
-    over = held > cn.CAP_BYTES
     return dg.AssetCheckResult(
-        passed=not over,
-        severity=dg.AssetCheckSeverity.ERROR
-        if held > cn.CAP_BYTES * 3 // 2
-        else dg.AssetCheckSeverity.WARN,
-        metadata={"held_bytes": held, "reports_held": count, "cap_bytes": cn.CAP_BYTES},
+        passed=True,
+        severity=dg.AssetCheckSeverity.WARN,
+        metadata={"held_bytes": held, "reports_held": count},
     )
 
 

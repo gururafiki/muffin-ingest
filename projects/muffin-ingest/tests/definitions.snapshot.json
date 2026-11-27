@@ -2737,7 +2737,7 @@
     },
     "cninfo_retention": {
       "cron_schedule": "*/15 * * * *",
-      "default_status": "RUNNING",
+      "default_status": "STOPPED",
       "execution_timezone": "UTC",
       "job": "cninfo_retention"
     },
