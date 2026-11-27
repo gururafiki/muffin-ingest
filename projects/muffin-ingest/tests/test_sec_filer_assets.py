@@ -100,6 +100,9 @@ def sec(monkeypatch: pytest.MonkeyPatch) -> Iterator[Sec]:
 
 #: Module level: a resource's class attribute becomes a config field.
 FILERS: list[tuple[int, list[str]]] = []
+#: `security_filer('sec')`'s holders per CIK, as `sec_filings.FILING_HOLDERS` reads them. Empty
+#: means "the query found nothing", and the lane then writes for the CIK holders.
+HOLDERS: list[tuple[int, list[str]]] = []
 PROFILED: list[str] = []
 CALLS: list[tuple[str, list[Any]]] = []
 #: Answers for the checks' queries, by a fragment of their SQL.
@@ -136,6 +139,8 @@ class Cursor:
             self.rows = list(answered[0])
         elif "from market.security" in text and "group by cik" in text:
             self.rows = list(FILERS)
+        elif "from market.security_filer sf" in text and "group by sf.filer_id" in text:
+            self.rows = list(HOLDERS)
         elif "from market.filing_form" in text:
             self.rows = list(FORMS)
         elif "from market.xbrl_concept" in text:
@@ -200,6 +205,7 @@ def _edgar(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def _clean() -> Iterator[None]:
     FILERS[:] = [(AAPL, ["s-a1", "s-a2"]), (TSM, ["s-tsm"]), (ABSENT, ["s-x"])]
+    HOLDERS.clear()
     PROFILED.clear()
     CALLS.clear()
     ANSWERS.clear()
@@ -496,6 +502,30 @@ def test_a_filer_fans_out_to_every_equity_holding_its_cik(tmp_path: Path, sec: S
     m = meta(result, "sec_statement")
     assert (m["filers_parsed"], m["statement_rows"] > 0, m["labelled"]) == (1, True, 5)
     assert meta(result, "sec_fiscal_calendar")["calendar_filers"] == 1
+
+
+def test_a_listing_linked_to_the_filer_gets_its_filings_and_none_of_its_statements(
+    tmp_path: Path, sec: Sec
+) -> None:
+    """Phase 6c decision 1: an issuer link maps a company's other listing (a Petrobras local
+    line) onto the filer in `security_filer('sec')`, with no `security.cik`. It gets the FILING
+    list, so the segment lane reads its filings for it too; the profile, calendar and statements
+    stay with the CIK holders, or a local line would carry a second copy of its SEC statements."""
+    HOLDERS[:] = [(AAPL, ["s-a1", "s-a2", "s-local"])]
+    sec.filer(AAPL, AAPL_SUB, (AAPL_PAGE, 200, A_PAGE), AAPL_FACTS)
+    result = run(tmp_path, instance_with(K_AAPL), [K_AAPL], stage2=True)
+    assert result.success, result.get_step_failure_events()
+
+    [(_, filings)] = _inserts("market.security_filing")
+    assert {"s-a1", "s-a2", "s-local"} <= set(filings)
+    [(_, profile)] = _inserts("market.filer_profile")
+    assert "s-local" not in profile
+    retractions = [
+        p for sql, p in CALLS if sql.startswith("delete from market.security_statement as")
+    ]
+    assert retractions and all(p[0] != "s-local" for p in retractions)
+    [labels] = [p for sql, p in CALLS if sql.startswith("select market.label_fiscal_periods")]
+    assert "s-local" not in labels[0]
 
 
 def test_a_filer_whose_documents_did_not_change_is_not_parsed(tmp_path: Path, sec: Sec) -> None:

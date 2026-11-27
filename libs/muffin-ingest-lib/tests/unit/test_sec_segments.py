@@ -82,6 +82,13 @@ def test_a_filing_is_due_only_as_an_xbrl_accounts_form_of_an_equity_unread_at_th
             "p where p.regulator = 'sec')" in text
         )
         assert "max(version)" not in text
+        # A FILING'S SECURITIES ARE ITS FILER'S HOLDERS, never `security.cik`: a listing an issuer
+        # link maps onto the filer has no CIK and must still be read for (Phase 6c decision 1).
+        assert (
+            "join market.security_filer holder on holder.security_id = f.security_id "
+            "and holder.source_code = 'sec'" in text
+        )
+        assert "s.cik" not in text
     assert "filter (where f.filing_date >= current_date - 14)" in " ".join(
         sec_segments.DUE_BY_FILER.split()
     )

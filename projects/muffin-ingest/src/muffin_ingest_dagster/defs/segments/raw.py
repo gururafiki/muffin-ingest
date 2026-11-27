@@ -209,10 +209,10 @@ FRESH_FLOOR = dg.FreshnessPolicy.time_window(fail_window=timedelta(days=35))
     group_name="segments",
     kinds={"cninfo", "parquet"},
     freshness_policy=FRESH_TWO_WEEKS,
-    description="CNINFO's A-share stock lists (Shanghai, Shenzhen and Beijing), whole.",
+    description="CNINFO's stock lists (Shanghai, Shenzhen, Beijing and Hong Kong), whole.",
 )
 def raw_cninfo_stock_list(context: AssetExecutionContext) -> list[dict[str, Any]]:
-    """Two documents, each the whole answer: the lists are the org-id registry. A refusal or a 404
+    """Three documents, each the whole answer: the lists are the org-id registry. A refusal or a 404
     fails the run, because an empty registry would read as every company gone."""
     rows: list[dict[str, Any]] = []
     for name in cninfo.STOCK_LISTS:

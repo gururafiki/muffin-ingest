@@ -454,6 +454,47 @@ def plan_holdings(
     return security_rows, identifier_rows, issuers, ids
 
 
+@dataclass(frozen=True)
+class IssuerFills:
+    """What the holdings say each resolved security's issuer is."""
+
+    #: `{security_id, issuer_id}`, one per security whose holdings name one issuer.
+    rows: list[dict[str, str]]
+    #: Securities whose holdings name two issuers: left alone, never guessed.
+    conflicting: int
+
+
+def issuer_fills(
+    holdings: list[dict[str, Any]], ids: list[str | None], issuers: list[dict[str, Any]]
+) -> IssuerFills:
+    """Each resolved security's issuer, from the LEI its holding carries.
+
+    `plan_holdings` gives an issuer only to a security it CREATES: a holding that resolves to a
+    security already held adds no row, so a security discovered before its LEI ever appeared never
+    gains an issuer. Measured 2026-11-26: 528 equities (432 over $2 bn) hold no issuer while a
+    tracked fund's holding names their LEI, and an issuer is what links a company's listings.
+
+    THE CALLER ONLY FILLS AN EMPTY `issuer_id`, never moves one: two filings disagreeing about a
+    security's issuer is a question, and the first answer stands. A security whose holdings in
+    THESE filings name two issuers is dropped here for the same reason.
+    """
+    issuer_by_lei = {str(r["lei"]): str(r["issuer_id"]) for r in issuers}
+    named: dict[str, set[str]] = {}
+    for h, sid in zip(holdings, ids, strict=True):
+        lei = h.get("lei")
+        if sid is None or not is_usable_identifier("lei", lei):
+            continue
+        issuer = issuer_by_lei.get(str(lei).strip().upper())
+        if issuer is not None:
+            named.setdefault(sid, set()).add(issuer)
+    rows = [
+        {"security_id": sid, "issuer_id": next(iter(found))}
+        for sid, found in sorted(named.items())
+        if len(found) == 1
+    ]
+    return IssuerFills(rows=rows, conflicting=sum(len(f) > 1 for f in named.values()))
+
+
 def new_security_id() -> str:
     import uuid
 

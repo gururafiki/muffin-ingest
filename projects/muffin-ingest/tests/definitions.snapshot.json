@@ -1812,6 +1812,29 @@
       ],
       "tags": {}
     },
+    "security_filer_siblings": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 259200.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_former_name": {
       "automation_condition": null,
       "backfill_policy": {
@@ -2543,6 +2566,13 @@
         "name": "dart_filer"
       }
     },
+    "filer_siblings": {
+      "assets": [
+        "security_filer_siblings"
+      ],
+      "ops": [],
+      "partitions": null
+    },
     "macro_daily": {
       "assets": [
         "macro_observation",
@@ -2788,6 +2818,12 @@
       "default_status": "RUNNING",
       "execution_timezone": null,
       "job": "sec_insider_datasets"
+    },
+    "security_filer_siblings_daily": {
+      "cron_schedule": "30 6 * * *",
+      "default_status": "RUNNING",
+      "execution_timezone": "UTC",
+      "job": "filer_siblings"
     },
     "weekly_promotion_wave": {
       "cron_schedule": "17 6 * * 1",

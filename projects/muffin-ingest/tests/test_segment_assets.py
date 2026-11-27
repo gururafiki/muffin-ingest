@@ -153,7 +153,7 @@ class Cursor:
             ]
             oldest = min((f["filed"] for f in never), default=None)
             self.rows = [(len(never), len({f["cik"] for f in never}), oldest, len(behind))]
-        elif "from market.security_filing f" in text and "group by s.cik" in text:
+        elif "from market.security_filing f" in text and "group by holder.filer_id" in text:
             counts: dict[int, list[int]] = {}
             since = date.today() - timedelta(days=sec_segments.RECENT_DAYS)
             for f in FILINGS:

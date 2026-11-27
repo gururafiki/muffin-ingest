@@ -521,3 +521,48 @@ def test_an_lei_already_held_keeps_the_issuer_id_it_was_minted_with() -> None:
     assert by_lei[held_lei] == "held-issuer"
     assert by_lei[new_lei] == nport._stable_issuer_id(new_lei)
     assert {s["security_id"]: s["issuer_id"] for s in securities}[ids[0]] == "held-issuer"
+
+
+def test_a_security_already_held_gains_the_issuer_its_holding_names() -> None:
+    """`plan_holdings` gives an issuer only to a security it creates. A holding resolving to a
+    security already held must still say which issuer that security belongs to, or a company
+    discovered before its LEI appeared never links to its other listings (528 equities, measured
+    2026-11-26).
+
+    The fixture makes the rules disagree: the held security's holding carries an LEI (it gains an
+    issuer, though `plan_holdings` creates nothing for it), a holding with no LEI fills nothing, an
+    unresolved holding fills nothing, and a security whose two holdings name two LEIs is refused
+    rather than given whichever came first.
+    """
+    held, other = "US0378331005", "US5949181045"
+    holdings = [
+        {"name": "Apple Inc", "isin": held, "asset_category": "EC", "units": "NS",
+         "lei": "HWUPKR0MPOU8FGXBT394"},
+        {"name": "No LEI Co", "isin": "US1111111111", "asset_category": "EC", "units": "NS"},
+        {"name": "Microsoft A", "isin": other, "asset_category": "EC", "units": "NS",
+         "lei": "INR2EJN1ERAN0W5ZP974"},
+        {"name": "Microsoft B", "isin": other, "asset_category": "EC", "units": "NS",
+         "lei": "5493000IBP32UQZ0KL24"},
+        {"name": "Unresolved", "asset_category": "EC", "units": "NS",
+         "lei": "529900T8BM49AURSDO55"},
+    ]  # fmt: skip
+    securities, _, issuers, ids = nport.plan_holdings(
+        holdings,
+        known_identifiers={f"isin:{held}": "sec-apple", f"isin:{other}": "sec-msft"},
+        known_issuers={},
+        countries=set(),
+        source="sec-nport",
+    )
+    assert ids[0] == "sec-apple" and not [s for s in securities if s["security_id"] == "sec-apple"]
+    filled = nport.issuer_fills(holdings, ids, issuers)
+    assert filled.rows == [
+        {"security_id": "sec-apple", "issuer_id": nport._stable_issuer_id("HWUPKR0MPOU8FGXBT394")}
+    ]
+    assert filled.conflicting == 1
+
+
+def test_issuer_fills_refuse_ids_that_do_not_line_up_with_the_holdings() -> None:
+    """The ids are POSITIONAL, as for the debt terms: a short list would give one holding's issuer
+    to another security."""
+    with pytest.raises(ValueError):
+        nport.issuer_fills([{"lei": "HWUPKR0MPOU8FGXBT394"}], [], [])

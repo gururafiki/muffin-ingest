@@ -313,6 +313,27 @@ def reports(found: Collection[Filing], forms_by_code: Mapping[str, Form]) -> lis
     return out
 
 
+#: Each CIK's FILING holders: every equity `security_filer('sec')` maps to it. That is the CIK
+#: holders (`security.cik`) and, since Phase 6c, the listings an issuer link maps onto the same
+#: filer (a Petrobras local line). Only the filing list fans out this wide: statements, the
+#: calendar, SIC and Form 4 stay with `security.cik`, so a local line gets the company's filings
+#: and segments without a second copy of its SEC statements.
+FILING_HOLDERS = """
+select sf.filer_id::bigint, array_agg(sf.security_id::text order by sf.security_id)
+  from market.security_filer sf
+  join market.security s on s.security_id = sf.security_id
+ where sf.source_code = 'sec' and s.security_type_code = 'equity'
+ group by sf.filer_id
+"""
+
+
+def filing_holders(conn: Any) -> dict[int, list[str]]:
+    """CIK -> every equity holding that filer (`FILING_HOLDERS`)."""
+    with conn.cursor() as cur:
+        cur.execute(FILING_HOLDERS)
+        return {int(cik): [str(s) for s in ids] for cik, ids in cur.fetchall()}
+
+
 def filing_rows(
     found: Collection[Filing], *, cik: int, security_ids: Collection[str], as_of: str
 ) -> list[dict[str, Any]]:

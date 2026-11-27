@@ -388,6 +388,22 @@ def test_a_re_run_of_a_filed_filing_creates_nothing(
     assert meta["securities"] == 0, meta
     assert meta["identifiers"] == 0, meta
 
+    # A SECURITY ALREADY HELD STILL GAINS THE ISSUER ITS HOLDING NAMES. Nothing is created, so
+    # `plan_holdings` gives no issuer to anything; the fill offers each known security the issuer
+    # its holding's LEI names, and only where `issuer_id` is empty (528 equities, 2026-11-26).
+    fills = [p for sql, p in FakeCursor.writes if "update market.security s set issuer_id" in sql]
+    assert len(fills) == 1, "the fill runs once per run"
+    sql = next(
+        sql for sql, _ in FakeCursor.writes if "update market.security s set issuer_id" in sql
+    )
+    assert "and s.issuer_id is null" in sql, "a stored issuer is never moved"
+    offered_sids, offered_issuers = fills[0]
+    assert offered_sids and len(offered_sids) == len(offered_issuers)
+    assert set(offered_sids) <= set(XLK_KNOWN.values())
+    upserted = {p for sql, ps in FakeCursor.writes if "into market.issuer " in sql for p in ps}
+    assert set(offered_issuers) <= upserted, "every offered issuer is upserted in the same run"
+    assert {"issuer_filled", "issuer_disagrees", "issuer_conflicting"} <= set(meta)
+
 
 def test_fund_holding_publishes_each_partition_s_own_snapshot(
     tmp_path: Path,
