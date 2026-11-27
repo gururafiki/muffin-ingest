@@ -77,7 +77,9 @@ _UNIT = re.compile(
 )
 #: A table caption naming the currency and unit with no `单位` (`（人民币百万元）`,
 #: `（人民币百万元，百分比除外）`): China Merchants Bank states its unit no other way near the note.
-_UNIT_BARE = re.compile(r"[（(]\s*(人民币|港币|美元)\s*(亿元|千万元|百万元|万元|千元|元)\s*[)）,，]")
+_UNIT_BARE = re.compile(
+    r"[（(]\s*(人民币|港币|美元)\s*(亿元|千万元|百万元|万元|千元|元)\s*[)）,，]"
+)
 _SCALE = {"元": 1, "千元": 1e3, "万元": 1e4, "百万元": 1e6, "千万元": 1e7, "亿元": 1e8}
 #: The year a table states. A month after it makes it a date (a balance sheet), unless the line
 #: also says it covers the year (`年度`, `截至该日止年度`, Bank of China's `2025 年 12 月 31 日及

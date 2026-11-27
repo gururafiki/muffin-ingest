@@ -205,8 +205,8 @@ def test_the_unit_a_page_states(line_text: str, scale: float) -> None:
 
 
 def test_a_caption_naming_currency_and_unit_states_the_unit() -> None:
-    """China Merchants Bank prints `（人民币百万元，百分比除外）` over its tables and states the unit
-    no other way before its segment note."""
+    """China Merchants Bank prints `（人民币百万元，百分比除外）` over its tables and states
+    the unit no other way before its segment note."""
     unit_only = [line(780, ("(人民币百万元,百分比除外)", 90))]
     note = synthetic("54. 经营分部", "2025年", ("甲业务", "乙业务", "丙业务"))[1:]
     result = cn_note.read_page_lines([(0, unit_only), (30, note)], FY, rules.vocabulary())
