@@ -687,6 +687,26 @@ def test_too_large_absent_and_unreadable_reports_are_marked_without_rows(
     assert marks(LONGI_FY25) == {"s-cn2": 21}
 
 
+def test_a_report_refused_for_its_size_is_asked_again_when_it_is_due_again(
+    tmp_path: Path, provider: Cninfo
+) -> None:
+    """The gate was 12 MB until 2026-11-27, and banks' reports run 20-36 MB. A report refused
+    under it is fetched again once re-queued; one CNINFO answered absent is not."""
+    provider.reports[FY25] = (200, b"", True)
+    provider.reports[FY24] = (404, b"", False)
+    instance = instance_with(YANGTZE)
+    assert run(tmp_path, instance, [YANGTZE]).success
+    provider.reports[FY25] = (200, PDF, False)
+    PARSER["version"] = 21
+
+    again = run(tmp_path, instance, [YANGTZE])
+    assert again.success
+    assert [c for c in provider.calls if not c.startswith("search")] == [FY25, FY24, FY25]
+    m = meta(again, "raw_cninfo_filings")
+    assert (m["report_answered"], m["report_held_already"]) == (1, 1)
+    assert meta(again, "cninfo_segment")["read"] == 1 and marks(FY25) == {"s-cn1": 21}
+
+
 def test_a_refusal_stops_the_run_and_files_nothing_it_did_not_finish(
     tmp_path: Path, provider: Cninfo
 ) -> None:

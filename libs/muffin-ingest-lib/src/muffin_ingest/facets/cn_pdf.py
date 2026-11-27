@@ -36,12 +36,16 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from muffin_ingest.facets.segment_note import NoteVocabulary
 from muffin_ingest.facets.segments import SegmentFact, assign_partitions
 
-#: A report is refused above this, unread. Ported as-is: the edge set it where a 9.15 MB report
-#: fitted its 384 MB worker. The child process here has its own limit (`cn_child`); widening the
-#: gate is measured separately, not assumed.
-MAX_PDF_BYTES = 12 * 1024 * 1024
+#: A report is refused above this, unread. The edge set 12 MB where a 9.15 MB report fitted its
+#: 384 MB worker, and that refused the largest companies' reports: 26 of the 88 large companies
+#: read for the segment note (Phase 6c step 6) file over 12 MB, banks 20-36 MB. Measured
+#: 2026-11-27 in `cn_child` at its 768 MB limit, all 88 read, the largest (36.1 MB, 454 pages) in
+#: 5.1 s and none slower than 9.4 s. Each report is read in its own capped process, so the gate
+#: bounds a fetch, not the reader's memory.
+MAX_PDF_BYTES = 48 * 1024 * 1024
 
 #: A money cell: thousands-separated with one or two decimals, as every one of these tables uses.
 NUM = re.compile(r"^-?[\d,]+\.\d{1,2}$")
@@ -359,6 +363,8 @@ class CnParseResult:
     #: The 1-based page the table was found on, or None: a miss told apart from a bad parse.
     page: int | None
     period_ending: str | None
+    #: `note` when the facts came from the segment note (`cn_note`), else "".
+    form: str = ""
 
 
 def tidy_member_name(raw: str) -> str:
@@ -1571,6 +1577,7 @@ def segment_facts_from_pdf(
     body: bytes,
     scan_pages: int = SCAN_PAGES,
     items_of: Callable[[object, int], list[TextItem]] | None = None,
+    note: NoteVocabulary | None = None,
 ) -> CnParseResult:
     """Read one annual report: the period from the first page stating it, the tables from the first
     page carrying the industry heading, read with the page after it (`join_pages`).
@@ -1583,66 +1590,85 @@ def segment_facts_from_pdf(
 
     A report neither yields anything from is read in the older forms (`_OLDER_HEADING`, FY2007-2014)
     from the first page holding one of their headings that gives rows. Every report the current
-    forms read is read exactly as before."""
+    forms read is read exactly as before.
+
+    A report none of those yields anything from is read from its segment NOTE (`cn_note`), when a
+    note vocabulary is given: banks, insurers and many state firms state their operating segments
+    only there. Never beside a main-business table, so every report read before reads as before."""
     import pypdfium2 as pdfium
 
     read_items = items_of or page_items
     document = pdfium.PdfDocument(body)
     try:
-
-        def joined(index: int, items: list[TextItem]) -> tuple[list[TextItem], list[Rule]]:
-            rules = page_rules(document, index)
-            if index + 1 < len(document):
-                return join_pages(
-                    items, rules, read_items(document, index + 1), page_rules(document, index + 1)
-                )
-            return items, rules
-
-        def older(period: str) -> CnParseResult | None:
-            carried = 1
-            for index in range(min(scan_pages, len(document))):
-                items = read_items(document, index)
-                if _older_heading_on(items):
-                    rows = parse_segment_page(*joined(index, items), carried, older=True)
-                    if rows:
-                        facts = facts_from_rows(rows, period, partial_lists=True)
-                        return CnParseResult(facts, index + 1, period)
-                carried = unit_stated_last(items, carried)
-            return None
-
-        period: str | None = None
-        carried = 1  # the unit the previous page stated last
-        #: Pages carrying the composition heading's words, with the unit in force above each.
-        candidates: list[tuple[int, int]] = []
-        for index in range(min(scan_pages, len(document))):
-            items = read_items(document, index)
-            text = "".join(i.s for i in items)
-            if period is None:
-                period = fiscal_year_end_from(text)
-            if CN_TABLES[0][0] not in text:
-                if _COMPOSITION_WORDS.search(text) and _composition_heading_on(items):
-                    candidates.append((index, carried))
-                carried = unit_stated_last(items, carried)
-                continue
-            rows = parse_segment_page(*joined(index, items), carried)
-            if period is None:
-                return CnParseResult([], index + 1, period)
-            if not rows:
-                return older(period) or CnParseResult([], index + 1, period)
-            return CnParseResult(facts_from_rows(rows, period), index + 1, period)
-        for index, unit in candidates:
-            rows = parse_segment_page(
-                *joined(index, read_items(document, index)), unit, composition=True
-            )
-            if rows:
-                if period is None:
-                    return CnParseResult([], index + 1, period)
-                return CnParseResult(facts_from_rows(rows, period), index + 1, period)
-        if period is not None and (found := older(period)) is not None:
+        found = _tables(document, scan_pages, read_items)
+        if found.facts or note is None or found.period_ending is None:
             return found
-        return CnParseResult([], None, period)
+        from muffin_ingest.facets import cn_note
+
+        read = cn_note.read_document(document, found.period_ending, note, read_items)
+        if not read.facts:
+            return found
+        return CnParseResult(read.facts, read.pages[0], found.period_ending, form="note")
     finally:
         document.close()
+
+
+def _tables(
+    document: Any, scan_pages: int, read_items: Callable[[object, int], list[TextItem]]
+) -> CnParseResult:
+    """The mandated, composition and older-form tables: the reader without the note stage."""
+
+    def joined(index: int, items: list[TextItem]) -> tuple[list[TextItem], list[Rule]]:
+        rules = page_rules(document, index)
+        if index + 1 < len(document):
+            return join_pages(
+                items, rules, read_items(document, index + 1), page_rules(document, index + 1)
+            )
+        return items, rules
+
+    def older(period: str) -> CnParseResult | None:
+        carried = 1
+        for index in range(min(scan_pages, len(document))):
+            items = read_items(document, index)
+            if _older_heading_on(items):
+                rows = parse_segment_page(*joined(index, items), carried, older=True)
+                if rows:
+                    facts = facts_from_rows(rows, period, partial_lists=True)
+                    return CnParseResult(facts, index + 1, period)
+            carried = unit_stated_last(items, carried)
+        return None
+
+    period: str | None = None
+    carried = 1  # the unit the previous page stated last
+    #: Pages carrying the composition heading's words, with the unit in force above each.
+    candidates: list[tuple[int, int]] = []
+    for index in range(min(scan_pages, len(document))):
+        items = read_items(document, index)
+        text = "".join(i.s for i in items)
+        if period is None:
+            period = fiscal_year_end_from(text)
+        if CN_TABLES[0][0] not in text:
+            if _COMPOSITION_WORDS.search(text) and _composition_heading_on(items):
+                candidates.append((index, carried))
+            carried = unit_stated_last(items, carried)
+            continue
+        rows = parse_segment_page(*joined(index, items), carried)
+        if period is None:
+            return CnParseResult([], index + 1, period)
+        if not rows:
+            return older(period) or CnParseResult([], index + 1, period)
+        return CnParseResult(facts_from_rows(rows, period), index + 1, period)
+    for index, unit in candidates:
+        rows = parse_segment_page(
+            *joined(index, read_items(document, index)), unit, composition=True
+        )
+        if rows:
+            if period is None:
+                return CnParseResult([], index + 1, period)
+            return CnParseResult(facts_from_rows(rows, period), index + 1, period)
+    if period is not None and (found := older(period)) is not None:
+        return found
+    return CnParseResult([], None, period)
 
 
 #: pdf.js 4.6.82's thresholds for building text items (`evaluator.js`, `getTextContent`), the

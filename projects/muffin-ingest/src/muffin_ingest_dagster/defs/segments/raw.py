@@ -467,7 +467,14 @@ def raw_cninfo_filings(
         queue = []
         for url in wanted:
             held = cn.held_report(light, url)
-            if held is not None and not held.pruned and url not in reread.get(key, ()):
+            # A report refused for its size is asked again when it is due again: the gate it was
+            # refused under may have been smaller (12 MB until 2026-11-27).
+            if (
+                held is not None
+                and not held.pruned
+                and held.outcome != "too_large"
+                and url not in reread.get(key, ())
+            ):
                 stats["report_held_already"] += 1
             else:
                 queue.append(url)

@@ -298,6 +298,19 @@ def test_a_report_is_read_in_a_child_and_a_document_with_no_table_yields_no_fact
     assert result.facts == [] and result.page is None
 
 
+def test_a_child_given_a_note_vocabulary_reads_with_it() -> None:
+    """The vocabulary crosses the process boundary as an argument; a document with no note still
+    yields nothing, and the child still answers."""
+    from muffin_ingest.facets import segment_note as sn
+
+    note = sn.NoteVocabulary(
+        headings=(sn.Heading("分部报告", "business"),), labels=(sn.Label("^合计$", "total"),)
+    )
+    result = cn_child.read(TINY, note=note)
+    assert isinstance(result, cn_pdf.CnParseResult)
+    assert result.facts == [] and result.form == ""
+
+
 def test_bytes_that_are_not_a_pdf_are_unreadable_and_the_caller_survives() -> None:
     result = cn_child.read(b"%PDF-1.7 not really")
     assert isinstance(result, cn_child.Unreadable)
@@ -335,9 +348,9 @@ def test_what_a_library_prints_cannot_corrupt_the_answer(monkeypatch: pytest.Mon
     real = cn_pdf.segment_facts_from_pdf
     script = (
         "import os, runpy, muffin_ingest.facets.cn_pdf as p; real = p.segment_facts_from_pdf\n"
-        "def noisy(*a):\n"
+        "def noisy(*a, **k):\n"
         "    os.write(1, b'warning: font substituted\\n'); print('from python too')\n"
-        "    return real(*a)\n"
+        "    return real(*a, **k)\n"
         "p.segment_facts_from_pdf = noisy\n"
         "runpy.run_module('muffin_ingest.facets.cn_child', run_name='__main__')\n"
     )
