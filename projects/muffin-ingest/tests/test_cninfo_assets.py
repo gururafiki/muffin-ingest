@@ -243,6 +243,9 @@ class Cursor:
             self.rows = [(org,) for org in FILERS]
         elif text.startswith("select s.security_id::text, min(l.symbol)"):
             self.rows = [("s-cn1", "600900"), ("s-cn2", "601012"), ("s-cn3", "688999")]
+        elif text.startswith("select s.security_id::text, min(c.code::int)"):
+            # Hong Kong lines: an H-share of Yangtze (939) and a Hong Kong company with no A-share.
+            self.rows = [("s-hk1", 939), ("s-hk2", 1)]
         elif "from market.segment_axis" in text:
             self.rows = [
                 (a["axis"], a["kind"], a["priority"], a["required_member"])
@@ -384,13 +387,20 @@ def marks(accession: str) -> dict[str, int | None]:
 # --- the registry ---------------------------------------------------------------------------------
 
 
-def test_the_stock_lists_map_each_a_share_to_its_org_id(tmp_path: Path) -> None:
+def test_the_stock_lists_map_each_a_share_and_each_h_share_to_its_org_id(tmp_path: Path) -> None:
+    """An H-share carries its A-share's org id in CNINFO's HK list, so it maps onto the same filer.
+    A Hong Kong company with no A-share maps onto nothing. Every row is claimed as the registry's,
+    so an issuer-sibling row for the same security becomes this registry's."""
     listed = [{"code": "600900", "orgId": YANGTZE}, {"code": "601012", "orgId": LONGI}]
+    hk = [{"code": "00939", "orgId": YANGTZE}, {"code": "00001", "orgId": "gshk0000001"}]
     lists = [
         {"document": "szse_stock.json", "http_status": 200, "body": json.dumps(
             {"stockList": listed}
         ).encode()},
         {"document": "bj_stock.json", "http_status": 200, "body": b'{"stockList": []}'},
+        {"document": "hke_stock.json", "http_status": 200, "body": json.dumps(
+            {"stockList": hk}
+        ).encode()},
     ]  # fmt: skip
 
     @dg.asset(name="raw_cninfo_stock_list")
@@ -405,15 +415,21 @@ def test_the_stock_lists_map_each_a_share_to_its_org_id(tmp_path: Path) -> None:
     assert result.success
     m = meta(result, "security_cninfo_filer")
     assert (m["listed"], m["securities"], m["mapped"], m["unmapped"]) == (2, 3, 2, 1)
+    assert (m["hk_listed"], m["hk_securities"], m["hk_mapped"]) == (1, 2, 1)
     sql, params = next(
         (s, p) for s, p in CALLS if s.startswith("insert into market.security_filer")
     )
     columns = sql[sql.index("(") + 1 : sql.index(")")].split(", ")
-    rows = [dict(zip(columns, params[n : n + 3], strict=True)) for n in range(0, len(params), 3)]
-    assert sorted((r["security_id"], r["source_code"], r["filer_id"]) for r in rows) == [
-        ("s-cn1", "cninfo", YANGTZE),
-        ("s-cn2", "cninfo", LONGI),
+    width = len(columns)
+    rows = [
+        dict(zip(columns, params[n : n + width], strict=True)) for n in range(0, len(params), width)
     ]
+    assert sorted((r["security_id"], r["source_code"], r["filer_id"], r["via"]) for r in rows) == [
+        ("s-cn1", "cninfo", YANGTZE, "registry"),
+        ("s-cn2", "cninfo", LONGI, "registry"),
+        ("s-hk1", "cninfo", YANGTZE, "registry"),
+    ]
+    assert "via = excluded.via" in sql, "a registry claims a sibling row as its own"
 
 
 # --- a filer read end to end ----------------------------------------------------------------------

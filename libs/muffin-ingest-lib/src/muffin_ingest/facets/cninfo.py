@@ -140,6 +140,23 @@ def org_ids(bodies: Sequence[bytes]) -> dict[str, str]:
     return out
 
 
+def hk_org_ids(bodies: Sequence[bytes]) -> dict[int, str]:
+    """Hong Kong code (as a number: `00939` -> 939) -> org id, for the H-shares whose org id is an
+    A-share's. A Hong Kong line of a company with no A-share has no CNINFO filer to map onto."""
+    a_shares = set(org_ids(bodies).values())
+    out: dict[int, str] = {}
+    for body in bodies:
+        data = json.loads(body)
+        rows = data.get("stockList") if isinstance(data, dict) else data
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            code, org = str(row.get("code") or ""), row.get("orgId")
+            if re.fullmatch(r"\d{4,5}", code) and isinstance(org, str) and org in a_shares:
+                out.setdefault(int(code), org)
+    return out
+
+
 # ── Queries ────────────────────────────────────────────────────────────────────────────────────
 
 #: The A-share equities the lane serves: as the edge's `pending_cn_filings` chose them.
@@ -151,11 +168,34 @@ select s.security_id::text, min(l.symbol)
  group by s.security_id
 """
 
-#: The run's filers: org id -> the code the search is asked with, and every security holding it.
+#: Equities with a Hong Kong line, and its code as a number: from a listing on `HK` or a `.HK`
+#: provider symbol. An H-share is often held under an OTC line only, so this reaches some of them.
+HK_SECURITIES = r"""
+select s.security_id::text, min(c.code::int)
+  from market.security s
+  join lateral (
+        select substring(l.symbol from '^0*([0-9]{1,5})$') code
+          from market.listing l where l.security_id = s.security_id and l.exch_code = 'HK'
+        union all
+        select substring(p.symbol from '^0*([0-9]{1,5})\.HK$')
+          from market.security_provider_symbol p where p.security_id = s.security_id
+       ) c on c.code is not null
+ where s.security_type_code = 'equity'
+ group by s.security_id
+"""
+
+#: The run's filers: org id -> the code the search is asked with, and EVERY security holding it.
+#: The code comes from any holder's six-digit listing, so a holder with none (an H-share line, a
+#: sibling) still receives the filer's reports: joining each holder to its own six-digit listing
+#: dropped it from the security list without a word.
 FILERS = """
-select sf.filer_id, min(l.symbol), array_agg(distinct sf.security_id::text)
+select sf.filer_id,
+       (select min(l.symbol)
+          from market.security_filer o
+          join market.listing l on l.security_id = o.security_id and l.symbol ~ '^[0-9]{6}$'
+         where o.source_code = 'cninfo' and o.filer_id = sf.filer_id),
+       array_agg(distinct sf.security_id::text)
   from market.security_filer sf
-  join market.listing l on l.security_id = sf.security_id and l.symbol ~ '^[0-9]{6}$'
  where sf.source_code = 'cninfo' and sf.filer_id = any(%s)
  group by sf.filer_id
 """

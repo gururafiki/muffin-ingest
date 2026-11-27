@@ -318,6 +318,7 @@ def sec_filer_facts(
     stats: Counter[str] = Counter()
     with postgres.connect() as conn:
         filers = insider.tracked_issuers(conn)
+        holders = sec_filings.filing_holders(conn)
         forms = sec_filings.forms(conn)
         concepts = sec_facts.concepts(conn)
         lines = sec_facts.lines(conn)
@@ -349,7 +350,7 @@ def sec_filer_facts(
             _parse_filer(
                 conn, key, sids, raw_store, stats,
                 kept=kept, forms=forms, concepts=concepts, lines=lines, known=known,
-                log=context.log,
+                log=context.log, filing_sids=holders.get(int(key), sids),
             )  # fmt: skip
             conn.commit()
 
@@ -394,8 +395,14 @@ def _parse_filer(
     lines: Mapping[str, str],
     known: frozenset[str],
     log: Any,
+    filing_sids: Sequence[str] | None = None,
 ) -> None:
     """One filer's five tables, in the caller's transaction.
+
+    `filing_sids` are the securities the FILING LIST is written for: every holder of the filer in
+    `security_filer('sec')`, a superset of `sids` (the CIK holders, who alone get the statements,
+    profile and calendar). A listing an issuer link maps onto this filer gets its filings, so its
+    segments follow, and no second copy of the company's statements.
 
     NOTHING IS RETRACTED ON A DOCUMENT THAT WAS NOT READ: an absence, a body that is not a
     submissions or facts document, or a filer with no answered document leaves its rows as they
@@ -434,7 +441,9 @@ def _parse_filer(
                 log.warning("filer %s: stored submissions unreadable: %s", key, exc)
                 return
             as_of = str(main["fetched_at"])
-            rows = sec_filings.filing_rows(found, cik=cik, security_ids=sids, as_of=as_of)
+            rows = sec_filings.filing_rows(
+                found, cik=cik, security_ids=filing_sids or sids, as_of=as_of
+            )
             _tally(
                 stats,
                 upsert(

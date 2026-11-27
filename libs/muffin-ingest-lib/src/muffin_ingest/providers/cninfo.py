@@ -31,10 +31,12 @@ from muffin_ingest.providers.documents import Document
 WWW_ORIGIN = "https://www.cninfo.com.cn"
 STATIC_ORIGIN = "https://static.cninfo.com.cn"
 
-#: The A-share lists the announcement search can be asked about. `hke_stock.json` (2,798 Hong Kong
-#: stocks) is not read: the port covers the six-digit codes the edge covered, and a Hong Kong annual
-#: report carries no CSRC-mandated table.
-STOCK_LISTS = ("szse_stock.json", "bj_stock.json")
+#: The stock lists. `szse_stock.json` and `bj_stock.json` name the A-shares the announcement
+#: search is asked about. `hke_stock.json` (2,798 Hong Kong stocks, 5-digit codes) is read for one
+#: thing: an H-share of a company that also lists A-shares carries the SAME org id (215 do,
+#: measured 2026-11-26), which maps the H-share line onto the A-share filer. Its own reports are
+#: never asked.
+STOCK_LISTS = ("szse_stock.json", "bj_stock.json", "hke_stock.json")
 
 #: CNINFO's annual-report category. It files the full report, its summary and an English edition
 #: under it (`facets.cninfo.classify`).

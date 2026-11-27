@@ -5,7 +5,7 @@ No provider call: a parser change re-reads files already on disk.
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 import dagster as dg
@@ -14,7 +14,7 @@ from muffin_ingest.facets import cn_child, fx, sec_segments, segments
 from muffin_ingest.facets import cninfo as cn
 from muffin_ingest.facets import dart as fd
 from muffin_ingest.facets import nse as fn
-from muffin_ingest.writers import upsert
+from muffin_ingest.writers import dedupe_by, upsert
 
 from muffin_ingest_dagster.defs.sec.partitions import FILERS_PER_RUN, sec_filers
 from muffin_ingest_dagster.defs.segments.partitions import (
@@ -194,6 +194,75 @@ def sec_segment(
     return dg.MaterializeResult(metadata=metadata)
 
 
+# ── One company, every listing ────────────────────────────────────────────────────────────────
+
+#: What a sibling pass came to. `refused` counts issuers holding two registry filers: a question for
+#: a person, never a choice made here.
+SIBLINGS = "select inserted, retracted, refused from market.extend_filers_to_issuer_siblings()"
+TO_COPY = "select security_id::text, source_code from market.filer_holders_to_copy()"
+COPY = "select filings, segments from market.copy_filer_history(%s::uuid, %s)"
+
+
+@dg.asset(
+    pool="sql",
+    group_name="segments",
+    kinds={"postgres"},
+    freshness_policy=dg.FreshnessPolicy.time_window(fail_window=timedelta(days=3)),
+    metadata={"table": "market.security_filer"},
+    description=(
+        "Each company's regulator filer, mapped onto every equity listing of that company, and the "
+        "filer's history copied to each holder that has none (decision 1 of Phase 6c)."
+    ),
+)
+def security_filer_siblings(
+    context: AssetExecutionContext, postgres: Postgres
+) -> dg.MaterializeResult[None]:
+    """`extend_filers_to_issuer_siblings`, then `copy_filer_history` for each holder with none of
+    its filer's history.
+
+    THE RULE LIVES IN THE DATABASE (`issuer_sibling_links`): this asset only runs it, so the guard
+    test proves the rule itself. Each copy commits on its own, so one holder's failure cannot undo
+    another's, and the run's statement stays far inside `ingest_rw`'s 120 s timeout (Petrobras, the
+    largest measured, 4,496 filings and 379 segment rows, copied in under a second).
+
+    A COPY NEEDS NO PROVIDER REQUEST: the rows come from a listing of the same company that read
+    them. Filings behind the parser are copied unread, so the lane reads them for both listings.
+    """
+    with postgres.connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(SIBLINGS)
+            inserted, retracted, refused = cur.fetchone() or (0, 0, 0)
+        conn.commit()
+        with conn.cursor() as cur:
+            cur.execute(TO_COPY)
+            todo = [(str(sid), str(source)) for sid, source in cur.fetchall()]
+        filings = segments = 0
+        by_source: dict[str, int] = {}
+        for sid, source in todo:
+            with conn.cursor() as cur:
+                cur.execute(COPY, (sid, source))
+                f, g = cur.fetchone() or (0, 0)
+            conn.commit()
+            filings += int(f)
+            segments += int(g)
+            by_source[source] = by_source.get(source, 0) + 1
+    if refused:
+        context.log.warning(
+            "%d issuer(s) hold two registry filers and were not extended", int(refused)
+        )
+    return dg.MaterializeResult(
+        metadata={
+            "linked": int(inserted),
+            "retracted": int(retracted),
+            "refused": int(refused),
+            "copied_holders": len(todo),
+            **{f"copied_{k}": v for k, v in sorted(by_source.items())},
+            "copied_filings": filings,
+            "copied_segments": segments,
+        }
+    )
+
+
 # ── CNINFO (China) ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -209,29 +278,47 @@ def sec_segment(
 def security_cninfo_filer(
     context: AssetExecutionContext, postgres: Postgres, raw_cninfo_stock_list: list[dict[str, Any]]
 ) -> dg.MaterializeResult[None]:
-    """Every Chinese equity with a six-digit listing whose code the lists name gets a filer row.
+    """Every Chinese equity with a six-digit listing whose code the lists name gets a filer row, and
+    so does every Hong Kong line whose code the HK list gives an A-share's org id (an H-share).
 
     A row is never deleted here: a company missing from this week's list (a delisting, a list CNINFO
     served short) keeps its history, and the lane simply finds nothing new for it.
+
+    EVERY ROW IS CLAIMED AS THE REGISTRY'S (`via`), so a row the issuer-sibling extension wrote for
+    the same security becomes this registry's when the list names it.
     """
     bodies = [bytes(r["body"]) for r in raw_cninfo_stock_list if r.get("body") is not None]
     org = cn.org_ids(bodies)
+    hk_org = cn.hk_org_ids(bodies)
     with postgres.connect() as conn:
         with conn.cursor() as cur:
             cur.execute(cn.SECURITIES)
             securities = [(str(sid), str(code)) for sid, code in cur.fetchall()]
+            cur.execute(cn.HK_SECURITIES)
+            hk_securities = [(str(sid), int(code)) for sid, code in cur.fetchall()]
         rows = [
-            {"security_id": sid, "source_code": cn.SOURCE, "filer_id": org[code]}
+            {"security_id": sid, "source_code": cn.SOURCE, "filer_id": org[code], "via": "registry"}
             for sid, code in securities
             if code in org
+        ]
+        hk_rows = [
+            {
+                "security_id": sid,
+                "source_code": cn.SOURCE,
+                "filer_id": hk_org[code],
+                "via": "registry",
+            }
+            for sid, code in hk_securities
+            if code in hk_org
         ]
         with conn.cursor() as cur:
             written = upsert(
                 cur,
                 "market.security_filer",
-                rows,
+                # An A-share line wins over a Hong Kong one for the same security (kept last).
+                dedupe_by(hk_rows + rows, lambda r: r["security_id"])[0],
                 conflict=["security_id", "source_code"],
-                update=["filer_id"],
+                update=["filer_id", "via"],
             )
         conn.commit()
     return dg.MaterializeResult(
@@ -240,6 +327,9 @@ def security_cninfo_filer(
             "securities": len(securities),
             "mapped": len(rows),
             "unmapped": len(securities) - len(rows),
+            "hk_listed": len(hk_org),
+            "hk_securities": len(hk_securities),
+            "hk_mapped": len(hk_rows),
             "changed": -1 if written.changed is None else written.changed,
         }
     )
@@ -461,17 +551,23 @@ def security_dart_filer(
             cur.execute(fd.SECURITIES)
             securities = [(str(sid), str(code)) for sid, code in cur.fetchall()]
         rows = [
-            {"security_id": sid, "source_code": fd.SOURCE, "filer_id": corp[code]}
+            {
+                "security_id": sid,
+                "source_code": fd.SOURCE,
+                "filer_id": corp[code],
+                "via": "registry",
+            }
             for sid, code in securities
             if code in corp
         ]
         with conn.cursor() as cur:
+            # CLAIMED AS THE REGISTRY'S: an issuer-sibling row for the same security becomes ours.
             written = upsert(
                 cur,
                 "market.security_filer",
                 rows,
                 conflict=["security_id", "source_code"],
-                update=["filer_id"],
+                update=["filer_id", "via"],
             )
         conn.commit()
     return dg.MaterializeResult(

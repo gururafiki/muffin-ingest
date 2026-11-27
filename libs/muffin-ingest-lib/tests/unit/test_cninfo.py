@@ -329,3 +329,32 @@ def test_a_revenue_dated_within_ten_days_of_the_period_end_is_that_year() -> Non
     facts = [_fact("cninfo:分行业", "cninfo:军工电子", 122_294.31)]
     _, rescaled = cn.rescale_misstated_units(facts, {date(2025, 12, 28): 1_222_943_100.0})
     assert rescaled == {("cninfo:分行业", "2025-12-31"): 10_000}
+
+
+def test_the_hong_kong_list_maps_an_h_share_onto_its_a_share_s_org_id() -> None:
+    """Measured 2026-11-26: 215 of `hke_stock.json`'s 2,798 rows carry an A-share's org id. Only
+    those map, keyed by the code as a number (`00939` -> 939, the form a listing symbol takes once
+    its zeros are stripped). A Hong Kong company with no A-share has no CNINFO filer, and an A-share
+    code never reaches this map."""
+    a = json.dumps(
+        {"stockList": [{"code": "601939", "orgId": "9900000062"},
+                       {"code": "600900", "orgId": "gssh0600900"}]}
+    ).encode()  # fmt: skip
+    hk = json.dumps(
+        {"stockList": [{"code": "00939", "orgId": "9900000062"},
+                       {"code": "00001", "orgId": "gshk0000001"},
+                       {"code": "BAD", "orgId": "9900000062"}]}
+    ).encode()  # fmt: skip
+    assert cn.hk_org_ids([a, hk]) == {939: "9900000062"}
+    assert cn.org_ids([a, hk]) == {"601939": "9900000062", "600900": "gssh0600900"}
+
+
+def test_a_filer_s_reports_reach_every_holder_even_one_with_no_six_digit_listing() -> None:
+    """Joining each holder to its OWN six-digit listing dropped an H-share line or an issuer sibling
+    from the filer's security list without a word, so a mapped holder never received a report. The
+    code the search is asked with comes from ANY holder's listing; the holders come from
+    `security_filer` alone."""
+    text = " ".join(cn.FILERS.split())
+    assert "join market.listing l on l.security_id = sf.security_id" not in text
+    assert "array_agg(distinct sf.security_id::text) from market.security_filer sf where" in text
+    assert "where o.source_code = 'cninfo' and o.filer_id = sf.filer_id" in text

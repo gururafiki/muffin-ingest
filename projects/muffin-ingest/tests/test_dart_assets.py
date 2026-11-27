@@ -503,11 +503,17 @@ def test_the_registry_maps_each_korean_equity_with_a_listed_code(tmp_path: Path)
     assert len(inserted) == 1
     sql, params = inserted[0]
     columns = sql[sql.index("(") + 1 : sql.index(")")].split(", ")
-    rows = [dict(zip(columns, params[n : n + 3], strict=True)) for n in range(0, len(params), 3)]
-    assert rows == [
-        {"security_id": "s-kr1", "source_code": "dart", "filer_id": "00126380"},
-        {"security_id": "s-kr2", "source_code": "dart", "filer_id": "00144164"},
+    width = len(columns)
+    rows = [
+        dict(zip(columns, params[n : n + width], strict=True)) for n in range(0, len(params), width)
     ]
+    assert rows == [
+        {"security_id": "s-kr1", "source_code": "dart", "filer_id": "00126380", "via": "registry"},
+        {"security_id": "s-kr2", "source_code": "dart", "filer_id": "00144164", "via": "registry"},
+    ]
+    # A REGISTRY CLAIMS A SIBLING ROW AS ITS OWN: a preferred share linked by its issuer becomes the
+    # registry's the day DART's list names it.
+    assert "via = excluded.via" in sql
 
 
 def test_the_floor_asks_every_filer_never_collected_and_the_day_s_hash() -> None:

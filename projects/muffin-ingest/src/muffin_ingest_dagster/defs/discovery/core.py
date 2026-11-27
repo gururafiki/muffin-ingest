@@ -138,6 +138,8 @@ def discovered_security(
         security_rows: list[dict[str, Any]] = []
         identifier_rows: list[dict[str, Any]] = []
         issuer_rows: list[dict[str, Any]] = []
+        fills: dict[str, str] = {}
+        fills_conflicting = 0
         debt_rows: dict[str, dict[str, Any]] = {}
         lookups: dict[str, dict[str, dict[str, Any]]] = {}
         for row in raw:
@@ -158,6 +160,13 @@ def discovered_security(
             security_rows += secs
             identifier_rows += idents
             issuer_rows += issus
+            filled = nport.issuer_fills(holdings, ids, issus)
+            fills_conflicting += filled.conflicting
+            for f in filled.rows:
+                # Two filings of one run naming two issuers for one security: neither is taken.
+                if fills.setdefault(f["security_id"], f["issuer_id"]) != f["issuer_id"]:
+                    fills[f["security_id"]] = ""
+                    fills_conflicting += 1
             # THE NEWEST FILING'S TERMS PER SECURITY, so one call never carries a security twice:
             # the RPC's UPDATE … FROM would pick between two rows arbitrarily.
             for d in nport.debt_term_rows(
@@ -197,6 +206,9 @@ def discovered_security(
                     update=None,  # DO NOTHING: the first source of an identifier owns it
                 )
             debt_terms_updated = _set_debt_terms(cur, list(debt_rows.values()))
+            issuer_filled, issuer_disagrees = _fill_issuers(
+                cur, {sid: iid for sid, iid in fills.items() if iid}
+            )
         conn.commit()
 
     return dg.MaterializeResult(
@@ -212,8 +224,44 @@ def discovered_security(
             # funds arrive out of order, while `offered = 0` on a bond fund is a parse failure.
             "debt_terms_offered": len(debt_rows),
             "debt_terms_updated": debt_terms_updated,
+            # A SECURITY ALREADY HELD gains the issuer its holding names, where it had none. One
+            # whose stored issuer differs is counted and left: the first answer stands.
+            "issuer_filled": issuer_filled,
+            "issuer_disagrees": issuer_disagrees,
+            "issuer_conflicting": fills_conflicting,
         }
     )
+
+
+#: Sets `issuer_id` where it is empty, and counts the securities whose stored issuer differs.
+FILL_ISSUERS = """
+with offered as materialized (
+  select * from unnest(%s::uuid[], %s::uuid[]) as v (security_id, issuer_id)
+), filled as (
+  update market.security s
+     set issuer_id = o.issuer_id
+    from offered o
+   where s.security_id = o.security_id and s.issuer_id is null
+  returning 1
+)
+select (select count(*) from filled),
+       (select count(*) from offered o join market.security s on s.security_id = o.security_id
+         where s.issuer_id is not null and s.issuer_id <> o.issuer_id)
+"""
+
+
+def _fill_issuers(cur: Any, fills: dict[str, str]) -> tuple[int, int]:
+    """Give each held security without an issuer the one its holdings name (`nport.issuer_fills`).
+
+    THE ISSUERS ARE UPSERTED FIRST, in the same transaction, so every `issuer_id` offered exists. A
+    security whose `issuer_id` is already set keeps it, even where a holding names another.
+    """
+    if not fills:
+        return 0, 0
+    ids = sorted(fills)
+    cur.execute(FILL_ISSUERS, (ids, [fills[i] for i in ids]))
+    row = cur.fetchone()
+    return (int(row[0]), int(row[1])) if row else (0, 0)
 
 
 #: Rows per `set_debt_terms` call. AGG alone holds ~13,000 bonds, and one jsonb argument per call

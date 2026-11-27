@@ -34,9 +34,19 @@ REGULATOR = "sec"
 #: `market.data_source` code of every row this lane writes; the edge wrote the same.
 SOURCE = "sec-segments"
 
+#: A filing's securities are the HOLDERS of its filer's CIK in `security_filer('sec')`: the CIK
+#: holders themselves, and since Phase 6c the listings an issuer link maps onto the same filer (a
+#: Petrobras local line), which have no `security.cik` and must still receive the segments.
+_HOLDERS = """
+  from market.security_filing f
+  join market.security_filer holder
+    on holder.security_id = f.security_id and holder.source_code = 'sec'
+  join market.security s on s.security_id = f.security_id
+"""
+_CIK = "holder.filer_id::bigint"
+
 _ACCOUNTS_FILING = """
-       s.cik is not null
-   and s.security_type_code = 'equity'
+       s.security_type_code = 'equity'
    and f.is_xbrl
    and f.report_type in (select form_code from market.filing_form
                           where source_code = 'sec' and carries_segments)
@@ -51,27 +61,25 @@ RECENT_DAYS = 14
 #: Every filer with a filing to read, how many, and how many of them were filed recently: what the
 #: due sensor asks.
 DUE_BY_FILER = f"""
-select s.cik, count(distinct f.accession_number),
+select {_CIK}, count(distinct f.accession_number),
        count(distinct f.accession_number)
          filter (where f.filing_date >= current_date - {RECENT_DAYS})
-  from market.security_filing f
-  join market.security s on s.security_id = f.security_id
+{_HOLDERS}
  where {_ACCOUNTS_FILING}
    and {_UNREAD}
- group by s.cik
+ group by {_CIK}
 """
 
 #: The filings of some filers that are due, or that are named: each with the securities whose row
 #: is unread, and every security holding it.
 FILINGS = f"""
-select s.cik, f.accession_number, min(f.filing_date),
+select {_CIK}, f.accession_number, min(f.filing_date),
        array_agg(f.security_id::text order by f.security_id) filter (where {_UNREAD}),
        array_agg(f.security_id::text order by f.security_id)
-  from market.security_filing f
-  join market.security s on s.security_id = f.security_id
+{_HOLDERS}
  where {_ACCOUNTS_FILING}
-   and s.cik = any(%s)
- group by s.cik, f.accession_number
+   and holder.filer_id = any(%s::bigint[]::text[])
+ group by {_CIK}, f.accession_number
 having bool_or({_UNREAD}) or f.accession_number = any(%s)
 """
 
@@ -81,11 +89,10 @@ having bool_or({_UNREAD}) or f.accession_number = any(%s)
 #: days old by their own date, and a check on that date would fail every Monday for an hour.
 UNREAD = f"""
 select count(distinct f.accession_number) filter (where {{never}}),
-       count(distinct s.cik) filter (where {{never}}),
+       count(distinct holder.filer_id) filter (where {{never}}),
        min(f.filing_date) filter (where {{never}}),
        count(distinct f.accession_number) filter (where f.segments_parsed_at is not null)
-  from market.security_filing f
-  join market.security s on s.security_id = f.security_id
+{_HOLDERS}
  where {_ACCOUNTS_FILING}
    and {_UNREAD}
 """.format(

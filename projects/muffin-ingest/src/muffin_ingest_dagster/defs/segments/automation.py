@@ -33,6 +33,7 @@ from muffin_ingest_dagster.defs.segments.core import (
     sec_segment,
     security_cninfo_filer,
     security_dart_filer,
+    security_filer_siblings,
 )
 from muffin_ingest_dagster.defs.segments.partitions import (
     CNINFO_FILER_PARTITION,
@@ -176,6 +177,31 @@ def sec_instances_due(
 # EVERYTHING HERE SHIPS STOPPED, as the SEC lane did: the edge's `cn-filings` and
 # `security-cn-segments` read the same queue until they are retired, and two writers never read
 # one queue. `new_cninfo_filers` alone runs, because it asks CNINFO nothing.
+
+SIBLINGS_JOB = "filer_siblings"
+
+#: One extension pass and its copies: no provider request, a few seconds.
+siblings_job = dg.define_asset_job(
+    SIBLINGS_JOB,
+    selection=dg.AssetSelection.assets(security_filer_siblings),
+    run_tags=SHORT_RUN,
+)
+
+
+@dg.schedule(
+    job=siblings_job,
+    cron_schedule="30 6 * * *",
+    execution_timezone="UTC",
+    default_status=dg.DefaultScheduleStatus.RUNNING,
+    description=(
+        "Each company's filer onto every listing, daily 06:30 UTC: after the company day, before "
+        "the 07:10 lanes. New issuers (N-PORT), new accounts filings and the weekly registries "
+        "all change the answer, so a daily pass picks them up within a day."
+    ),
+)
+def security_filer_siblings_daily(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
+    return dg.RunRequest(run_key=context.scheduled_execution_time.date().isoformat())
+
 
 CNINFO_REGISTRY_JOB = "cninfo_registry"
 CNINFO_SEGMENTS_JOB = "cninfo_segments"
