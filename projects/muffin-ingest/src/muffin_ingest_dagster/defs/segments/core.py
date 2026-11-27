@@ -380,6 +380,7 @@ def cninfo_segment(
         found = cn.filers(conn, keys)
         known = fx.known_currencies(conn)
         vocabulary = segments.vocabulary(conn, cn.REGULATOR)
+        note = cn.note_vocabulary(conn)
 
     for key in keys:
         filer = found.get(key)
@@ -450,7 +451,7 @@ def cninfo_segment(
                     if body is None:
                         stats["not_held"] += 1
                         continue
-                    result = cn_child.read(body)
+                    result = cn_child.read(body, note=note)
                     if isinstance(result, cn_child.Unreadable):
                         outcome = "unreadable"
                         context.log.warning(
@@ -460,6 +461,7 @@ def cninfo_segment(
                         facts, rescaled = cn.rescale_misstated_units(result.facts, revenue)
                         outcome = "read"
                         stats["no_table"] += not facts
+                        stats["read_note"] += bool(facts) and result.form == "note"
                         stats["units_rescaled"] += len(rescaled)
                         for (axis, ending), factor in sorted(rescaled.items()):
                             context.log.info(
@@ -507,6 +509,7 @@ def cninfo_segment(
                 "filings",
                 *CNINFO_OUTCOMES,
                 "no_table",
+                "read_note",
                 "units_rescaled",
                 "rows",
                 "changed",

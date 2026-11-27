@@ -233,3 +233,21 @@ the code location itself.
 
 To capture again: `curl -sA 'muffin-market-data' 'https://stats.bis.org/api/v1/data/WS_LONG_CPI/M.JP.771?startPeriod=2025-10&format=csv'`,
 and `startPeriod=2027-01` for the absence.
+
+## `cninfo_note/*.json` — the segment note's text items, captured 2026-11-27
+
+Three FY2025 annual reports (filed 2026-03), as `cn_pdf.page_items` itemised them on the node, over
+exactly the pages `cn_note.candidate_pages` picked. Each file holds the report's page count and, per
+page index, `[text, x, y, end]` for every item. Captured for Phase 6c step 6 (umbrella
+docs/specs/2026-11-26-more-segment-sources.md).
+
+| file | what it pins |
+|---|---|
+| `icbc.json` | a bank: 公司金融/个人金融/资金/其他 under `营业收入`, ¥838,270 m for 2025 |
+| `petrochina.json` | wrapped headers (`油气和` over `新能源`), figures in pieces, a gross `分部收入` beside the external `对外交易收入` (¥2,864,469 m) |
+| `pingan.json` | an insurer: `其他业务及合并抵销` is a member, and the unit is printed only on the page before the table |
+
+To capture again: in a throwaway container from the code location's image, with the report's PDF
+mounted, run `cn_note.candidate_pages` over the document's page texts and dump
+`cn_pdf.page_items(document, i)` for each page it returns. The candidate rule has since widened
+(the pages after a note heading, 2026-11-27), so a re-capture holds more pages than these files.

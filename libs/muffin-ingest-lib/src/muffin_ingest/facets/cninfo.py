@@ -27,6 +27,7 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Literal
 
+from muffin_ingest.facets import segment_note as sn
 from muffin_ingest.facets import segments
 from muffin_ingest.facets.segments import SegmentFact
 from muffin_ingest.providers import cninfo
@@ -625,3 +626,32 @@ def rescale_misstated_units(
             )
         )
     return out, factor_of
+
+
+# ── The segment note's vocabulary ──────────────────────────────────────────────────────────────
+
+#: `market.segment_note_rule` rows of the note reader (`cn_note`), in the order it tries them.
+NOTE_RULES = """
+select rule, pattern, role
+  from market.segment_note_rule
+ where regulator = %s and rule in ('heading', 'label', 'member')
+ order by rule, priority desc, pattern
+"""
+
+
+def build_note_vocabulary(rules: Sequence[tuple[str, str, str]]) -> sn.NoteVocabulary | None:
+    """The note reader's vocabulary, or None while no heading or label row exists: the stage stays
+    off until muffin-deployment seeds the rows, so the image can roll before the deploy."""
+    headings = tuple(sn.Heading(p, role) for rule, p, role in rules if rule == "heading")
+    labels = tuple(sn.Label(p, role) for rule, p, role in rules if rule == "label")
+    members = tuple(sn.Heading(p, role) for rule, p, role in rules if rule == "member")
+    if not headings or not labels:
+        return None
+    return sn.NoteVocabulary(headings=headings, labels=labels, members=members)
+
+
+def note_vocabulary(conn: Any) -> sn.NoteVocabulary | None:
+    with conn.cursor() as cur:
+        cur.execute(NOTE_RULES, (REGULATOR,))
+        rules = [(str(a), str(b), str(c)) for a, b, c in cur.fetchall()]
+    return build_note_vocabulary(rules)

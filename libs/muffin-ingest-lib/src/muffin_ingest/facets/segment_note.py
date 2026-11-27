@@ -68,6 +68,10 @@ class NoteVocabulary:
     labels: tuple[Label, ...]
     #: Metric -> local-name patterns of a concept that can anchor it (`Revenue`, `NetSales`).
     concepts: tuple[tuple[str, str], ...] = ()
+    #: Member-name patterns and the kind they imply (`境内`, `长三角地区` -> geography). A table
+    #: whose members are mostly places is a geography table whatever its heading says: Chinese
+    #: banks print geographic operating segments under the same `分部报告` heading as business ones.
+    members: tuple[Heading, ...] = ()
 
 
 STRUCTURAL = frozenset({"total", "adjustment", "subtotal", "subset", "skip"})
@@ -510,6 +514,63 @@ def read_note(
     return out
 
 
+def role_of(label: str, vocabulary: NoteVocabulary) -> str | None:
+    """A label's role (a metric code or a structural role), as the reader judges it."""
+    return _role(label, vocabulary)
+
+
+def _member_kind(table: Table, vocabulary: NoteVocabulary) -> str | None:
+    """The kind most of a table's member names imply, or None. Members are the header cells, or
+    the row labels, that the vocabulary gives no role (a metric, a total, an elimination)."""
+    if not vocabulary.members or not table.rows:
+        return None
+    for cells in (table.rows[0][1:], [row[0] for row in table.rows[1:] if row]):
+        names = [c for c in cells if c.strip() and _role(c, vocabulary) is None]
+        if len(names) < 2:
+            continue
+        kinds = [
+            next((m.kind for m in vocabulary.members if re.search(m.pattern, member_name(c))), None)
+            for c in names
+        ]
+        for kind in {k for k in kinds if k}:
+            if 2 * kinds.count(kind) > len(names):
+                return kind
+    return None
+
+
+def read_grid(
+    table: Table,
+    anchors: Sequence[Anchor],
+    vocabulary: NoteVocabulary,
+    *,
+    scale: float,
+    axes: dict[str, str],
+    prefix: str,
+    to_rounding: bool = False,
+) -> list[SegmentFact]:
+    """A grid built elsewhere (China's notes are PDF positions, not HTML) read as `read_note` reads
+    one of its tables: its kind from `table.before`, and nothing for a kind `axes` does not name.
+
+    `to_rounding`: a split must add up to its anchor within the table's own rounding (one unit per
+    member and one more), not the 0.5% XBRL's millions need. A note whose figures are stated to the
+    unit then cannot place a subset that happens to come close: Bank of China's 2024 members less
+    投资银行业务 come within 0.42% of the gross total its elimination column explains."""
+    kind = _kind(table.before, vocabulary)
+    if kind is not None and kind != "skip":
+        kind = _member_kind(table, vocabulary) or kind
+    if kind is None or kind == "skip" or kind not in axes:
+        return []
+    hint = next(
+        (_role(t, vocabulary) for t in reversed(table.before)
+         if _role(t, vocabulary) not in (None, *STRUCTURAL)),
+        None,
+    )  # fmt: skip
+    return _read_table(
+        table, anchors, vocabulary, scale, kind, hint, axis=axes[kind], prefix=prefix,
+        to_rounding=to_rounding,
+    )  # fmt: skip
+
+
 def _read_table(
     table: Table,
     anchors: Sequence[Anchor],
@@ -520,11 +581,15 @@ def _read_table(
     *,
     axis: str,
     prefix: str,
+    to_rounding: bool = False,
 ) -> list[SegmentFact]:
     by_column, by_row = _lines(table, vocabulary)
     best: list[SegmentFact] = []
     for lines in (by_column, by_row):
-        facts = _read_lines(lines, anchors, vocabulary, scale, hint, axis=axis, prefix=prefix)
+        facts = _read_lines(
+            lines, anchors, vocabulary, scale, hint, axis=axis, prefix=prefix,
+            to_rounding=to_rounding,
+        )  # fmt: skip
         if len({f.member_code for f in facts}) > len({f.member_code for f in best}):
             best = facts
     return best
@@ -547,6 +612,7 @@ def _read_lines(
     *,
     axis: str,
     prefix: str,
+    to_rounding: bool = False,
 ) -> list[SegmentFact]:
     matched: list[_Match] = []
     for line in lines:
@@ -583,10 +649,11 @@ def _read_lines(
             chosen[key] = m
 
     def partitions_of(m: _Match) -> dict[str, int]:
-        return assign_partitions(
-            [(f"{prefix}{name}", value * scale) for name, value in m.line.members],
-            m.anchor.value,
-        )
+        members = [(f"{prefix}{name}", value * scale) for name, value in m.line.members]
+        if to_rounding and m.anchor.value:
+            slack = scale * (len(members) + 1)
+            return assign_partitions(members, m.anchor.value, slack / abs(m.anchor.value))
+        return assign_partitions(members, m.anchor.value)
 
     # THE SPLIT IS LEARNED FROM REVENUE AND APPLIED TO THE REST of the same table and period end:
     # segment profit and assets reconcile to nothing by design (unallocated costs, corporate

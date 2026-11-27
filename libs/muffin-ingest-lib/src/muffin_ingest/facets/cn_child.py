@@ -14,7 +14,8 @@ Forking the run itself is worse: it holds threads and database connections. A pl
 `python -m muffin_ingest.facets.cn_child` imports this module and nothing else, measured at 0.21 s
 and 24 MB per start in the production image (2026-11-15), against a median parse of ~0.6 s.
 
-THE PROTOCOL. The PDF goes in on stdin; the child sets its own limit first, then answers with one
+THE PROTOCOL. The PDF goes in on stdin, and the segment note's vocabulary, when there is one, as a
+JSON argument; the child sets its own limit first, then answers with one
 pickled `("ok", CnParseResult)` or `("error", reason)` on stdout. Anything pdfium or a library
 writes to file descriptor 1 is moved to stderr before parsing, so it cannot corrupt the answer. A
 child the kernel or its limit kills answers nothing and exits non-zero: `Unreadable`, with the last
@@ -23,6 +24,7 @@ line of its stderr.
 
 from __future__ import annotations
 
+import json
 import os
 import pickle
 import resource
@@ -31,6 +33,7 @@ import sys
 from dataclasses import dataclass
 
 from muffin_ingest.facets.cn_pdf import CnParseResult
+from muffin_ingest.facets.segment_note import Heading, Label, NoteVocabulary
 
 #: The child's address-space limit (decision 7).
 LIMIT_MB = 768
@@ -53,14 +56,16 @@ def read(
     limit_mb: int = LIMIT_MB,
     timeout_s: float = TIMEOUT_S,
     scan_pages: int | None = None,
+    note: NoteVocabulary | None = None,
 ) -> CnParseResult | Unreadable:
     """One report, read in its own child. Never raises for the report's sake."""
     from muffin_ingest.facets import cn_pdf
 
     pages = cn_pdf.SCAN_PAGES if scan_pages is None else scan_pages
+    extra = [] if note is None else [note_to_json(note)]
     try:
         done = subprocess.run(
-            [*_COMMAND, str(limit_mb), str(pages)],
+            [*_COMMAND, str(limit_mb), str(pages), *extra],
             input=body,
             capture_output=True,
             timeout=timeout_s,
@@ -81,9 +86,28 @@ def read(
     return Unreadable(str(payload))
 
 
+def note_to_json(note: NoteVocabulary) -> str:
+    return json.dumps(
+        {"headings": [[h.pattern, h.kind] for h in note.headings],
+         "labels": [[lb.pattern, lb.role] for lb in note.labels],
+         "members": [[m.pattern, m.kind] for m in note.members]},
+        ensure_ascii=False,
+    )  # fmt: skip
+
+
+def note_from_json(text: str) -> NoteVocabulary:
+    data = json.loads(text)
+    return NoteVocabulary(
+        headings=tuple(Heading(p, k) for p, k in data["headings"]),
+        labels=tuple(Label(p, r) for p, r in data["labels"]),
+        members=tuple(Heading(p, k) for p, k in data.get("members", [])),
+    )
+
+
 def _main(argv: list[str]) -> int:
     """The child: limit itself, read the PDF from stdin, answer on stdout."""
     limit_mb, scan_pages = int(argv[1]), int(argv[2])
+    note = note_from_json(argv[3]) if len(argv) > 3 else None
     limit = limit_mb * 1024 * 1024
     try:
         resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
@@ -100,7 +124,7 @@ def _main(argv: list[str]) -> int:
     try:
         from muffin_ingest.facets import cn_pdf
 
-        payload = ("ok", cn_pdf.segment_facts_from_pdf(body, scan_pages))
+        payload = ("ok", cn_pdf.segment_facts_from_pdf(body, scan_pages, note=note))
     except MemoryError:
         payload = ("error", f"memory limit of {limit_mb} MB")
     except Exception as exc:  # the report, not the run: reported as unreadable
