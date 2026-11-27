@@ -39,7 +39,12 @@ RULES: tuple[tuple[str, str, str, int], ...] = (
     ),
     ("label", r"セグメント間", "skip", 120),
     ("label", r"小計", "subtotal", 115),
-    ("label", r"^\(?(連結|合計|総計|計)\)?$|計上額$|^報告セグメント計$", "total", 110),
+    (
+        "label",
+        r"^\(?(連結|連結合計|連結計|合計|総計|計)\)?$|計上額$|^報告セグメント計$",
+        "total",
+        110,
+    ),
     ("label", r"消去|調整|全社", "adjustment", 105),
     (
         "label",

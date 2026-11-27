@@ -441,8 +441,15 @@ def _merged(members: list[tuple[str, float]]) -> list[tuple[str, float]]:
     return list(out.items())
 
 
-def _close(a: float, b: float) -> bool:
-    return abs(a - b) <= max(1.0, abs(b) * 0.0005)
+def _close(a: float, b: float, slack: float) -> bool:
+    """Equal to the table's own precision, and never further than 0.05%.
+
+    A FIGURE IS TRUNCATED BELOW THE TABLE'S UNIT (百万円未満切捨て), so a sum of n cells may miss
+    the tagged figure by up to n units: `slack` is that many units, in yen. A percentage alone
+    grows with the company: 0.05% of Tokio Marine's figures is ¥540 m, and its members (a 連結合計
+    column among them) landed ¥246 m from an unrelated operating cash-flow subtotal and were read
+    as its split (measured 2026-11-27). Units alone are no bound for a sum of a few units."""
+    return abs(a - b) <= max(1.0, min(slack, abs(b) * 0.0005))
 
 
 def _metric(label: str, anchors: Sequence[Anchor], vocabulary: NoteVocabulary) -> str | None:
@@ -547,20 +554,22 @@ def _read_lines(
             continue
         member_sum = sum(v for _, v in line.members) * scale
         total = None if line.total is None else line.total * scale
-        hits = [a for a in anchors if (total is not None and _close(total, a.value))
-                or _close(member_sum, a.value)]  # fmt: skip
+        # One unit for each member's truncation, and one more for the tagged figure's own rounding.
+        sum_slack, total_slack = scale * (len(line.members) + 1), scale * 2
+        hits = [a for a in anchors if (total is not None and _close(total, a.value, total_slack))
+                or _close(member_sum, a.value, sum_slack)]  # fmt: skip
         if not hits:
             continue
         labelled = _metric(line.label, (), vocabulary)
         # A LINE NAMED BY NO LABEL OF ITS OWN must earn its metric by arithmetic: its members sum
         # to a fact whose concept names that metric. A total cell alone is any 計 in the table.
-        summed = [a for a in hits if _close(member_sum, a.value)]
+        summed = [a for a in hits if _close(member_sum, a.value, sum_slack)]
         metric = labelled or _metric(line.label, summed, vocabulary)
         metric = metric or (hint if not line.label and summed else None)
         if metric is None:
             continue
         anchor = min(hits, key=lambda a: abs(member_sum - a.value))
-        matched.append(_Match(line, anchor, metric, _close(member_sum, anchor.value)))
+        matched.append(_Match(line, anchor, metric, _close(member_sum, anchor.value, sum_slack)))
     if not matched:
         return []
 
