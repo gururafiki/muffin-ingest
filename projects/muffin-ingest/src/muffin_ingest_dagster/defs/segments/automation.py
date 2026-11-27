@@ -368,9 +368,13 @@ def cninfo_retention_job() -> None:
     job=cninfo_retention_job,
     cron_schedule="*/15 * * * *",
     execution_timezone="UTC",
-    # Started by hand on 2026-11-16 and running since: declared here so a state reset keeps it.
-    default_status=dg.DefaultScheduleStatus.RUNNING,
-    description="Prunes read CNINFO reports every 15 minutes (a backfill fetches ~9 GB an hour).",
+    # STOPPED SINCE 2026-11-27 (Phase 6c decision 5, the user's): China's reports are kept whole
+    # from now on, so a reader fix re-reads them without fetching them again. The job stays, as the
+    # rollback: start this schedule to prune again.
+    default_status=dg.DefaultScheduleStatus.STOPPED,
+    description=(
+        "Prunes read CNINFO reports every 15 minutes. Stopped: the reports are kept (decision 5)."
+    ),
 )
 def cninfo_retention(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
     return dg.RunRequest(run_key=context.scheduled_execution_time.isoformat())

@@ -739,3 +739,33 @@ def test_retention_drops_a_read_report_past_thirty_days_and_stage_1_fetches_it_w
     asked = len(provider.calls)
     assert run(tmp_path, instance, [YANGTZE]).success
     assert provider.calls[asked:] == [FY25]
+
+
+def test_the_held_reports_are_a_gauge_since_they_are_kept() -> None:
+    """China's reports are kept whole from 2026-11-27 (Phase 6c decision 5), so the held total only
+    grows. The check records it and always passes: a cap would go red for good and be ignored, and
+    the disk alert covers growth. Fed six times the old 5 GB cap, it still passes and says so."""
+    from muffin_ingest_dagster.defs.segments import checks
+    from muffin_ingest_dagster.defs.segments.partitions import CNINFO_FILER_PARTITION
+
+    class Held:
+        def stored_rows_sized(
+            self, asset_key: dg.AssetKey, partition_key: str, columns: Sequence[str]
+        ) -> list[dict[str, Any]]:
+            return [
+                {"document": "report", "outcome": "answered", "pruned_at": None,
+                 "body_bytes": 15 * 1024**3},
+                {"document": "report", "outcome": "answered", "pruned_at": "2026-11-20",
+                 "body_bytes": 9 * 1024**3},
+                {"document": "search", "outcome": "answered", "pruned_at": None, "body_bytes": 5},
+            ]  # fmt: skip
+
+    with dg.instance_for_test() as instance:
+        instance.add_dynamic_partitions(CNINFO_FILER_PARTITION, [YANGTZE, LONGI])
+        result = checks.cninfo_reports_within_cap(
+            dg.build_asset_check_context(instance=instance), Held()
+        )
+    assert isinstance(result, dg.AssetCheckResult)
+    assert result.passed
+    assert result.metadata["held_bytes"].value == 2 * 15 * 1024**3
+    assert result.metadata["reports_held"].value == 2
