@@ -286,3 +286,140 @@ def test_the_vocabulary_reads_its_rules_in_priority_order() -> None:
     labels = [label.role for label in edinet_rules.vocabulary().note.labels]
     assert labels.index("capital_expenditure") < labels.index("long_lived_assets")
     assert json.dumps(fe.RULES).count("priority desc") == 1
+
+
+# ── The catalogue, the queries and raw ─────────────────────────────────────────────────────────
+
+
+def _answer(body: bytes, status: int = 200, too_large: bool = False) -> edinet.Answer:
+    from datetime import UTC, datetime
+
+    from muffin_ingest.providers.documents import Document
+
+    return edinet.Answer(
+        Document("http://http-cache:8080/edinet/x?Subscription-Key=REDACTED", body, "x",
+                 datetime(2026, 11, 27, tzinfo=UTC)),
+        status,
+        too_large,
+    )  # fmt: skip
+
+
+def _listed(**given: object) -> fe.Listed:
+    base: dict[str, object] = {
+        "doc_id": "S1", "edinet_code": "E1", "doc_type": "120", "ordinance": "010",
+        "form": "030000", "period_start": "2025-04-01", "period_end": "2026-03-31",
+        "submitted": "2026-06-25 15:00", "withdrawn": False, "xbrl": True,
+    }  # fmt: skip
+    return fe.Listed(**{**base, **given})  # type: ignore[arg-type]
+
+
+def test_a_day_s_catalogue_keeps_reports_and_amendments_and_names_withdrawals() -> None:
+    """Annual reports of every ordinance and their amendments are kept, as EDINET lists them (the
+    filing function picks the companies' reports); a withdrawal names its document by id alone."""
+    day = fe.parse_day((FIXTURES / "edinet_day_2026-06-25.json").read_bytes())
+    found = fe.document_rows(day.listed, listed_on="2026-06-25")
+    kinds = sorted((r["doc_type_code"], r["ordinance_code"], r["form_code"]) for r in found.rows)
+    assert kinds == [
+        ("120", "010", "030000"), ("120", "030", "07A000"), ("120", "030", "07C000"),
+        ("130", "010", "030001"),
+    ]  # fmt: skip
+    assert (found.withdrawn, found.incomplete) == (["S100YK9S"], 0)
+    amendment = next(r for r in found.rows if r["doc_type_code"] == "130")
+    assert (amendment["doc_id"], amendment["parent_doc_id"], amendment["sec_code"]) == (
+        "S100YK3Q", "S100YGKQ", "21140",
+    )  # fmt: skip
+    assert amendment["filed_on"] == "2026-06-25"
+    assert all(r["listed_on"] == "2026-06-25" and r["source_code"] == "edinet" for r in found.rows)
+
+
+def test_an_entry_without_a_filer_or_a_day_is_counted_and_not_kept() -> None:
+    found = fe.document_rows(
+        [_listed(edinet_code=""), _listed(doc_id="S2", submitted=None), _listed(doc_type="350")],
+        listed_on="2026-06-25",
+    )
+    assert (found.rows, found.withdrawn, found.incomplete) == ([], [], 2)
+
+
+def test_a_withdrawn_entry_that_keeps_its_filer_is_a_row_marked_withdrawn() -> None:
+    found = fe.document_rows([_listed(withdrawn=True)], listed_on="2026-06-25")
+    assert [r["withdrawn"] for r in found.rows] == [True] and found.withdrawn == []
+
+
+def test_an_archive_s_outcome_is_read_from_its_body() -> None:
+    """EDINET answers HTTP 200 for everything, so the outcome is the body's: a ZIP, its 404, or
+    something else, which is asked again rather than taken for an absence."""
+    assert fe.archive_outcome(_answer(b"PK\x03\x04")) == "answered"
+    assert fe.archive_outcome(_answer(b'{"metadata": {"status": "404"}}', 404)) == "absent"
+    assert fe.archive_outcome(_answer(b"", too_large=True)) == "too_large"
+    assert fe.archive_outcome(_answer(b'{"metadata": {"status": "200"}}')) == "not_zip"
+    assert fe.day_outcome(_answer(b"{}", 404)) == "absent"
+    assert fe.day_outcome(_answer(b"{}")) == "answered"
+
+
+def test_the_newest_finished_fetch_is_held_and_only_an_answered_one_has_a_body() -> None:
+    rows = [
+        {"document": "archive", "accession": "S1", "outcome": "not_zip",
+         "fetched_at": "2026-11-27T02:00", "run_id": "r2", "body": b"junk"},
+        {"document": "archive", "accession": "S1", "outcome": "answered",
+         "fetched_at": "2026-11-27T01:00", "run_id": "r1", "body": b"PK1"},
+        {"document": "archive", "accession": "S2", "outcome": "absent",
+         "fetched_at": "2026-11-27T03:00", "run_id": "r3", "body": b"{}"},
+    ]  # fmt: skip
+    held = fe.held_archive(rows, "S1")
+    assert held == fe.Held("not_zip", "2026-11-27T02:00", "r2")
+    assert fe.archive_body(rows, held) is None
+    first = fe.Held("answered", "2026-11-27T01:00", "r1")
+    assert fe.archive_body(rows, first) == b"PK1"
+    assert fe.held_archive(rows, "S3") is None
+
+
+def test_a_held_day_is_its_newest_answered_list_and_never_an_absence() -> None:
+    rows = [
+        {"document": "day", "outcome": "answered", "fetched_at": "2026-11-20", "body": b"old"},
+        {"document": "day", "outcome": "answered", "fetched_at": "2026-11-21", "body": b"new"},
+        {"document": "day", "outcome": "absent", "fetched_at": "2026-11-22", "body": b"{}"},
+    ]
+    held = fe.held_day(rows)
+    assert held is not None and held["body"] == b"new"
+    assert fe.held_day(rows[2:]) is None
+
+
+class _Cursor:
+    def __init__(self, sent: list[tuple[str, tuple[object, ...]]]) -> None:
+        self.sent = sent
+
+    def __enter__(self) -> _Cursor:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def execute(self, sql: str, params: tuple[object, ...] = ()) -> None:
+        self.sent.append((sql, params))
+
+    def fetchone(self) -> tuple[int, int, int]:
+        return (3, 1, 2)
+
+
+class _Conn:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, tuple[object, ...]]] = []
+
+    def cursor(self) -> _Cursor:
+        return _Cursor(self.sent)
+
+
+def test_filing_none_asks_for_every_filer_and_an_empty_list_asks_nothing() -> None:
+    """NULL files every mapped filer's reports; an empty list must not become NULL, which would
+    turn "nothing changed today" into a pass over the whole catalogue."""
+    conn = _Conn()
+    assert fe.file_filings(conn, []) == fe.Filed(0, 0, 0) and conn.sent == []
+    assert fe.file_filings(conn, None) == fe.Filed(3, 1, 2)
+    assert fe.file_filings(conn, ["E1"]) == fe.Filed(3, 1, 2)
+    assert [p for _, p in conn.sent] == [(None,), (["E1"],)]
+
+
+def test_the_queries_read_the_regulator_s_own_parser_version_and_form() -> None:
+    for sql in (fe.FILINGS, fe.DUE_BY_FILER, fe.UNREAD):
+        assert "p.regulator = 'edinet'" in sql and "'有価証券報告書'" in sql
+    assert "source_code = 'edinet'" in fe.FILERS

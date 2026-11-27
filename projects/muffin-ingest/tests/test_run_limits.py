@@ -14,6 +14,8 @@ from dagster._core.storage.tags import MAX_RUNTIME_SECONDS_TAG
 
 from muffin_ingest_dagster.defs.companies.automation import COMPANY_SCHEDULE
 from muffin_ingest_dagster.defs.companies.raw import CompanyRun
+from muffin_ingest_dagster.defs.edinet.automation import DAILY_SCHEDULE as EDINET_DAILY
+from muffin_ingest_dagster.defs.edinet.raw import EdinetDayRun, EdinetFilingRun
 from muffin_ingest_dagster.defs.platform.heartbeat import heartbeat_schedule
 from muffin_ingest_dagster.defs.prices.automation import SWEEP_SCHEDULE
 from muffin_ingest_dagster.defs.promotion.automation import PROBE_SCHEDULE
@@ -65,6 +67,8 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
     filer run's archives are bounded by their own budget, at up to 115 s each from outside Korea.
 
     NSE is the tenth: 25 filers' results lists and their instances, bounded by their own budget.
+
+    EDINET is the eleventh: thirty days' lists, or ten filers' archives, each within a budget.
     """
     limits = _limits()
     assert limits[SWEEP_SCHEDULE] == runtime.PRICE_RUN[MAX_RUNTIME_SECONDS_TAG]
@@ -83,6 +87,7 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
         "dart_corp_codes",
         "dart_filers_floor",
         "nse_filers_floor",
+        EDINET_DAILY,
     }
     assert limits["cninfo_filers_floor"] == runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]
     assert limits["cninfo_retention"] == runtime.CNINFO_RUN[MAX_RUNTIME_SECONDS_TAG]
@@ -97,6 +102,11 @@ def test_the_two_sweeps_get_room_for_their_work_and_the_rest_are_short() -> None
     assert float(runtime.DART_RUN[MAX_RUNTIME_SECONDS_TAG]) > 3 * 346, "below 3x the registry"
     assert limits["nse_filers_floor"] == runtime.NSE_RUN[MAX_RUNTIME_SECONDS_TAG]
     assert float(runtime.NSE_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * NseRun().budget_seconds, (
+        "below 2x the budget"
+    )
+    assert limits[EDINET_DAILY] == runtime.EDINET_RUN[MAX_RUNTIME_SECONDS_TAG]
+    edinet_budget = max(EdinetDayRun().budget_seconds, EdinetFilingRun().budget_seconds)
+    assert float(runtime.EDINET_RUN[MAX_RUNTIME_SECONDS_TAG]) >= 2 * edinet_budget, (
         "below 2x the budget"
     )
     others = {name: limit for name, limit in limits.items() if name not in long_lanes}

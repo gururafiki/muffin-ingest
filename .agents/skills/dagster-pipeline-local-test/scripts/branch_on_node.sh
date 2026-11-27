@@ -37,7 +37,7 @@ tar cf - -C "$stage" . | ssh muffin '
   export INGEST_DATABASE_URL="$(docker exec "$ING" printenv INGEST_DATABASE_URL)"
   export HTTP_CACHE_URL="$(docker exec "$ING" printenv HTTP_CACHE_URL)"
   KEYS=""
-  for name in FRED_API_KEY OPENFIGI_API_KEY DART_API_KEY MUFFIN_USER_AGENT; do
+  for name in FRED_API_KEY OPENFIGI_API_KEY DART_API_KEY EDINET_API_KEY MUFFIN_USER_AGENT; do
     value="$(docker exec "$ING" printenv "$name" || true)"
     if [ -n "$value" ]; then export "$name=$value"; KEYS="$KEYS -e $name"; fi
   done

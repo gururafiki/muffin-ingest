@@ -478,6 +478,7 @@ def test_every_pool_is_a_provider_and_is_spelled_the_same_way_twice() -> None:
         "nse",
         "cninfo",
         "dart",
+        "edinet",
         "nasdaq",
         "sql",
         "openfigi_filter",
