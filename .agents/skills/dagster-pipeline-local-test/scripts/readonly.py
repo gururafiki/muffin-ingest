@@ -17,6 +17,7 @@ A cursor answering an intercepted statement returns no rows, so a retraction cou
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -25,6 +26,8 @@ import dagster as dg
 import psycopg
 from muffin_ingest import settings
 from muffin_ingest_dagster.lib.resources import Postgres
+
+_WRITES = re.compile(r"\b(insert into|delete from|update [\w.]+ set|merge into)\b")
 
 #: The first words of every write that was intercepted, in order.
 SKIPPED: list[str] = []
@@ -46,7 +49,12 @@ class SafeCursor:
 
     def execute(self, sql: Any, params: Any = None) -> Any:
         text = " ".join(str(sql).split()).lower()
-        self._skipped = text.startswith(("insert", "update", "delete", "merge", "truncate"))
+        # A DATA-MODIFYING CTE starts with `with` (`with released as (delete ... returning ...)`),
+        # so the first word alone does not say whether a statement writes. Met 2026-11-27 on the
+        # EDINET registry, which the read-only connection then refused, as it should.
+        self._skipped = text.startswith(("insert", "update", "delete", "merge", "truncate")) or (
+            text.startswith("with") and _WRITES.search(text) is not None
+        )
         if self._skipped:
             SKIPPED.append(text[:60])
             return None

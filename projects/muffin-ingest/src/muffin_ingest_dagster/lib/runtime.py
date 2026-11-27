@@ -60,3 +60,8 @@ NSE_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
 #: ONE INSIDER DATA SET: one 8-14 MB zip (measured 2006q1-2026q1), read in 1.1-1.5 s, then a
 #: quarter's ~80-125 thousand rows written. Fifteen minutes.
 SEC_DATASET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "900"}
+
+#: ONE EDINET RUN: thirty days' lists (~1-2.5 s each, paced a second apart), or ten filers'
+#: archives due, bounded by their own 15-minute budget (an archive is 0.6-2.6 MB in 3.6-8 s from
+#: the node, measured 2026-11-27). Thirty minutes is twice that budget.
+EDINET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}

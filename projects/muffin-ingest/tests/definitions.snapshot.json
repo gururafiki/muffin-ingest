@@ -12,6 +12,10 @@
       "additional_deps": [],
       "blocking": false
     },
+    "edinet_segment:every_edinet_report_was_read": {
+      "additional_deps": [],
+      "blocking": false
+    },
     "macro_observation:macro_series_fresh": {
       "additional_deps": [],
       "blocking": false
@@ -250,6 +254,73 @@
       "partitions": {
         "kind": "dynamic",
         "name": "nport_filing"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "edinet_document": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 30,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_edinet_days": "TimeWindowPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 172800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2016-11-28T00:00:00+09:00",
+        "timezone": "Asia/Tokyo"
+      },
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
+    "edinet_segment": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 10,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "raw_edinet_filings": "IdentityPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 3024000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "edinet_filer"
       },
       "pools": [
         "sql"
@@ -707,6 +778,97 @@
       },
       "pools": [
         "dart"
+      ],
+      "tags": {}
+    },
+    "raw_edinet_code_list": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 1209600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "edinet",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "edinet"
+      ],
+      "tags": {}
+    },
+    "raw_edinet_days": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 30,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {},
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 172800.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "edinet",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2016-11-28T00:00:00+09:00",
+        "timezone": "Asia/Tokyo"
+      },
+      "pools": [
+        "edinet"
+      ],
+      "tags": {}
+    },
+    "raw_edinet_filings": {
+      "automation_condition": null,
+      "backfill_policy": {
+        "max_partitions_per_run": 10,
+        "type": "MULTI_RUN"
+      },
+      "code_version": null,
+      "deps": {
+        "edinet_document": "AllPartitionMapping"
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 3024000.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "parquet_io",
+      "kinds": [
+        "edinet",
+        "parquet"
+      ],
+      "owners": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "edinet_filer"
+      },
+      "pools": [
+        "edinet"
       ],
       "tags": {}
     },
@@ -1781,6 +1943,31 @@
       ],
       "tags": {}
     },
+    "security_edinet_filer": {
+      "automation_condition": null,
+      "backfill_policy": null,
+      "code_version": null,
+      "deps": {
+        "raw_edinet_code_list": null
+      },
+      "execution_type": "MATERIALIZATION",
+      "freshness_policy": {
+        "fail_window_seconds": 1209600.0,
+        "kind": "time_window",
+        "warn_window_seconds": null
+      },
+      "group_name": "segments",
+      "io_manager_key": "io_manager",
+      "kinds": [
+        "postgres"
+      ],
+      "owners": [],
+      "partitions": null,
+      "pools": [
+        "sql"
+      ],
+      "tags": {}
+    },
     "security_estimate": {
       "automation_condition": null,
       "backfill_policy": {
@@ -2566,6 +2753,41 @@
         "name": "dart_filer"
       }
     },
+    "edinet_days": {
+      "assets": [
+        "edinet_document",
+        "raw_edinet_days"
+      ],
+      "ops": [],
+      "partitions": {
+        "cron_schedule": "0 0 * * *",
+        "end": null,
+        "end_offset": 0,
+        "fmt": "%Y-%m-%d",
+        "kind": "time_window",
+        "start": "2016-11-28T00:00:00+09:00",
+        "timezone": "Asia/Tokyo"
+      }
+    },
+    "edinet_registry": {
+      "assets": [
+        "raw_edinet_code_list",
+        "security_edinet_filer"
+      ],
+      "ops": [],
+      "partitions": null
+    },
+    "edinet_segments": {
+      "assets": [
+        "edinet_segment",
+        "raw_edinet_filings"
+      ],
+      "ops": [],
+      "partitions": {
+        "kind": "dynamic",
+        "name": "edinet_filer"
+      }
+    },
     "filer_siblings": {
       "assets": [
         "security_filer_siblings"
@@ -2771,6 +2993,18 @@
       "execution_timezone": "UTC",
       "job": "dart_segments"
     },
+    "edinet_code_list": {
+      "cron_schedule": "35 8 * * 1",
+      "default_status": "STOPPED",
+      "execution_timezone": "UTC",
+      "job": "edinet_registry"
+    },
+    "edinet_daily": {
+      "cron_schedule": "40 15 * * *",
+      "default_status": "STOPPED",
+      "execution_timezone": "UTC",
+      "job": "edinet_days"
+    },
     "fund_directory_schedule": {
       "cron_schedule": "0 5 * * *",
       "default_status": "RUNNING",
@@ -2851,6 +3085,14 @@
       "minimum_interval_seconds": 30,
       "type": "AUTO_MATERIALIZE"
     },
+    "edinet_reports_due": {
+      "default_status": "STOPPED",
+      "jobs": [
+        "edinet_segments"
+      ],
+      "minimum_interval_seconds": 1800,
+      "type": "STANDARD"
+    },
     "new_cninfo_filers": {
       "default_status": "RUNNING",
       "jobs": [],
@@ -2866,6 +3108,12 @@
       "type": "STANDARD"
     },
     "new_dart_filers": {
+      "default_status": "RUNNING",
+      "jobs": [],
+      "minimum_interval_seconds": 21600,
+      "type": "STANDARD"
+    },
+    "new_edinet_filers": {
       "default_status": "RUNNING",
       "jobs": [],
       "minimum_interval_seconds": 21600,
