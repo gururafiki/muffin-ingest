@@ -26,8 +26,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from muffin_ingest.facets import positioned, segments
 from muffin_ingest.facets import segment_note as sn
-from muffin_ingest.facets import segments
 from muffin_ingest.providers import xbrl_org
 
 #: The regulator: `disclosure_source`, `security_filer`, `filing_form` and `segment_parser` rows.
@@ -175,6 +175,10 @@ def read_report(body: bytes, vocabulary: Vocabulary) -> ReportRead:
     anchors = anchors_of(facts)
     first: ReportRead | None = None
     for concept, text in blocks_of(facts, vocabulary.blocks):
+        # A NOTE TAGGED AS A CONVERTED PAGE holds no table, only positioned spans (Novo Nordisk,
+        # most of Denmark and Norway): rebuilt as tables, it is read like any other.
+        if positioned.is_positioned(text):
+            text = positioned.rebuild(text)
         note = sn.read_note(
             text,
             anchors,

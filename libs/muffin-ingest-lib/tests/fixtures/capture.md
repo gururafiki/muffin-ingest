@@ -271,7 +271,7 @@ The full reports are 2.2-26.9 MB; trimmed and gzipped, 8-109 KB.
 | `atlas_copco_2025-12-31.json.gz` | Swedish, the year in the label cell above the names, MSEK stated nowhere |
 | `enel_2024-12-31.json.gz` | English from a converted page: labels continued on lower-case rows, a regional subtotal column |
 | `asml_2025-12-31.json.gz` | regions as rows under a year row, figures to one decimal |
-| `airbus_2025-12-31.json.gz` | a segment note with no table at all |
+| `airbus_2025-12-31.json.gz` | a note tagged as a converted page (positioned spans, no table) whose rebuilt tables anchor nothing |
 | `novo_nordisk_filings.json` | a list mixing quarterly and half-year reports with the annual ones |
 | `inditex_filings.json` | two filings for one period (`-0`, `-1`) |
 
@@ -280,3 +280,20 @@ then the newest row's `json_url` under `https://filings.xbrl.org`, eight seconds
 quick requests earn a 429). Trim with the script in the step's record: keep facts whose dimensions
 are only concept, entity, period, unit and language, and whose unit is `iso4217:*` or whose concept
 is one of the two blocks.
+
+## `esef/positioned_*` — segment notes tagged as converted pages, captured 2026-11-28
+
+Three note blocks read from production's raw ESEF reports (stage 1 had fetched them from
+filings.xbrl.org), each with every non-dimensional monetary fact of its report as `anchors`
+(`segment_note.Anchor` fields). Stored as `{"accession", "block", "anchors"}`, gzipped, 7-11 KB.
+Each block holds no `<table>`: the note is absolutely positioned spans (`facets/positioned.py`).
+
+| file | what it pins |
+|---|---|
+| `positioned_coloplast_2024-09-30.json.gz` | five operating segments as rows under a `DKK million` line inside the table; FY2023's `Biologics¹⁾` with a superscript footnote |
+| `positioned_gn_store_nord_2024-12-31.json.gz` | three divisions, each a group header over repeating years (`2024 2023`) |
+| `positioned_nyfosa_2025-12-31.json.gz` | Swedish, segments as columns, thousands separated by spaces (`2 611`) |
+
+To capture again: read the accession's report from raw (`raw_esef_filings/<LEI>.parquet`, one row
+group per document), take `esef.blocks_of(...)[0][1]` and `[dataclasses.asdict(a) for a in
+esef.anchors_of(facts)]`.
