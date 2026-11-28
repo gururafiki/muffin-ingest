@@ -56,7 +56,7 @@ def _node(html: str) -> positioned._Node:
 
 
 def _page(*spans: str, heading: str = "Segment information") -> str:
-    filler = "".join(_span(0.0, 900.0 + i, "x") for i in range(positioned.POSITIONED))
+    filler = "".join(_span(0.0, 900.0 + i, "X") for i in range(positioned.POSITIONED))
     lines = "".join(spans) + filler
     return (
         f'<span style="display:inherit;clear:left;">{heading}</span>'
@@ -256,6 +256,31 @@ def test_a_data_rows_label_is_what_comes_before_its_first_figure() -> None:
         )
     )
     assert rows[0][0] == "Revenue from external customers"
+
+
+def test_a_label_set_just_below_its_figures_labels_them() -> None:
+    """GN Store Nord's regions: each name sits half a line under its figures. Read apart, the
+    figures belong to no region."""
+    a, b = 200.0, 300.0
+    rows = _rows(
+        _page(
+            _span(_right(a, "Hearing"), 0.0, "Hearing"),
+            _span(_right(b, "Total"), 0.0, "Total"),
+            _span(_right(a, "6.0"), 20.0, "6.0"),
+            _span(_right(b, "10.0"), 20.0, "10.0"),
+            _span(0.0, 26.0, "Europe"),
+            _span(_right(a, "4.0"), 40.0, "4.0"),
+            _span(_right(b, "5.0"), 40.0, "5.0"),
+            _span(0.0, 46.0, "Rest of World"),
+            _span(_right(a, "1.0"), 60.0, "1.0"),
+            _span(_right(b, "1.0"), 60.0, "1.0"),
+            _span(0.0, 75.0, "Notes"),
+        )
+    )
+    assert [r[0] for r in rows[1:3]] == ["Europe", "Rest of World"]
+    assert rows[1][1:] == ["6.0", "10.0"]
+    # A line more than a line height away is not the figures' label.
+    assert rows[3][0] == "" and rows[4][0] == "Notes"
 
 
 def test_a_wrapped_label_joins_the_row_below() -> None:
