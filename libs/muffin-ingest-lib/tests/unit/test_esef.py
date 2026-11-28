@@ -289,6 +289,323 @@ def test_a_reference_in_a_name_is_stripped() -> None:
     assert sn.member_name("日本 (注)2") == "日本"
 
 
+# ── Rules the first drain found (2026-11-28: 207 reports since FY2022, 44 placing a split) ──────
+
+#: The same vocabulary, able to earn a metric by arithmetic: a line labelled by its column header
+#: (`1.1.` over `31.12.2025`) is revenue only because its members add up to a tagged Revenue.
+EARNING = sn.NoteVocabulary(
+    headings=SPACED.headings,
+    labels=SPACED.labels,
+    concepts=(("revenue", r"^Revenue$"),),
+    members=SPACED.members,
+    spaced=True,
+)
+
+
+def _earn(html: str) -> sn.NoteRead:
+    return sn.read_note(html, ANCHORS, EARNING, axis_prefix="x:", axes=AXES, detect_numbers=True,
+                        infer_scale=True)  # fmt: skip
+
+
+def test_a_date_in_the_header_is_text_not_a_figure() -> None:
+    """KONE heads its columns `1.1.` over `31.12.2025`. Read in the comma convention the date
+    becomes the figure 31,122,025, the header ends a row early, and that row's label becomes a
+    member worth thirty-one million that no total can match."""
+    read = _earn(_table([["", "1.1.\u2013", "%"],
+                         ["Liikevaihto", "31.12.2025", ""],
+                         ["Alpha", "60,0", "60"],
+                         ["Beta", "40,0", "40"],
+                         ["Total", "100,0", ""]]))  # fmt: skip
+    assert {f.member_code: f.value for f in read.facts} == {"x:Alpha": 60e6, "x:Beta": 40e6}
+    # A date is never rewritten as a figure, and a figure beside it still is.
+    table = sn.in_convention(sn.Table(rows=[["31.12.2025", "1.234,5", "1.1.2025"]]), "comma")
+    assert table.rows == [["31.12.2025", "1234.5", "1.1.2025"]]
+
+
+@pytest.mark.parametrize("total", ["Acme", "To t a l"])
+def test_a_member_equal_to_the_sum_of_the_others_is_the_total(total: str) -> None:
+    """Signify and MFE head their total column with the company's own name, and Johnson
+    Matthey's converted page spaces `Total` into `To t a l`: no label names either, so the total
+    was summed as a segment and every line came to twice the tagged figure."""
+    read = _read(_table([["", "Alpha", "Beta", total],
+                         ["Chiffre d'affaires", "60", "40", "100"]]))  # fmt: skip
+    assert {f.member_code: f.value for f in read.facts} == {"x:Alpha": 60e6, "x:Beta": 40e6}
+
+
+def test_a_total_found_by_value_allows_for_the_eliminations() -> None:
+    read = _read(_table([["", "Alpha", "Beta", "Éliminations", "Acme"],
+                         ["Chiffre d'affaires", "65", "40", "(5)", "100"]]))  # fmt: skip
+    assert {f.member_code for f in read.facts} == {"x:Alpha", "x:Beta"}
+    assert {f.reconciled_to for f in read.facts} == {105e6}
+
+
+def test_a_line_that_already_reconciles_keeps_every_member() -> None:
+    """Gamma happens to equal Alpha and Beta together. The members add up to the tagged figure as
+    they stand, so none of them is the total: the rule applies only to a line that reconciles to
+    nothing, and never between two members."""
+    three = _read(_table([["", "Alpha", "Beta", "Gamma"],
+                          ["Chiffre d'affaires", "30", "20", "50"]]))  # fmt: skip
+    assert {f.member_code for f in three.facts} == {"x:Alpha", "x:Beta", "x:Gamma"}
+    two = _read(_table([["", "Alpha", "Beta"], ["Chiffre d'affaires", "50", "50"]]))
+    assert {f.member_code for f in two.facts} == {"x:Alpha", "x:Beta"}
+
+
+def test_two_columns_of_one_name_under_two_groups_are_two_members() -> None:
+    """Bakkafrost sets `Faroe Islands` and `Scotland` under both `Freshwater` and `Farming`.
+    Named by their own cells alone, the second pair merged into the first and the split fell
+    DKK 5.2 m short of its total."""
+    html = (
+        "<p>Information par segment</p><table>"
+        "<tr><td></td><td colspan='2'>Freshwater</td><td colspan='2'>Farming</td><td></td></tr>"
+        "<tr><td></td><td>Faroe</td><td>Scotland</td><td>Faroe</td><td>Scotland</td>"
+        "<td>Total</td></tr>"
+        "<tr><td>Chiffre d'affaires</td><td>10</td><td>20</td><td>30</td><td>40</td>"
+        "<td>100</td></tr></table>"
+    )
+    assert {f.member_code: f.value for f in _read(html).facts} == {
+        "x:Freshwater Faroe": 10e6, "x:Freshwater Scotland": 20e6,
+        "x:Farming Faroe": 30e6, "x:Farming Scotland": 40e6,
+    }  # fmt: skip
+
+
+def test_a_table_of_places_after_a_sentence_about_customers_is_geography() -> None:
+    """Sartorius Stedim states that no customer exceeds 10% of revenue, then gives its revenue by
+    region. The sentence names customers, a skipped kind, and the table of places that follows it
+    reconciled exactly and was read as nothing."""
+    rows = [["", "France", "Europe", "Total"], ["Chiffre d'affaires", "60", "40", "100"]]
+    read = _read(_table(rows, before="Aucun des clients ne dépasse 10 % du chiffre d'affaires"))
+    assert {f.axis for f in read.facts} == {"x:geo"}
+    # A customer table proper stays skipped: its members are no places.
+    customers = [["", "Client A", "Client B", "Total"], ["Chiffre d'affaires", "60", "40", "100"]]
+    assert not _read(_table(customers, before="Principaux clients")).facts
+
+
+def test_a_word_split_by_an_empty_span_is_one_word() -> None:
+    """A page converted from PDF (pdf2htmlEX) splits words with empty kerning spans:
+    `Clean A<span></span>ir`. Joined with a space, every name and label was letter-spaced
+    (`Cle an A ir`, `To t a l`), so no pattern matched it, and the text before a table arrived in
+    fragments (`Mar`, `ch 2026`) no heading could match either. Only a block ends a word."""
+    html = (
+        "<div>Information par seg<span class='_'></span>ment</div>"
+        "<table><tr><td></td><td>Fra<span class='_'></span>nce</td><td>Eu<span></span>rope</td>"
+        "<td>To<span></span>tal</td></tr>"
+        "<tr><td><p>Chiffre</p><p>d'affaires</p></td><td>60</td><td>40</td><td>100</td></tr>"
+        "</table>"
+    )
+    [table] = sn.tables(html, inline=True)
+    assert table.before == ["Information par segment"]
+    assert table.rows[0] == ["", "France", "Europe", "Total"]
+    assert table.rows[1][0] == "Chiffre d'affaires"
+    assert {f.member_code: f.axis for f in _read(html).facts} == {
+        "x:France": "x:geo", "x:Europe": "x:geo"
+    }  # fmt: skip
+    # Japanese notes are read as they always were: a chunk is a word.
+    [jp] = sn.tables(html)
+    assert jp.rows[0][1] == "Fra nce"
+
+
+def test_a_header_cell_holding_a_year_is_no_part_of_a_name() -> None:
+    """A period label over the columns (`2025/26`, `52 weeks to 27 February 2025`,
+    `Januari-december 2024`) is no part of a segment's name, whether it spans the columns or sits
+    above one: Matas read as `KICKS 2025/26`, and a split for two years named its members by the
+    year and never merged them."""
+    html = (
+        "<p>Information par segment</p><table>"
+        "<tr><td></td><td colspan='3'>2025/26</td><td colspan='3'>2024/25</td></tr>"
+        "<tr><td></td><td>Alpha</td><td>Beta</td><td>Total</td>"
+        "<td>Alpha</td><td>Beta</td><td>Total</td></tr>"
+        "<tr><td>Chiffre d'affaires</td><td>60</td><td>40</td><td>100</td>"
+        "<td>55</td><td>35</td><td>90</td></tr></table>"
+    )
+    assert {f.member_code for f in _read(html).facts} == {"x:Alpha", "x:Beta"}
+    own = _read(_table([["", "52 weeks to 27 February 2025", "", ""],
+                        ["", "Alpha", "Beta", "Total"],
+                        ["Chiffre d'affaires", "60", "40", "100"]]))  # fmt: skip
+    assert {f.member_code for f in own.facts} == {"x:Alpha", "x:Beta"}
+
+
+def test_two_spans_meeting_letter_to_digit_are_two_words() -> None:
+    """Matas's converter sets `KICKS` and `2025/26` as two spans on two lines of one cell with no
+    space between them, where pdf2htmlEX splits inside a word. A letter meeting a digit, or a
+    lower-case letter meeting a capital, is a boundary; letters meeting letters are one word."""
+    html = (
+        "<p>Information par segment</p><table>"
+        "<tr><td></td><td><span>KICKS</span><span>2025/26</span></td>"
+        "<td><span>Matas</span><span>2025/26</span></td><td>Total</td></tr>"
+        "<tr><td><span>Chiffre d'</span><span>affaires</span></td><td>60</td><td>40</td>"
+        "<td>100</td></tr></table>"
+    )
+    [table] = sn.tables(html, inline=True)
+    assert table.rows[0][1:3] == ["KICKS 2025/26", "Matas 2025/26"]
+    assert table.rows[1][0] == "Chiffre d'affaires"
+    assert sn.tables("<table><tr><td><span>Asset</span><span>Management</span></td></tr></table>",
+                     inline=True)[0].rows[0] == ["Asset Management"]  # fmt: skip
+
+
+def test_a_skip_named_in_a_sentence_pointing_elsewhere_is_about_that_note() -> None:
+    """Schroders closes the paragraph above its segment table with `A reconciliation … is
+    included in note 1(b)`. That reconciliation is another table: the table below is the split."""
+    rows = [["", "Alpha", "Beta", "Total"], ["Chiffre d'affaires", "60", "40", "100"]]
+    prose = ("Le Groupe a deux segments, Alpha et Beta. La réconciliation au résultat "
+             "figure dans la note 1(b).")  # fmt: skip
+    rules = sn.NoteVocabulary(
+        headings=(*SPACED.headings, sn.Heading(r"(?i)réconciliation", "skip")),
+        labels=SPACED.labels, members=SPACED.members, spaced=True,
+    )  # fmt: skip
+    read = sn.read_note(_table(rows, before=prose), ANCHORS, rules, axis_prefix="x:", axes=AXES,
+                        detect_numbers=True, infer_scale=True)  # fmt: skip
+    assert {f.member_code for f in read.facts} == {"x:Alpha", "x:Beta"}
+    # A reconciliation the sentence introduces is still skipped.
+    here = _table(rows, before="La réconciliation au résultat est la suivante :")
+    assert not sn.read_note(here, ANCHORS, rules, axis_prefix="x:", axes=AXES,
+                            detect_numbers=True, infer_scale=True).facts  # fmt: skip
+
+
+def test_a_date_casts_no_vote_on_the_number_convention() -> None:
+    """A dotted date ends in four digits after a point, which reads as a decimal. Counted, one
+    date outvotes three `6.000.000`s, which carry only the thousands evidence, and in the point
+    convention those are no figures at all."""
+    read = _read(_table([["", "31.12.2025", ""],
+                         ["", "Alpha", "Beta"],
+                         ["Chiffre d'affaires", "60.000.000", "40.000.000"]]))  # fmt: skip
+    assert {f.member_code: f.value for f in read.facts} == {"x:Alpha": 60e6, "x:Beta": 40e6}
+
+
+def test_two_members_are_never_a_member_and_its_total() -> None:
+    """A two-member line that reconciles to nothing is not read as one segment and its total:
+    a split of one member is no split."""
+    assert not _read(_table([["", "Alpha", "Beta"], ["Chiffre d'affaires", "100", "100"]])).facts
+
+
+def test_a_name_spanning_its_year_columns_is_the_name() -> None:
+    """Bonheur sets each segment over its two years (`2025/26 | 2024/25`). With no cell of its
+    own, the column is named by the span above it, never by the period below."""
+    html = (
+        "<p>Information par segment</p><table>"
+        "<tr><td></td><td colspan='2'>Alpha</td><td colspan='2'>Beta</td>"
+        "<td colspan='2'>Total</td></tr>"
+        "<tr><td></td>" + "<td>2025/26</td><td>2024/25</td>" * 3 + "</tr>"
+        "<tr><td>Chiffre d'affaires</td><td>60</td><td>55</td><td>40</td><td>35</td>"
+        "<td>100</td><td>90</td></tr></table>"
+    )
+    assert {f.member_code: f.value for f in _read(html).facts} == {"x:Alpha": 60e6, "x:Beta": 40e6}
+
+
+def test_a_skip_in_a_sentence_about_another_table_is_ignored() -> None:
+    rows = [["", "Alpha", "Beta", "Total"], ["Chiffre d'affaires", "60", "40", "100"]]
+    rules = sn.NoteVocabulary(
+        headings=(*SPACED.headings, sn.Heading(r"(?i)réconciliation", "skip")),
+        labels=SPACED.labels, members=SPACED.members, spaced=True,
+    )  # fmt: skip
+    prose = "Deux segments. La réconciliation au résultat figure au compte de résultat."
+    read = sn.read_note(_table(rows, before=prose), ANCHORS, rules, axis_prefix="x:", axes=AXES,
+                        detect_numbers=True, infer_scale=True)  # fmt: skip
+    assert {f.member_code for f in read.facts} == {"x:Alpha", "x:Beta"}
+    heading = _table(rows, before="(b) Réconciliation au résultat opérationnel")
+    assert not sn.read_note(heading, ANCHORS, rules, axis_prefix="x:", axes=AXES,
+                            detect_numbers=True, infer_scale=True).facts  # fmt: skip
+
+
+def test_the_total_column_of_a_cross_tab_is_the_company_split_along_the_other_axis() -> None:
+    """VBG sets its countries as rows and its segments as columns. The `Total` column holds the
+    company's revenue by country; labelled a total, it once earned no metric."""
+    read = _earn(_table([["", "Alpha", "Beta", "Total"],
+                         ["France", "40", "20", "60"],
+                         ["Europe", "25", "15", "40"],
+                         ["Total", "65", "35", "100"]]))  # fmt: skip
+    # Both ways reconcile here, two members each: the places are the geography split.
+    assert {f.member_code: f.value for f in read.facts} == {"x:France": 60e6, "x:Europe": 40e6}
+    assert {f.axis for f in read.facts} == {"x:geo"}
+
+
+def test_a_caption_over_one_of_two_same_named_columns_is_no_group() -> None:
+    """Pharming's `Amounts in US$ '000` spans its label column and its first `RUCONEST®`, not the
+    second. A group tells two columns of one name apart only when both sit under one."""
+    html = (
+        "<p>Information par segment</p><table>"
+        "<tr><td colspan='2'>Amounts in US$ '000</td><td></td><td>2025</td><td></td><td></td>"
+        "<td>2024</td></tr>"
+        "<tr><td></td><td>Alpha</td><td>Beta</td><td>Total</td><td>Alpha</td><td>Beta</td>"
+        "<td>Total</td></tr>"
+        "<tr><td>Chiffre d'affaires</td><td>60</td><td>40</td><td>100</td><td>55</td><td>35</td>"
+        "<td>90</td></tr></table>"
+    )
+    assert {f.member_code: f.value for f in _read(html).facts} == {"x:Alpha": 60e6, "x:Beta": 40e6}
+
+
+def test_two_neighbours_of_equal_text_are_two_cells_not_a_span() -> None:
+    """Schroders sets `Management` under both `Asset` and `Wealth`. Taken for a span, it named
+    neither: the parser knows which cells a colspan repeated, and these are two cells."""
+    read = _read(_table([["", "Asset", "Wealth", ""],
+                         ["", "Management", "Management", "Total"],
+                         ["Chiffre d'affaires", "60", "40", "100"]]))  # fmt: skip
+    assert {f.member_code for f in read.facts} == {"x:Asset Management", "x:Wealth Management"}
+    # A unit set over every column, cell by cell, is a caption and names no column.
+    units = _read(_table([["", "Alpha", "Beta", "Total"],
+                          ["", "€ million", "€ million", "€ million"],
+                          ["Chiffre d'affaires", "60", "40", "100"]]))  # fmt: skip
+    assert {f.member_code for f in units.facts} == {"x:Alpha", "x:Beta"}
+
+
+def test_a_value_total_closes_its_line_and_is_its_largest_member() -> None:
+    """An income statement read down a column has a line equal to the sum of every line below it
+    (EQT's revenue against its costs and results). Only the last member, and the largest, is
+    taken for a total no label names."""
+    first = _read(_table([["", "Acme", "Alpha", "Beta"],
+                          ["Chiffre d'affaires", "100", "60", "40"]]))  # fmt: skip
+    assert not first.facts
+    small = _read(_table([["", "Alpha", "Beta", "Gamma", "Delta"],
+                          ["Chiffre d'affaires", "150", "-80", "30", "100"]]))  # fmt: skip
+    assert not small.facts
+
+
+def test_a_year_at_either_end_of_a_name_is_no_part_of_it() -> None:
+    assert sn._member_text("KICKS 2025/26", True) == "KICKS"
+    assert sn._member_text("2024 Healthcare Services", True) == "Healthcare Services"
+    assert sn._member_text("2024", True) == ""
+    assert sn._member_text("Vision Europe", True) == "Vision Europe"
+
+
+def test_a_name_opening_with_a_total_word_is_the_total() -> None:
+    """Rolls-Royce's reconciliation sets `Total underlying` beside `Underlying adjustments`; read
+    as members they split statutory revenue into its own bridge. And SCA's last column is
+    `Summa koncernen`: it closes the line, it is not dropped from it."""
+    read = _read(_table([["", "Total underlying", "Adjustments to statutory", "Statutory"],
+                         ["Chiffre d'affaires", "95", "5", "100"]]))  # fmt: skip
+    assert not read.facts
+    sca = _read(_table([["", "Skog", "Massa", "Éliminations", "Summa koncernen"],
+                        ["Chiffre d'affaires", "70", "50", "(20)", "100"]]))  # fmt: skip
+    assert {f.member_code for f in sca.facts} == {"x:Skog", "x:Massa"}
+    assert sn._member_text("TotalEnergies", True) == "TotalEnergies"
+
+
+def test_a_unit_or_a_note_number_names_no_column() -> None:
+    """Moonpig heads its columns `Note | £000 | £000 | £000 | £000`: the units joined every name
+    and the `Group` column stopped reading as the total."""
+    read = _read(_table([["", "", "Alpha", "Beta", "Total"],
+                         ["", "Note", "£000", "£000", "£000"],
+                         ["Chiffre d'affaires", "4", "60.000", "40.000", "100.000"]]))  # fmt: skip
+    assert {f.member_code for f in read.facts} == {"x:Alpha", "x:Beta"}
+    # A name spanning its value and share columns names both: the units under it name neither.
+    html = (
+        "<p>Information par segment</p><table>"
+        "<tr><td></td><td colspan='2'>Alpha</td><td colspan='2'>Beta</td><td colspan='2'>Total</td>"
+        "</tr><tr><td></td>" + "<td>€ million</td><td>%</td>" * 3 + "</tr>"
+        "<tr><td>Chiffre d'affaires</td><td>60</td><td>60</td><td>40</td><td>40</td>"
+        "<td>100</td><td>100</td></tr></table>"
+    )
+    assert {f.member_code: f.value for f in _read(html).facts} == {"x:Alpha": 60e6, "x:Beta": 40e6}
+    # A caption repeated cell by cell over every column names none of them.
+    caption = _read(_table([["", "Operating segments", "Operating segments", ""],
+                            ["", "Alpha", "Beta", "Total"],
+                            ["Chiffre d'affaires", "60", "40", "100"]]))  # fmt: skip
+    assert {f.member_code for f in caption.facts} == {"x:Alpha", "x:Beta"}
+    for unit in ("£m", "€ million", "US$000", "MSEK", "DKKm", "%", "(in € millions)"):
+        assert sn._caption(unit), unit
+    for name in ("USA", "Europe", "UK", "Mining"):
+        assert not sn._caption(name), name
+
+
 # ── A filer's list ─────────────────────────────────────────────────────────────────────────────
 
 
