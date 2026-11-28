@@ -1,8 +1,8 @@
 """Europe's segment lane: its jobs, schedules and sensor.
 
-SHIPS STOPPED, except `new_esef_filers`, which asks the index nothing. The registry schedule and the
-floor start once a tiny subset has been read live and the regulator is enabled
-(muffin-deployment, `disclosure_source.enabled`).
+Everything RUNS (2026-11-28): the lane was driven live on a tiny subset, the whole grid was drained
+and read, and the regulator is enabled in the same change (muffin-deployment,
+`disclosure_source.enabled`).
 """
 
 from datetime import date
@@ -50,7 +50,7 @@ esef_segments_job = dg.define_asset_job(
     job=esef_registry_job,
     cron_schedule="55 7 * * 1",
     execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="The ESEF registry, Mondays 07:55 UTC: the LEI of every covered European equity.",
 )
 def esef_registry(context: dg.ScheduleEvaluationContext) -> dg.RunRequest:
@@ -100,7 +100,7 @@ def floor_runs(grid: list[str], day: date, collected: set[str]) -> list[dg.RunRe
     job=esef_segments_job,
     cron_schedule="15 9 * * *",
     execution_timezone="UTC",
-    default_status=dg.DefaultScheduleStatus.STOPPED,
+    default_status=dg.DefaultScheduleStatus.RUNNING,
     description="ESEF filers on their 30-day floor, daily 09:15 UTC, outside the run windows.",
 )
 def esef_filers_floor(context: dg.ScheduleEvaluationContext) -> list[dg.RunRequest]:
