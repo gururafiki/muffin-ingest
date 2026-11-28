@@ -12,7 +12,7 @@ fact (the anchors). Each exercises a European table shape the gate found:
   - Atlas Copco (SE): the year in the label cell above the segment names;
   - Enel (IT, English): labels continued on the next row, a heading broken mid-word;
   - ASML (NL): regions as rows under a year row;
-  - Airbus (NL): a segment note with no table at all.
+  - Airbus (NL): a note tagged as a converted page, whose rebuilt tables anchor nothing.
 The `*_filings.json` are each filer's whole list as the index served it.
 """
 
@@ -173,10 +173,12 @@ def test_regions_as_rows_under_a_year_row() -> None:
     assert _target(read, "esef:geography", "2025-12-31") == pytest.approx(32_667_300_000.0)
 
 
-def test_a_note_with_no_table_reads_nothing() -> None:
+def test_a_converted_page_whose_tables_anchor_nothing_reads_nothing() -> None:
+    """Airbus tags its note as positioned spans with no `<table>`. Rebuilt, its tables hold no line
+    adding up to a tagged figure, so nothing is placed rather than something guessed."""
     read = _report("airbus_2025-12-31.json.gz")
     assert read.block is not None
-    assert read.note.tables == 0 and not read.note.facts
+    assert read.note.tables > 0 and read.note.read == 0 and not read.note.facts
 
 
 # ── The interpreter's European rules, each with the case its absence gets wrong ────────────────
