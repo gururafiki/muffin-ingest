@@ -35,7 +35,7 @@ import math
 import re
 import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
 
 from muffin_ingest.facets.segments import SegmentFact, assign_partitions, period_type_for
@@ -72,6 +72,9 @@ class NoteVocabulary:
     #: whose members are mostly places is a geography table whatever its heading says: Chinese
     #: banks print geographic operating segments under the same `分部报告` heading as business ones.
     members: tuple[Heading, ...] = ()
+    #: Names keep their single spaces (`Chiffre d'affaires`, `Asia y resto del Mundo`): Japanese and
+    #: Chinese labels carry no meaningful spaces and drop them, European ones would run together.
+    spaced: bool = False
 
 
 STRUCTURAL = frozenset({"total", "adjustment", "subtotal", "subset", "skip"})
@@ -216,18 +219,27 @@ _SCALE = (("百万円", 1e6), ("千円", 1e3), ("円", 1.0), ("百万", 1e6), ("
 _UNIT_TEXT = re.compile(r"\(?\s*単位\s*[:：]\s*[^)）]*[)）]?")
 
 
+#: A cross-reference in a European label: `México (Nota 18)`, `(Notas 2.c y 18)`, `(note 5)`,
+#: and an asterisk footnote: `Activos no corrientes (*)`.
+_REFERENCE = re.compile(r"\s*\((?:notas?|notes?|not|anm\.?|nota\s)\b[^)]*\)|\s*\(\*+\)", re.I)
+
+
 def clean(text: str) -> str:
     """NFKC, whitespace collapsed. Full-width digits and brackets become ASCII, so a label read
     from one filer compares with another's."""
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text)).strip()
 
 
-def member_name(label: str) -> str:
+def member_name(label: str, spaced: bool = False) -> str:
     """A label as a member: footnote markers and a stray unit line stripped, whitespace removed
     (Japanese labels carry no meaningful spaces, and a filer may space one label two ways across
-    years: 「連結 財務諸表 計上額 (注)2」 is 「連結財務諸表計上額」)."""
-    bare = _OF_WHICH.sub("", _UNIT_TEXT.sub("", label))
-    return re.sub(r"\s+", "", _FOOTNOTE.sub("", bare)).strip("・:：")
+    years: 「連結 財務諸表 計上額 (注)2」 is 「連結財務諸表計上額」). `spaced` keeps single spaces,
+    for languages that need them."""
+    bare = _FOOTNOTE.sub("", _OF_WHICH.sub("", _UNIT_TEXT.sub("", label)))
+    if spaced:
+        bare = _REFERENCE.sub("", bare)
+        return re.sub(r"\s+", " ", bare).strip(" ・:：")
+    return re.sub(r"\s+", "", bare).strip("・:：")
 
 
 def number(cell: str) -> float | None:
@@ -247,6 +259,70 @@ def number(cell: str) -> float | None:
     if w:
         return number(w.group("main"))
     return None
+
+
+# ── Number conventions: ESEF tables are written in each country's own ────────────────────────
+
+#: A cell that is a figure in SOME convention: digits with spaces, points and commas between them,
+#: an optional leading minus (hyphen, U+2212, or the en dash Atlas Copco prints for `-88`) and
+#: optional brackets.
+_FIGURE_ANY = re.compile("^[(]?[-\u2212\u2013]?\\d[\\d .,]*[)]?$")
+_DECIMAL_TAIL = re.compile(r"[.,](\d+)\)?$")
+
+
+def convention_of(table: Table) -> str:
+    """`point` (`1,234.5`: EDINET, English) or `comma` (`1.234,5`, `1 234,5`: French, Spanish,
+    Swedish) for one table, decided by its own cells.
+
+    - where a cell holds both marks, the later one is the decimal mark;
+    - a mark followed by one, two or four-plus digits is a decimal mark;
+    - a mark followed by exactly three digits is a thousands separator, which only breaks the tie:
+      a lone `16.845` is Spanish thousands, a lone `10,355` English.
+
+    Spaces are thousands separators in every convention, so they decide nothing."""
+    strong = {"point": 0, "comma": 0}
+    weak = {"point": 0, "comma": 0}
+    for row in table.rows:
+        for cell in row:
+            core = cell.replace(" ", "")
+            if not core or not _FIGURE_ANY.match(core):
+                continue
+            if "," in core and "." in core:
+                strong["comma" if core.rfind(",") > core.rfind(".") else "point"] += 1
+                continue
+            tail = _DECIMAL_TAIL.search(core)
+            if tail is None:
+                continue
+            mark = core[tail.start()]
+            if len(tail.group(1)) != 3:
+                strong["comma" if mark == "," else "point"] += 1
+            else:
+                weak["comma" if mark == "." else "point"] += 1
+    if strong["comma"] != strong["point"]:
+        return "comma" if strong["comma"] > strong["point"] else "point"
+    return "comma" if weak["comma"] > weak["point"] else "point"
+
+
+def in_convention(table: Table, convention: str) -> Table:
+    """The table with every figure rewritten to `point`, which `number` reads: thousands marks
+    and spaces dropped, a comma decimal made a point, an en-dash minus made a hyphen. Text cells
+    and an en dash alone (an empty cell) are left as they are."""
+
+    def one(cell: str) -> str:
+        core = cell.replace(" ", "")
+        if not core or core in _NIL or not _FIGURE_ANY.match(core):
+            return cell
+        if core[0] == "\u2013" or core[:2] == "(\u2013":
+            core = core.replace("\u2013", "-", 1)
+        if convention == "comma":
+            core = core.replace(".", "").replace(",", ".")
+        return core
+
+    return Table(rows=[[one(c) for c in row] for row in table.rows], before=table.before)
+
+
+#: The scales an inferred unit may take, the likeliest first.
+_INFERRED_SCALES = (1e6, 1e3, 1.0, 1e9)
 
 
 def scale_of(texts: Iterable[str]) -> float | None:
@@ -272,6 +348,9 @@ class Line:
     label: str
     members: list[tuple[str, float]]
     total: float | None
+    #: The line's eliminations (an `adjustment` column or row), when it states any: segments are
+    #: often disclosed before them, so they add up to the total LESS the eliminations.
+    adjustment: float = 0.0
 
 
 @dataclass(slots=True)
@@ -290,7 +369,7 @@ class NoteRead:
 def _role(label: str, vocabulary: NoteVocabulary) -> str | None:
     """The label's role, judged on its normalised form: a pattern anchored at both ends must not
     miss 「連結 財務諸表 計上額 (注)2」 for its spaces and footnote."""
-    normal = member_name(label)
+    normal = member_name(label, vocabulary.spaced)
     for entry in vocabulary.labels:
         if re.search(entry.pattern, normal):
             return entry.role
@@ -313,6 +392,18 @@ def _kind(texts: Sequence[str], vocabulary: NoteVocabulary) -> str | None:
     for text in texts:
         if not _is_heading(text):
             continue
+        if vocabulary.spaced:
+            # EUROPEAN PROSE NAMES SEVERAL KINDS IN ONE SENTENCE, and the noun nearest the table is
+            # its kind: Inditex's "las ventas están basadas en la localización geográfica de los
+            # clientes y … de los activos" introduces a geographic table, not a customer one.
+            last = max(
+                ((m.start(), e.kind) for e in vocabulary.headings
+                 for m in re.finditer(e.pattern, text)),
+                default=None,
+            )  # fmt: skip
+            if last is not None:
+                found = last[1]
+            continue
         for entry in ordered:
             if re.search(entry.pattern, text):
                 found = entry.kind
@@ -334,6 +425,60 @@ def _is_number_row(row: Sequence[str]) -> bool:
     return any(number(c) is not None and c not in _NIL for c in row)
 
 
+#: A calendar year as a column heading: `2025`.
+_YEAR = re.compile(r"^(19|20)\d\d$")
+
+
+def _is_year_row(row: Sequence[str]) -> bool:
+    """A header row naming years: Atlas Copco sets `2025` in its label cell above segment names,
+    Inditex repeats `2025` over every column, ASML heads `2023 | 2024 | 2025`. Every figure in it
+    is a year, and it holds two of them or a name beside one: a data row never does."""
+    figures = [c for c in row if number(c) is not None and c not in _NIL]
+    if not figures or not all(_YEAR.match(c.strip()) for c in figures):
+        return False
+    return len(figures) >= 2 or any(c.strip() and number(c) is None for c in row[1:])
+
+
+def _is_header_row(row: Sequence[str], spaced: bool) -> bool:
+    return not _is_number_row(row) or (spaced and _is_year_row(row))
+
+
+def _column_names(rows: Sequence[Sequence[str]], head: int, spaced: bool) -> list[list[str]]:
+    """Each column's header parts, top to bottom.
+
+    `spaced` (ESEF): a European header wraps ONE label over several rows (Schneider's `Gestion de`
+    over `l'énergie`), and a group header spans its columns (Inditex's `2025` over all six). So a
+    column's parts are the cells that are its own, joined into one, and a year is never part of a
+    name: the group header stays a part only where the column has nothing else."""
+    width = len(rows[0]) if rows else 0
+    out: list[list[str]] = []
+    for c in range(width):
+        parts: list[str] = []
+        own: list[str] = []
+        for r in range(head):
+            text = rows[r][c]
+            if not text or not member_name(text, spaced) or (parts and parts[-1] == text):
+                continue
+            parts.append(text)
+            if spaced and not _YEAR.match(text.strip()):
+                spans = (c > 0 and rows[r][c - 1] == text) or (
+                    c + 1 < width and rows[r][c + 1] == text
+                )
+                if not spans:
+                    own.append(text)
+        if spaced:
+            words = [p for p in parts if not _YEAR.match(p.strip())]
+            out.append([" ".join(own)] if own else words[-1:] or parts[-1:])
+        else:
+            out.append(parts)
+    return out
+
+
+#: A label continued on the next row: it opens with a lower-case letter (Enel's `Revenue and other
+#: income` over `from third parties`).
+_CONTINUED = re.compile(r"^[a-zà-ÿ]")
+
+
 def _lines(table: Table, vocabulary: NoteVocabulary) -> tuple[list[Line], list[Line]]:
     """The table read both ways: members as COLUMNS (one line per data row) and members as ROWS
     (one line per numeric column). Header rows are the leading rows holding no number.
@@ -343,21 +488,14 @@ def _lines(table: Table, vocabulary: NoteVocabulary) -> tuple[list[Line], list[L
     ANY role is never a member: a metric row (外部顧客への売上高, セグメント利益) read the other way
     would otherwise be a member whose value happens to equal the total."""
     rows = table.rows
+    spaced = vocabulary.spaced
     head = 0
-    while head < len(rows) and not _is_number_row(rows[head]):
+    while head < len(rows) and _is_header_row(rows[head], spaced):
         head += 1
     if head == len(rows):
         return [], []
-    width = len(rows[0]) if rows else 0
-    header_parts: list[list[str]] = []
-    for c in range(width):
-        parts: list[str] = []
-        for r in range(head):
-            text = rows[r][c]
-            if text and member_name(text) and (not parts or parts[-1] != text):
-                parts.append(text)
-        header_parts.append(parts)
-    headers = _names(header_parts)
+    header_parts = _column_names(rows, head, spaced)
+    headers = _names(header_parts, spaced)
     header_roles = [
         _structural(parts, vocabulary) or _role(name, vocabulary)
         for parts, name in zip(header_parts, headers, strict=True)
@@ -378,7 +516,9 @@ def _lines(table: Table, vocabulary: NoteVocabulary) -> tuple[list[Line], list[L
         return label_parts, values
 
     split_rows = [split(row) for row in data]
-    row_names = _names([parts for parts, _ in split_rows])
+    if spaced:
+        split_rows = _continued(split_rows)
+    row_names = _names([parts for parts, _ in split_rows], spaced)
 
     def row_label(i: int) -> tuple[str, str | None]:
         """A row's name and role (structural on any part, else the name's own)."""
@@ -390,22 +530,28 @@ def _lines(table: Table, vocabulary: NoteVocabulary) -> tuple[list[Line], list[L
         label, _ = row_label(i)
         members: list[tuple[str, float]] = []
         total: float | None = None
+        adjustment = 0.0
         for c, value in values:
             name = headers[c] if c < len(headers) else ""
             role = header_roles[c] if c < len(header_roles) else None
             if role == "total":
                 total = value  # the last one: 連結 after 合計 after 計
-            elif role is not None or not member_name(name):
+            elif role == "adjustment":
+                adjustment += value
+            elif role is not None or not member_name(name, spaced):
                 continue
             else:
-                members.append((member_name(name), value))
-        by_column.append(Line(label=label, members=_merged(members), total=total))
+                members.append((member_name(name, spaced), value))
+        by_column.append(
+            Line(label=label, members=_merged(members), total=total, adjustment=adjustment)
+        )
 
     by_row: list[Line] = []
     numeric_columns = sorted({c for _, values in split_rows for c, _ in values})
     for c in numeric_columns:
         members = []
         total = None
+        adjustment = 0.0
         for i, (_, values) in enumerate(split_rows):
             cell = dict(values).get(c)
             if cell is None:
@@ -413,25 +559,45 @@ def _lines(table: Table, vocabulary: NoteVocabulary) -> tuple[list[Line], list[L
             name, role = row_label(i)
             if role == "total":
                 total = cell
-            elif role is not None or not member_name(name):
+            elif role == "adjustment":
+                adjustment += cell
+            elif role is not None or not member_name(name, spaced):
                 continue
             else:
-                members.append((member_name(name), cell))
+                members.append((member_name(name, spaced), cell))
         by_row.append(Line(label=headers[c] if c < len(headers) else "", members=_merged(members),
-                           total=total))  # fmt: skip
+                           total=total, adjustment=adjustment))  # fmt: skip
     return by_column, by_row
 
 
-def _names(labels: Sequence[Sequence[str]]) -> list[str]:
+def _continued(
+    rows: list[tuple[list[str], list[tuple[int, float]]]],
+) -> list[tuple[list[str], list[tuple[int, float]]]]:
+    """Rows whose label carries on below them, joined: a row holding only text that opens in
+    lower case continues the label above it, and is no row of its own."""
+    out: list[tuple[list[str], list[tuple[int, float]]]] = []
+    for parts, values in rows:
+        if (out and out[-1][0] and not values and len(parts) == 1
+                and _CONTINUED.match(parts[0].strip())):  # fmt: skip
+            prior, prior_values = out[-1]
+            out[-1] = ([*prior[:-1], f"{prior[-1]} {parts[0]}"], prior_values)
+            continue
+        out.append((parts, values))
+    return out
+
+
+def _names(labels: Sequence[Sequence[str]], spaced: bool = False) -> list[str]:
     """Each label's name: its deepest part, or its whole path where the deepest part repeats under
     another parent. Asahi Diamond sets 「その他」 under アジア・オセアニア and again on its own, and
     the two are different regions."""
     deepest = [parts[-1] if parts else "" for parts in labels]
     paths: dict[str, set[tuple[str, ...]]] = {}
     for parts, name in zip(labels, deepest, strict=True):
-        paths.setdefault(member_name(name), set()).add(tuple(parts))
+        paths.setdefault(member_name(name, spaced), set()).add(tuple(parts))
     return [
-        "".join(parts) if len(paths[member_name(name)]) > 1 and len(parts) > 1 else name
+        ("".join(parts) if not spaced else " ".join(parts))
+        if len(paths[member_name(name, spaced)]) > 1 and len(parts) > 1
+        else name
         for parts, name in zip(labels, deepest, strict=True)
     ]
 
@@ -475,6 +641,8 @@ def read_note(
     axis_prefix: str,
     axes: dict[str, str],
     default_scale: float | None = None,
+    detect_numbers: bool = False,
+    infer_scale: bool = False,
 ) -> NoteRead:
     """Every split a note's tables state, as `SegmentFact`s.
 
@@ -482,21 +650,39 @@ def read_note(
     member namespace (`edinet:`). `default_scale` applies where a table states no unit, and None
     means such a table is skipped: a 千円 table read as 百万円 is a thousandfold error that looks
     ordinary.
+
+    ESEF (`detect_numbers`, `infer_scale`): each table's number convention is read from its own
+    cells (`convention_of`), and where no unit line is found the scale is the one of
+    `_INFERRED_SCALES` under which the table places a split: a split is placed only when it adds up
+    to a figure the filing tags to the unit, which no wrong scale can do. A table of places reads as
+    geography whatever its heading (`members`).
     """
     out = NoteRead()
     kind: str | None = None
     scale: float | None = default_scale
+    placed: set[tuple[str, str, str, str]] = set()
     for table in tables(html):
         out.tables += 1
-        kind = _kind(table.before, vocabulary) or kind
+        if detect_numbers:
+            table = in_convention(table, convention_of(table))
+        own = _kind(table.before, vocabulary)
+        # A KIND NAMED IN EUROPEAN PROSE IS LOCAL TO ITS TABLE. Iberdrola introduces a table of
+        # non-current assets "by geographic location" and follows it with its business segments
+        # under no sentence at all; carried over, the business table read as geography. The
+        # block is the segment note, so a table it says nothing about is business, unless its
+        # members are places (`_member_kind`).
+        kind = (own or "business") if vocabulary.spaced else (own or kind)
         scale = scale_of([*table.before, *(" ".join(r) for r in table.rows[:3])]) or scale
-        if kind is None:
+        table_kind = kind
+        if kind is not None and kind != "skip":
+            table_kind = _member_kind(table, vocabulary) or kind
+        if table_kind is None:
             out.no_kind += 1
             continue
-        if kind == "skip" or kind not in axes:
+        if table_kind == "skip" or table_kind not in axes:
             out.skipped_kind += 1
             continue
-        if scale is None:
+        if scale is None and not infer_scale:
             out.no_unit += 1
             continue
         hint = next(
@@ -504,11 +690,29 @@ def read_note(
              if _role(t, vocabulary) not in (None, *STRUCTURAL)),
             None,
         )  # fmt: skip
-        facts = _read_table(table, anchors, vocabulary, scale, kind, hint,
-                            axis=axes[kind], prefix=axis_prefix)  # fmt: skip
+        if scale is not None:
+            facts = _read_table(table, anchors, vocabulary, scale, table_kind, hint,
+                                axis=axes[table_kind], prefix=axis_prefix)  # fmt: skip
+        else:
+            facts = []
+            for candidate in _INFERRED_SCALES:
+                facts = _read_table(table, anchors, vocabulary, candidate, table_kind, hint,
+                                    axis=axes[table_kind], prefix=axis_prefix)  # fmt: skip
+                if any(f.partition_id for f in facts):
+                    break
+            else:
+                facts = []
+        if vocabulary.spaced:
+            # THE FIRST TABLE TO STATE A SPLIT KEEPS IT. LVMH restates its business lines in a
+            # quarterly table whose `Total 2024` row is gross of intra-group sales; read as a second
+            # split of the same year, every member would arrive twice with two values.
+            facts = [f for f in facts if (f.axis, f.metric_code, f.period_type, f.period_ending)
+                     not in placed]  # fmt: skip
         if facts:
             out.read += 1
             out.facts += facts
+            placed |= {(f.axis, f.metric_code, f.period_type, f.period_ending)
+                       for f in facts if f.partition_id}  # fmt: skip
         else:
             out.no_anchor += 1
     return out
@@ -524,12 +728,34 @@ def _member_kind(table: Table, vocabulary: NoteVocabulary) -> str | None:
     the row labels, that the vocabulary gives no role (a metric, a total, an elimination)."""
     if not vocabulary.members or not table.rows:
         return None
-    for cells in (table.rows[0][1:], [row[0] for row in table.rows[1:] if row]):
-        names = [c for c in cells if c.strip() and _role(c, vocabulary) is None]
+    candidates = [table.rows[0][1:], [row[0] for row in table.rows[1:] if row]]
+    if vocabulary.spaced:
+        # The header's own names (a wrapped label joined, years dropped) and the row labels.
+        rows = table.rows
+        head = 0
+        while head < len(rows) and _is_header_row(rows[head], True):
+            head += 1
+        if head < len(rows):
+            columns = _names(_column_names(rows, head, True), True)
+            candidates = [columns[1:], [row[0] for row in rows[head:] if row]]
+    for cells in candidates:
+        # A dash or a figure is no name: Inditex sets `-` in its label column above the regions.
+        names = [
+            c for c in cells
+            if c.strip() and _role(c, vocabulary) is None
+            and not (vocabulary.spaced and (c in _NIL or number(c) is not None))
+        ]  # fmt: skip
         if len(names) < 2:
             continue
         kinds = [
-            next((m.kind for m in vocabulary.members if re.search(m.pattern, member_name(c))), None)
+            next(
+                (
+                    m.kind
+                    for m in vocabulary.members
+                    if re.search(m.pattern, member_name(c, vocabulary.spaced))
+                ),
+                None,
+            )
             for c in names
         ]
         for kind in {k for k in kinds if k}:
@@ -626,6 +852,16 @@ def _read_lines(
                 or _close(member_sum, a.value, sum_slack)]  # fmt: skip
         if not hits:
             continue
+        if vocabulary.spaced and line.adjustment:
+            # SEGMENTS STATED BEFORE THEIR ELIMINATIONS add up to the total less them (Inditex's
+            # three segments sum €40,107 m beside intersegment (243) and a total of €39,864 m).
+            # The derived figure is offered beside the tagged one, never instead of it: only the
+            # members' own sum can choose it.
+            hits += [
+                replace(a, value=a.value - line.adjustment * scale)
+                for a in hits
+                if _close(member_sum, a.value - line.adjustment * scale, sum_slack)
+            ]
         labelled = _metric(line.label, (), vocabulary)
         # A LINE NAMED BY NO LABEL OF ITS OWN must earn its metric by arithmetic: its members sum
         # to a fact whose concept names that metric. A total cell alone is any 計 in the table.

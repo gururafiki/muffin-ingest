@@ -86,6 +86,8 @@ CACHE_LOCATIONS: dict[str, str] = {
     # Japan's EDINET: the API (lists and archives) and the download host (the code list).
     "edinet": "api.edinet-fsa.go.jp",
     "edinet-dl": "disclosure2dl.edinet-fsa.go.jp",
+    # Europe's ESEF annual reports, as XBRL International's index converts them to xBRL-JSON.
+    "xbrl-org": "filings.xbrl.org",
     # NSE's API moved to `.in` (2026-11-16: `.com/api` answers 301); its archives serve both.
     "nse": "www.nseindia.in",
     "nse-archives": "nsearchives.nseindia.com",
