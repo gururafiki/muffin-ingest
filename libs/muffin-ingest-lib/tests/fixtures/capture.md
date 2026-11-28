@@ -251,3 +251,32 @@ To capture again: in a throwaway container from the code location's image, with 
 mounted, run `cn_note.candidate_pages` over the document's page texts and dump
 `cn_pdf.page_items(document, i)` for each page it returns. The candidate rule has since widened
 (the pages after a note heading, 2026-11-27), so a re-capture holds more pages than these files.
+
+## `esef/*` — ESEF annual reports from filings.xbrl.org, captured 2026-11-28
+
+Nine annual financial reports, each the newest one the index listed for its LEI, and every filer's
+whole list. Captured for Phase 6c step 7 (umbrella docs/specs/2026-11-26-more-segment-sources.md).
+The reports (`<name>_<period end>.json.gz`) are TRIMMED to what `esef.read_report` reads: the
+segment-note blocks (`DisclosureOfEntitysReportableSegmentsExplanatory`,
+`DisclosureOfOperatingSegmentsExplanatory`) and every non-dimensional monetary fact, the anchors.
+The full reports are 2.2-26.9 MB; trimmed and gzipped, 8-109 KB.
+
+| file | what it pins |
+|---|---|
+| `loreal_2025-12-31.json.gz` | divisions as rows, zones with a `dont France` row, products `par métier`, zones under a column headed `2025`: three axes adding up to 44,052.0 €m |
+| `lvmh_2024-12-31.json.gz` | `Ventes hors Groupe` beside the gross `Total des ventes`, and a quarterly table restating the year |
+| `schneider_2025-12-31.json.gz` | labels wrapped over three header rows, a central-costs column |
+| `iberdrola_2025-12-31.json.gz` | `sin dato` in empty cells, `(Nota 18)` in names, segments before discontinued operations (45,547 €m against a tagged 44,076) |
+| `inditex_2026-01-31.json.gz` | a January year end, a year row over every column, segments before intersegment (40,107 against 39,864) |
+| `atlas_copco_2025-12-31.json.gz` | Swedish, the year in the label cell above the names, MSEK stated nowhere |
+| `enel_2024-12-31.json.gz` | English from a converted page: labels continued on lower-case rows, a regional subtotal column |
+| `asml_2025-12-31.json.gz` | regions as rows under a year row, figures to one decimal |
+| `airbus_2025-12-31.json.gz` | a segment note with no table at all |
+| `novo_nordisk_filings.json` | a list mixing quarterly and half-year reports with the annual ones |
+| `inditex_filings.json` | two filings for one period (`-0`, `-1`) |
+
+To capture again: `curl -sA 'muffin-market-data' 'https://filings.xbrl.org/api/filings?filter=[{"name":"entity.identifier","op":"eq","val":"<LEI>"}]&sort=-period_end'`,
+then the newest row's `json_url` under `https://filings.xbrl.org`, eight seconds apart (about 15
+quick requests earn a 429). Trim with the script in the step's record: keep facts whose dimensions
+are only concept, entity, period, unit and language, and whose unit is `iso4217:*` or whose concept
+is one of the two blocks.

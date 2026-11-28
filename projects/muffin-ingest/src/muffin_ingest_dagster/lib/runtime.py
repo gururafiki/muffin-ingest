@@ -65,3 +65,7 @@ SEC_DATASET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "900"}
 #: archives due, bounded by their own 15-minute budget (an archive is 0.6-2.6 MB in 3.6-8 s from
 #: the node, measured 2026-11-27). Thirty minutes is twice that budget.
 EDINET_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
+
+#: ONE ESEF RUN: five filers' lists and the annual reports due, one request every eight seconds,
+#: bounded by its own 15-minute budget. Thirty minutes is twice that budget.
+XBRL_ORG_RUN: dict[str, str] = {MAX_RUNTIME_SECONDS_TAG: "1800"}
