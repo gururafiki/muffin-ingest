@@ -388,7 +388,12 @@ def _container(node: _Node) -> str:
             out.extend(f"<p>{htmllib.escape(' '.join(r.text for r in row))}</p>" for row in block)
         block.clear()
 
-    joined = [_join_split_words(sorted(row, key=lambda r: r.x0), size) for _, size, row in rows]
+    joined = _pair_labels(
+        [
+            (top, size, _join_split_words(sorted(row, key=lambda r: r.x0), size))
+            for top, size, row in rows
+        ]
+    )
     margin = min((r.x0 for row in joined for r in row), default=0.0)
     extent = max((r.x1 for row in joined for r in row), default=0.0) - margin
     for i, row in enumerate(joined):
@@ -407,6 +412,44 @@ def _container(node: _Node) -> str:
             out.append(f"<p>{htmllib.escape(text)}</p>")
     flush()
     return "".join(out)
+
+
+def _pair_labels(rows: list[tuple[float, float, list[_Run]]]) -> list[list[_Run]]:
+    """A LABEL SET A LITTLE ABOVE OR BELOW ITS FIGURES is their row's label. GN Store Nord centres
+    each region's name in a taller row than its figures, so `Europe` is a line of its own just
+    under a line of figures with no label; read apart, the figures belong to no region and the
+    divisions across the top were filed as geography. A label-only line goes to the nearer
+    adjacent row of figures with no label, within one line height."""
+
+    def unlabelled(row: list[_Run]) -> bool:
+        return bool(row) and _is_figure(row[0].text) and _data_row(row)
+
+    def label_only(row: list[_Run]) -> bool:
+        return len(row) == 1 and not _is_figure(row[0].text)
+
+    taken: dict[int, int] = {}  # figure row -> label row
+    for j, (top, size, row) in enumerate(rows):
+        if not label_only(row):
+            continue
+        near = [
+            (abs(rows[i][0] - top), i)
+            for i in (j - 1, j + 1)
+            if 0 <= i < len(rows)
+            and unlabelled(rows[i][2])
+            and abs(rows[i][0] - top) < size
+            and row[0].x1 < rows[i][2][0].x0
+        ]
+        if not near:
+            continue
+        distance, i = min(near)
+        if i not in taken or distance < abs(rows[taken[i]][0] - rows[i][0]):
+            taken[i] = j
+    used = set(taken.values())
+    return [
+        [rows[taken[i]][2][0], *row] if i in taken else row
+        for i, (_, _, row) in enumerate(rows)
+        if i not in used
+    ]
 
 
 def _opens_table(run: _Run, after: list[list[_Run]], margin: float, extent: float) -> bool:
