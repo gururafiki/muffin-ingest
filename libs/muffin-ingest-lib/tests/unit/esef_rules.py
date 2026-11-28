@@ -489,7 +489,7 @@ AXES = (
     ("product", "esef:products"),
     ("geography", "esef:geography"),
 )
-PARSER_VERSION = 1
+PARSER_VERSION = 2
 
 
 def vocabulary() -> esef.Vocabulary:
