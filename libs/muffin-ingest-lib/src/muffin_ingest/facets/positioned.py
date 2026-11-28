@@ -140,12 +140,11 @@ _AMOUNT = re.compile(
 #: A figure cell, a dash standing for nothing included.
 _FIGURE = re.compile(r"^\(?[-\u2013\u2212]?\s*\d[\d.,\s\u00a0]*\)?%?$|^[-\u2013\u2014]$")
 _YEAR = re.compile(r"^(19|20)\d\d$")
-#: Footnote markers ending a run (`Revenue goods 1) 2)`, `Biologics1)`, `Biologics¹⁾`), or a run of
-#: nothing else. A plain marker follows a space or a letter or starts the run, so the `12)` of
-#: `(12)` is never one; a superscript is a marker wherever it ends a run.
+#: One footnote marker ending a run: `1)` after a space or a letter or alone (`Revenue goods 1)`,
+#: `Biologics1)`), so the `12)` of `(12)` is never one; or a superscript (`Biologics¹⁾`). Stripped
+#: one at a time by `_strip_footnotes`, which keeps the pattern free of nested repetition.
 _FOOTNOTE = re.compile(
-    r"(?:(?:^|(?<=\s)|(?<=[^\W\d_]))\d{1,2}\)|[\u00b9\u00b2\u00b3\u2070-\u2079\u207d\u207e]+)"
-    r"(?:\s*(?:\d{1,2}\)|[\u00b9\u00b2\u00b3\u2070-\u2079\u207d\u207e]+))*\s*$"
+    r"(?:(?:^|(?<=\s)|(?<=[^\W\d_]))\d{1,2}\)|[\u00b9\u00b2\u00b3\u2070-\u2079\u207d\u207e])$"
 )
 _BLOCK_TAGS = frozenset({"p", "div", "li", "h1", "h2", "h3", "h4", "h5", "h6"})
 
@@ -299,7 +298,7 @@ def _line(node: _Node) -> _Line:
             runs.append([text, gap, 0.0])
         gap = 0.0
     kept = [(str(t), float(b), float(i)) for t, b, i in runs if str(t).strip()]  # type: ignore[arg-type]
-    texts = [re.sub(r"\s+", " ", _FOOTNOTE.sub("", t)).strip() for t, _, _ in kept]
+    texts = [re.sub(r"\s+", " ", _strip_footnotes(t)).strip() for t, _, _ in kept]
     spacers = sum(b + i for _, b, i in kept)
     per = max(node.style.get("width", 0.0) - spacers, 0.0) / (sum(map(_weight, texts)) or 1.0)
     x = node.style.get("left", 0.0)
@@ -315,6 +314,14 @@ def _line(node: _Node) -> _Line:
         out[-1].last = True
         out[-1].open_end = not kept[-1][0][-1:].isspace()
     return _Line(node.style.get("top", 0.0), size, out)
+
+
+def _strip_footnotes(text: str) -> str:
+    """The run without the footnote markers ending it (`Revenue goods 1) 2)` is `Revenue goods`)."""
+    text = text.rstrip()
+    while (marker := _FOOTNOTE.search(text)) is not None:
+        text = text[: marker.start()].rstrip()
+    return text
 
 
 def _split_amounts(run: _Run, per: float) -> list[_Run]:
